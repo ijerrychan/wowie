@@ -1,0 +1,24 @@
+msgid ""
+msgstr ""
+"Language: en\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgctxt "Launcher"
+msgid "Search applications"
+msgstr "Search applications"
+
+msgctxt "Launcher"
+msgid "{} results"
+msgstr "{} results"
+
+msgctxt "Launcher"
+msgid "No results"
+msgstr "No results"
+
+msgctxt "Launcher"
+msgid "Could not open application"
+msgstr "Could not open application"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
+msgstr "↑ ↓  Navigate     Enter  Open     Esc  Hide"

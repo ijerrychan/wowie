@@ -1,0 +1,126 @@
+import { VerticalBox, ListView } from "std-widgets.slint";
+
+export struct ResultRow { id: string, title: string, location: string, icon: image }
+
+export component Launcher inherits Window {
+    title: "Wowie";
+    no-frame: true;
+    width: window-width * 1px;
+    height: search-field.text == "" ? 70px : results.length > 0 ? min(538px, 140px + results.length * root.result-row-height) : 224px;
+    background: transparent;
+
+    in-out property <int> window-width: 680;
+    in-out property <int> max-results: 12;
+    in property <bool> dark-mode: true;
+    in property <color> accent-color: #0067c0;
+    in property <color> accent-background: #280067c0;
+    in property <int> result-count: 0;
+    in-out property <string> launch-error: "";
+    in property <[ResultRow]> results;
+    in-out property <int> selected-index: -1;
+    callback query-changed(string);
+    callback launch-requested(int);
+    callback dismiss-requested;
+
+    private property <length> result-row-height: 56px;
+    private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
+    private property <color> surface: root.dark-mode ? #292929 : #ffffff;
+    private property <color> surface-hover: root.dark-mode ? #323232 : #f1f3f6;
+    private property <color> surface-selected: root.accent-background;
+    private property <color> border: root.dark-mode ? #484848 : #d9dde5;
+    private property <color> text-primary: root.dark-mode ? #f5f5f5 : #1b1b1f;
+    private property <color> text-secondary: root.dark-mode ? #b6b6b6 : #5d5f66;
+    private property <color> text-tertiary: root.dark-mode ? #858585 : #797b82;
+    private property <color> accent: root.accent-color;
+
+    function ensure-selected-visible() {
+        if (root.selected-index < 0 || root.selected-index >= root.results.length) { return; }
+        if (root.selected-index * root.result-row-height + results-list.content-y < 0px) {
+            results-list.content-y = min(0px, max(results-list.visible-height - results-list.content-height, -root.selected-index * root.result-row-height));
+        }
+        if (root.selected-index * root.result-row-height + root.result-row-height + results-list.content-y > results-list.visible-height) {
+            results-list.content-y = min(0px, max(results-list.visible-height - results-list.content-height, results-list.visible-height - (root.selected-index + 1) * root.result-row-height));
+        }
+    }
+
+    changed selected-index => { root.ensure-selected-visible(); }
+
+    Rectangle {
+        x: 4px; y: 3px; width: parent.width - 8px; height: parent.height - 8px;
+        background: root.canvas;
+        border-color: root.border;
+        border-width: 1px;
+        border-radius: 18px;
+        clip: true;
+
+        VerticalBox {
+            padding: 10px;
+            spacing: 8px;
+
+            search-surface := Rectangle {
+                height: 40px;
+                background: transparent;
+
+                Rectangle { x: 15px; y: 10px; width: 15px; height: 15px; background: transparent; border-color: root.text-secondary; border-width: 2px; border-radius: 8px; }
+                Rectangle { x: 28px; y: 23px; width: 7px; height: 2px; background: root.text-secondary; }
+                Text { x: 48px; y: 0px; width: parent.width - 126px; height: parent.height; text: @tr("Search applications"); color: root.text-tertiary; font-size: 16px; vertical-alignment: center; visible: search-field.text == ""; }
+                search-field := TextInput {
+                    x: 48px; y: 0px; width: parent.width - 126px; height: parent.height;
+                    color: root.text-primary; font-size: 16px; vertical-alignment: center; single-line: true;
+                    edited => { root.query-changed(self.text); }
+                    key-pressed(event) => {
+                        if (event.text == Key.DownArrow) { root.selected-index = min(root.selected-index + 1, root.results.length - 1); accept }
+                        if (event.text == Key.UpArrow) { root.selected-index = max(root.selected-index - 1, 0); accept }
+                        if (event.text == Key.Return && root.selected-index >= 0) { root.launch-requested(root.selected-index); accept }
+                        if (event.text == Key.Escape) { root.dismiss-requested(); accept }
+                        reject
+                    }
+                }
+                Text { x: parent.width - 58px; y: 0px; width: 46px; height: parent.height; text: "Esc"; color: root.text-tertiary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+            }
+
+            if (root.launch-error != "") : Rectangle {
+                height: 34px; background: transparent;
+                Text { x: 6px; y: 0px; width: parent.width - 12px; height: parent.height; text: @tr("Could not open application") + ": " + root.launch-error; color: #d96c6c; font-size: 11px; vertical-alignment: center; overflow: elide; }
+            }
+
+            if (search-field.text != "") : Rectangle {
+                height: 24px; background: transparent;
+                Text { x: 6px; y: 0px; width: parent.width - 12px; height: parent.height; text: @tr("{} results", root.result-count); color: root.text-tertiary; font-size: 11px; vertical-alignment: center; }
+                Text { x: 6px; y: 0px; width: parent.width - 12px; height: parent.height; text: @tr("Applications"); color: root.text-tertiary; font-size: 11px; horizontal-alignment: right; vertical-alignment: center; }
+            }
+
+            results-list := ListView {
+                height: min(398px, root.results.length * root.result-row-height);
+                for row[index] in root.results : Rectangle {
+                    height: root.result-row-height;
+                    background: index == root.selected-index ? root.surface-selected : item-area.has-hover ? root.surface-hover : transparent;
+                    border-radius: 10px;
+                    animate background { duration: 100ms; }
+                    Rectangle { x: 0px; y: 12px; width: index == root.selected-index ? 3px : 0px; height: 32px; background: root.accent; border-radius: 2px; animate width { duration: 100ms; } }
+                    item-area := TouchArea { clicked => { root.launch-requested(index); } }
+                    Rectangle {
+                        x: 12px; y: 10px; width: 36px; height: 36px;
+                        background: root.dark-mode ? #373737 : #ffffff;
+                        border-color: root.dark-mode ? #4b4b4b : #e2e5ea;
+                        border-width: 1px; border-radius: 9px;
+                        Image { x: 6px; y: 6px; width: 24px; height: 24px; source: row.icon; image-fit: contain; }
+                    }
+                    VerticalBox {
+                        x: 60px; y: 5px; width: parent.width - 76px; height: 40px; spacing: 2px;
+                        Text { text: row.title; color: root.text-primary; font-size: 14px; font-weight: 500; overflow: elide; }
+                        Text { text: row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
+                    }
+                }
+            }
+
+            if (root.results.length == 0 && search-field.text != "") : Rectangle { height: 76px; background: transparent; Text { text: @tr("No results"); color: root.text-secondary; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; } }
+
+            if (search-field.text != "") : Rectangle {
+                height: 24px; background: transparent;
+                Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: root.border; }
+                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: @tr("↑ ↓  Navigate     Enter  Open     Esc  Hide"); color: root.text-tertiary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+            }
+        }
+    }
+}

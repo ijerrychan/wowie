@@ -1,0 +1,24 @@
+msgid ""
+msgstr ""
+"Language: zh-CN\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgctxt "Launcher"
+msgid "Search applications"
+msgstr "搜索应用"
+
+msgctxt "Launcher"
+msgid "{} results"
+msgstr "{} 个结果"
+
+msgctxt "Launcher"
+msgid "No results"
+msgstr "无结果"
+
+msgctxt "Launcher"
+msgid "Could not open application"
+msgstr "无法打开应用"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
+msgstr "↑ ↓  导航     Enter  打开     Esc  隐藏"
