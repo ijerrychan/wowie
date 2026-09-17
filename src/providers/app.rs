@@ -5,7 +5,7 @@
 //! applications. Shortcuts are launched as shortcuts, but are de-duplicated
 //! by their resolved target.
 
-use crate::result::{Action, LaunchEntry, SearchResult};
+use crate::result::{Action, IconSpec, LaunchEntry, ResultCategory, SearchResult};
 use std::{
     collections::HashMap,
     env, fs,
@@ -15,36 +15,116 @@ use url::Url;
 
 pub struct AppProvider {
     items: Vec<SearchResult>,
+    sources: HashMap<crate::platform::AppProviderSource, Vec<SearchResult>>,
 }
 
 impl AppProvider {
     pub fn discover() -> Self {
-        let mut items = Vec::new();
-        // AppsFolder/Package records are the application index. File-based
-        // sources are added afterwards as launch-entry candidates.
-        collect_store_apps(&mut items);
-        for root in start_menu_roots() {
-            collect_start_menu(&root, &mut items);
-        }
-        for root in desktop_roots() {
-            collect_desktop(&root, &mut items);
-        }
-        associate_file_entries(&mut items);
-        items.sort_by(|left, right| {
-            source_priority(&left.source)
-                .cmp(&source_priority(&right.source))
-                .then_with(|| left.title.to_lowercase().cmp(&right.title.to_lowercase()))
-                .then_with(|| left.identity.cmp(&right.identity))
-                .then_with(|| left.location.cmp(&right.location))
-        });
-        merge_by_identity(&mut items);
-        debug_records("final merged records", &items);
-        Self { items }
+        let mut sources = HashMap::new();
+        sources.insert(
+            crate::platform::AppProviderSource::StoreApps,
+            discover_store_source(),
+        );
+        sources.insert(
+            crate::platform::AppProviderSource::StartMenu,
+            discover_file_source(false, "StartMenu"),
+        );
+        sources.insert(
+            crate::platform::AppProviderSource::Desktop,
+            discover_file_source(true, "Desktop"),
+        );
+        sources.insert(
+            crate::platform::AppProviderSource::ControlPanel,
+            crate::providers::control_panel::discover(),
+        );
+        sources.insert(
+            crate::platform::AppProviderSource::Steam,
+            crate::providers::steam::discover(),
+        );
+        let items = merge_sources(&sources);
+        Self { items, sources }
     }
 
-    pub fn results(self) -> Vec<SearchResult> {
-        self.items
+    /// Re-enumerate only the source reported by the platform watcher.
+    ///
+    /// Windows notifications are deliberately treated as invalidation hints:
+    /// a rename, burst of writes, or an overflow can affect more than one
+    /// record, so the source is re-enumerated and the normal merge rules are
+    /// applied again.
+    pub fn refresh_source(&mut self, source: crate::platform::AppProviderSource) -> bool {
+        let refreshed = match source {
+            crate::platform::AppProviderSource::StoreApps => discover_store_source(),
+            crate::platform::AppProviderSource::StartMenu => {
+                discover_file_source(false, "StartMenu")
+            }
+            crate::platform::AppProviderSource::Desktop => discover_file_source(true, "Desktop"),
+            crate::platform::AppProviderSource::ControlPanel => {
+                crate::providers::control_panel::discover()
+            }
+            crate::platform::AppProviderSource::Steam => crate::providers::steam::discover(),
+        };
+        if self.sources.get(&source) == Some(&refreshed) {
+            return false;
+        }
+        self.sources.insert(source, refreshed);
+        self.items = merge_sources(&self.sources);
+        true
     }
+
+    pub fn snapshot(&self) -> Vec<SearchResult> {
+        self.items.clone()
+    }
+
+    pub fn watch_sources() -> std::sync::mpsc::Receiver<crate::platform::AppProviderSource> {
+        crate::platform::watch_app_provider_sources()
+    }
+}
+
+fn discover_store_source() -> Vec<SearchResult> {
+    let mut items = Vec::new();
+    collect_store_apps(&mut items);
+    items
+}
+
+fn discover_file_source(include_executables: bool, source: &str) -> Vec<SearchResult> {
+    let mut items = Vec::new();
+    let roots = if source == "StartMenu" {
+        start_menu_roots()
+    } else {
+        desktop_roots()
+    };
+    for root in roots {
+        collect_tree(&root, &mut items, include_executables, source);
+    }
+    items
+}
+
+fn merge_sources(
+    sources: &HashMap<crate::platform::AppProviderSource, Vec<SearchResult>>,
+) -> Vec<SearchResult> {
+    let mut items = Vec::new();
+    for source in [
+        crate::platform::AppProviderSource::StoreApps,
+        crate::platform::AppProviderSource::StartMenu,
+        crate::platform::AppProviderSource::Desktop,
+        crate::platform::AppProviderSource::ControlPanel,
+        crate::platform::AppProviderSource::Steam,
+    ] {
+        if let Some(records) = sources.get(&source) {
+            items.extend(records.iter().cloned());
+        }
+    }
+    associate_file_entries(&mut items);
+    items.sort_by(|left, right| {
+        source_priority(&left.source)
+            .cmp(&source_priority(&right.source))
+            .then_with(|| left.title.to_lowercase().cmp(&right.title.to_lowercase()))
+            .then_with(|| left.identity.cmp(&right.identity))
+            .then_with(|| left.location.cmp(&right.location))
+    });
+    merge_by_identity(&mut items);
+    debug_records("final merged records", &items);
+    items
 }
 
 fn debug_enabled() -> bool {
@@ -87,13 +167,19 @@ fn collect_store_apps(output: &mut Vec<SearchResult>) {
             );
         }
         let launch_target = app.launch_target.clone();
+        let category = if is_website_target(&launch_target) {
+            ResultCategory::Website
+        } else {
+            ResultCategory::Application
+        };
         output.push(SearchResult {
             id: app.identity.clone(),
             identity: app.identity,
             title: app.title,
+            category,
             aliases: app.aliases,
             location: launch_target.display().to_string(),
-            launch_target,
+            launch_target: launch_target.clone(),
             launch_arguments: String::new(),
             launch_working_directory: None,
             source: app.source.into(),
@@ -109,6 +195,8 @@ fn collect_store_apps(output: &mut Vec<SearchResult>) {
                 working_directory: None,
             }],
             actions: Vec::new(),
+            icon: (category == ResultCategory::Website)
+                .then(|| IconSpec::DefaultOpen(launch_target.clone())),
         });
     }
 }
@@ -133,14 +221,6 @@ fn desktop_roots() -> Vec<PathBuf> {
         roots.push(PathBuf::from(public).join("Desktop"));
     }
     roots
-}
-
-fn collect_start_menu(root: &Path, output: &mut Vec<SearchResult>) {
-    collect_tree(root, output, false, "StartMenu");
-}
-
-fn collect_desktop(root: &Path, output: &mut Vec<SearchResult>) {
-    collect_tree(root, output, true, "Desktop");
 }
 
 fn collect_tree(
@@ -178,6 +258,7 @@ fn collect_tree(
                 id: identity.clone(),
                 identity,
                 title: title.to_owned(),
+                category: ResultCategory::Application,
                 aliases: Vec::new(),
                 location: path.display().to_string(),
                 launch_target: path.clone(),
@@ -193,6 +274,7 @@ fn collect_tree(
                     working_directory: None,
                 }],
                 actions: Vec::new(),
+                icon: None,
             });
             continue;
         }
@@ -214,6 +296,7 @@ fn collect_tree(
                 id: format!("url:{normalized_url}"),
                 identity: format!("url:{normalized_url}"),
                 title: title.to_owned(),
+                category: ResultCategory::Website,
                 aliases: Vec::new(),
                 location: url.clone(),
                 launch_target: PathBuf::from(&url),
@@ -229,6 +312,7 @@ fn collect_tree(
                     working_directory: None,
                 }],
                 actions: Vec::new(),
+                icon: Some(IconSpec::DefaultOpen(PathBuf::from(&url))),
             });
             continue;
         }
@@ -242,7 +326,10 @@ fn collect_tree(
                 shortcut.arguments
             );
         }
-        let identity = if let Some(identity) =
+        let website_url = website_url(&resolved_target, shortcut.arguments.as_deref());
+        let identity = if let Some(url) = website_url.as_deref() {
+            format!("url:{url}")
+        } else if let Some(identity) =
             apps_folder_identity(&resolved_target, shortcut.arguments.as_deref())
         {
             identity
@@ -254,6 +341,11 @@ fn collect_tree(
             id: identity.clone(),
             identity,
             title: title.to_owned(),
+            category: if website_url.is_some() {
+                ResultCategory::Website
+            } else {
+                ResultCategory::Application
+            },
             aliases,
             location: path.display().to_string(),
             // Launch the shortcut itself so Windows preserves ShellLink metadata.
@@ -270,6 +362,7 @@ fn collect_tree(
                 working_directory: shortcut.working_directory.clone(),
             }],
             actions: Vec::new(),
+            icon: website_url.map(PathBuf::from).map(IconSpec::DefaultOpen),
         });
     }
 }
@@ -278,6 +371,34 @@ fn normalize_url(value: &str) -> Option<String> {
     let mut url = Url::parse(value.trim()).ok()?;
     url.set_fragment(None);
     Some(url.to_string())
+}
+
+fn is_website_target(value: &Path) -> bool {
+    Url::parse(value.to_string_lossy().trim())
+        .map(|url| matches!(url.scheme(), "http" | "https"))
+        .unwrap_or(false)
+}
+
+fn is_website_shortcut(target: &Path, arguments: Option<&str>) -> bool {
+    website_url(target, arguments).is_some()
+}
+
+fn website_url(target: &Path, arguments: Option<&str>) -> Option<String> {
+    let candidate = if is_website_target(target) {
+        Some(target.to_string_lossy().trim().to_owned())
+    } else {
+        arguments
+            .into_iter()
+            .flat_map(|value| value.split_whitespace())
+            .map(|value| value.trim_matches('"'))
+            .find(|value| {
+                Url::parse(value)
+                    .map(|url| matches!(url.scheme(), "http" | "https"))
+                    .unwrap_or(false)
+            })
+            .map(str::to_owned)
+    }?;
+    normalize_url(&candidate)
 }
 
 fn expand_windows_variables(path: PathBuf) -> PathBuf {
@@ -317,7 +438,7 @@ fn associate_file_entries(items: &mut Vec<SearchResult>) {
     let mut unified = Vec::with_capacity(items.len());
     for item in std::mem::take(items) {
         let is_file_entry = is_file_source(&item.source);
-        let match_index = if is_file_entry {
+        let match_index = if is_file_entry && item.category != ResultCategory::Website {
             item.launch_entries.first().and_then(|entry| {
                 let candidates: Vec<_> = unified
                     .iter()
@@ -608,6 +729,14 @@ fn merge_by_identity(items: &mut Vec<SearchResult>) {
         }
         match grouped.get_mut(&item.identity) {
             Some(existing) => {
+                if existing.category == ResultCategory::Application
+                    && item.category == ResultCategory::Website
+                {
+                    existing.category = ResultCategory::Website;
+                }
+                if existing.icon.is_none() {
+                    existing.icon = item.icon.clone();
+                }
                 existing.aliases.extend(aliases);
                 existing.sources.extend(item.sources);
                 existing.launch_entries.extend(item.launch_entries);
@@ -656,6 +785,7 @@ fn source_priority(source: &str) -> u8 {
         "StartMenu" => 2,
         "Desktop" => 3,
         "ExecutionAlias" => 4,
+        "Steam" => 4,
         _ => 4,
     }
 }
@@ -670,6 +800,7 @@ mod tests {
             id: identity.into(),
             identity: identity.into(),
             title: title.into(),
+            category: ResultCategory::Application,
             aliases: vec![],
             location: String::new(),
             launch_target: PathBuf::from("target.exe"),
@@ -679,6 +810,7 @@ mod tests {
             sources: vec![source.into()],
             launch_entries: vec![],
             actions: Vec::new(),
+            icon: None,
         }
     }
 
@@ -979,6 +1111,18 @@ mod tests {
             Some("https://example.com")
         );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn recognizes_browser_shortcut_url_arguments() {
+        assert!(is_website_shortcut(
+            Path::new(r"C:\Program Files\Browser\browser.exe"),
+            Some(r#"--profile "https://example.com/path""#)
+        ));
+        assert!(!is_website_shortcut(
+            Path::new(r"C:\Program Files\Browser\browser.exe"),
+            Some("--new-window")
+        ));
     }
 
     #[test]

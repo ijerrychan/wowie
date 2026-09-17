@@ -1,6 +1,6 @@
 import { VerticalBox, ListView } from "std-widgets.slint";
 
-export struct ResultRow { id: string, title: string, location: string, icon: image }
+export struct ResultRow { id: string, title: string, location: string, icon: image, category: string }
 
 export component Launcher inherits Window {
     title: "Wowie";
@@ -16,6 +16,9 @@ export component Launcher inherits Window {
     in property <color> accent-background: #280067c0;
     in property <int> result-count: 0;
     in-out property <string> launch-error: "";
+    in-out property <string> last-action-id: "";
+    in-out property <string> last-action-result: "";
+    in-out property <string> last-action-subtitle: "";
     in property <[ResultRow]> results;
     in-out property <int> selected-index: -1;
     callback query-changed(string);
@@ -67,6 +70,8 @@ export component Launcher inherits Window {
                 search-field := TextInput {
                     x: 48px; y: 0px; width: parent.width - 126px; height: parent.height;
                     color: root.text-primary; font-size: 16px; vertical-alignment: center; single-line: true;
+                    selection-background-color: root.accent-color;
+                    selection-foreground-color: #ffffff;
                     edited => { root.query-changed(self.text); }
                     key-pressed(event) => {
                         if (event.text == Key.DownArrow) { root.selected-index = min(root.selected-index + 1, root.results.length - 1); accept }
@@ -87,7 +92,6 @@ export component Launcher inherits Window {
             if (search-field.text != "") : Rectangle {
                 height: 24px; background: transparent;
                 Text { x: 6px; y: 0px; width: parent.width - 12px; height: parent.height; text: @tr("{} results", root.result-count); color: root.text-tertiary; font-size: 11px; vertical-alignment: center; }
-                Text { x: 6px; y: 0px; width: parent.width - 12px; height: parent.height; text: @tr("Applications"); color: root.text-tertiary; font-size: 11px; horizontal-alignment: right; vertical-alignment: center; }
             }
 
             results-list := ListView {
@@ -108,8 +112,14 @@ export component Launcher inherits Window {
                     }
                     VerticalBox {
                         x: 60px; y: 5px; width: parent.width - 76px; height: 40px; spacing: 2px;
-                        Text { text: row.title; color: root.text-primary; font-size: 14px; font-weight: 500; overflow: elide; }
-                        Text { text: row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
+                        Text { text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: 14px; font-weight: 500; overflow: elide; }
+                        Text { width: parent.width - 78px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
+                    }
+                    Text {
+                        x: parent.width - 76px; y: 17px; width: 68px; height: 22px;
+                        text: row.category == "Game" ? @tr("Game") : row.category == "Website" ? @tr("Website") : row.category == "Control Panel" ? @tr("Control Panel") : @tr("Application");
+                        color: root.text-tertiary; font-size: 10px;
+                        horizontal-alignment: center; vertical-alignment: center;
                     }
                 }
             }

@@ -12,6 +12,27 @@ pub enum PlatformEvent {
     SystemThemeChanged,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AppProviderSource {
+    StoreApps,
+    StartMenu,
+    Desktop,
+    ControlPanel,
+    Steam,
+}
+
+pub fn watch_app_provider_sources() -> std::sync::mpsc::Receiver<AppProviderSource> {
+    #[cfg(windows)]
+    {
+        windows::watch_app_provider_sources()
+    }
+    #[cfg(not(windows))]
+    {
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        receiver
+    }
+}
+
 pub trait PlatformIntegration: Send + Sync {
     fn register_hotkey(
         &self,
@@ -43,6 +64,15 @@ pub struct StoreApplication {
     pub source: &'static str,
 }
 
+#[derive(Debug, Clone)]
+pub struct ControlPanelItem {
+    pub identity: String,
+    pub title: String,
+    /// Canonical Shell/parsing name, kept searchable alongside the localized title.
+    pub aliases: Vec<String>,
+    pub launch_target: std::path::PathBuf,
+}
+
 /// A small, renderer-neutral icon payload. Pixels are kept off the Slint UI
 /// thread until the result model is materialized.
 #[derive(Debug, Clone)]
@@ -56,6 +86,17 @@ pub fn application_icon(_target: &std::path::Path) -> Option<IconData> {
     #[cfg(windows)]
     {
         windows::application_icon(_target)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+pub fn default_open_icon(_target: &std::path::Path) -> Option<IconData> {
+    #[cfg(windows)]
+    {
+        windows::default_open_icon(_target)
     }
     #[cfg(not(windows))]
     {
@@ -79,6 +120,28 @@ pub fn discover_store_applications() -> Vec<StoreApplication> {
     #[cfg(windows)]
     {
         windows::discover_store_applications()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+pub fn discover_control_panel_items() -> Vec<ControlPanelItem> {
+    #[cfg(windows)]
+    {
+        windows::discover_control_panel_items()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+pub fn steam_install_roots() -> Vec<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        windows::steam_install_roots()
     }
     #[cfg(not(windows))]
     {

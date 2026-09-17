@@ -1,0 +1,6 @@
+{
+  "generate_uuid": "Generate UUID",
+  "hint": "Press Enter to generate and copy",
+  "copied": "Copied to clipboard",
+  "copy_failed": "Copy failed"
+}

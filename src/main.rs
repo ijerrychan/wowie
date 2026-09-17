@@ -1,21 +1,24 @@
-mod app_provider;
 mod config;
 mod i18n;
+mod icon_service;
 mod launcher;
 mod platform;
+mod plugin;
+mod providers;
 mod result;
 mod search;
 
 use anyhow::Result;
-use app_provider::AppProvider;
-use result::SearchResult;
+use icon_service::IconService;
+use providers::app::AppProvider;
+use result::{ResultCategory, SearchResult};
 use slint::{ComponentHandle, Model, ModelRc, Timer, VecModel};
 use std::{
     rc::Rc,
     sync::{
         atomic::AtomicU64,
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -40,13 +43,19 @@ fn main() -> Result<()> {
             eprintln!("could not persist configuration: {error:#}");
         }
     }
-    let provider = AppProvider::discover();
-    let engine = search::SearchCore::new(provider.results());
+    let mut provider = AppProvider::discover();
+    let app_source_events = AppProvider::watch_sources();
+    let engine = search::SearchCore::with_plugins(
+        provider.snapshot(),
+        plugin::PluginManager::discover_with_locale(&config.language),
+    );
     let engine = Arc::new(engine);
+    let icon_service = IconService::new();
     let results = Rc::new(VecModel::<ResultRow>::default());
     let visible = Arc::new(AtomicBool::new(false));
     let follow_system_theme = config.theme == "system";
     let query_generation = Arc::new(AtomicU64::new(0));
+    let current_query = Arc::new(Mutex::new(String::new()));
 
     window.set_results(ModelRc::from(results.clone()));
     window.set_window_width(config.window_width as i32);
@@ -69,12 +78,23 @@ fn main() -> Result<()> {
 
     {
         let engine = engine.clone();
+        let icon_service = icon_service.clone();
         let weak = window.as_weak();
         let max_results = config.max_results;
         let query_generation = Arc::clone(&query_generation);
+        let current_query = Arc::clone(&current_query);
         window.on_query_changed(move |query| {
+            if let Ok(mut current) = current_query.lock() {
+                *current = query.to_string();
+            }
+            if let Some(window) = weak.upgrade() {
+                window.set_last_action_id(String::new().into());
+                window.set_last_action_result(String::new().into());
+                window.set_last_action_subtitle(String::new().into());
+            }
             let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
             let engine = Arc::clone(&engine);
+            let icon_service = icon_service.clone();
             let weak = weak.clone();
             let query_generation = Arc::clone(&query_generation);
             std::thread::spawn(move || {
@@ -86,7 +106,10 @@ fn main() -> Result<()> {
                 // Icon extraction can call into the Windows shell and is much
                 // slower than the in-memory search. Build rows off the UI
                 // thread so typing stays responsive.
-                let rows = found.iter().map(ResultRowPayload::from).collect::<Vec<_>>();
+                let rows = found
+                    .iter()
+                    .map(|item| ResultRowPayload::from(item, &icon_service))
+                    .collect::<Vec<_>>();
                 let _ = slint::invoke_from_event_loop(move || {
                     if query_generation.load(Ordering::Acquire) != query_id {
                         return;
@@ -116,7 +139,27 @@ fn main() -> Result<()> {
                     .and_then(|row| engine.by_id(row.id.as_str()))
             });
             if let Some(item) = item {
-                match launcher::launch(&item) {
+                if matches!(item.actions.first(), Some(result::Action::Plugin { .. })) {
+                    match engine.execute_action(&item.id) {
+                        Ok(output) => {
+                            if let Some(window) = weak.upgrade() {
+                                window.set_last_action_id(item.id.clone().into());
+                                window.set_last_action_result(output.title.into());
+                                window.set_last_action_subtitle(output.subtitle.into());
+                                window.set_launch_error(String::new().into());
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("plugin action failed: {error:#}");
+                            if let Some(window) = weak.upgrade() {
+                                window.set_launch_error(error.to_string().into());
+                            }
+                        }
+                    }
+                    return;
+                }
+                let result = launcher::launch(&item);
+                match result {
                     Ok(()) => {
                         if let Some(window) = weak.upgrade() {
                             window.set_launch_error(String::new().into());
@@ -151,6 +194,52 @@ fn main() -> Result<()> {
                 visible.store(false, Ordering::Release);
             });
         }
+    }
+
+    {
+        let engine = Arc::clone(&engine);
+        let icon_service = icon_service.clone();
+        let weak = window.as_weak();
+        let query_generation = Arc::clone(&query_generation);
+        let current_query = Arc::clone(&current_query);
+        std::thread::spawn(move || {
+            for source in app_source_events {
+                if provider.refresh_source(source) {
+                    let indexed = provider.snapshot();
+                    engine.replace_results(indexed);
+                    let query = current_query
+                        .lock()
+                        .map(|value| value.clone())
+                        .unwrap_or_default();
+                    let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
+                    let found = if query.trim().is_empty() {
+                        Vec::new()
+                    } else {
+                        engine.search(&query, config.max_results)
+                    };
+                    let rows = found
+                        .iter()
+                        .map(|item| ResultRowPayload::from(item, &icon_service))
+                        .collect::<Vec<_>>();
+                    let query_generation_for_ui = Arc::clone(&query_generation);
+                    let weak_for_ui = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if query_generation_for_ui.load(Ordering::Acquire) != query_id {
+                            return;
+                        }
+                        if let Some(window) = weak_for_ui.upgrade() {
+                            let model = Rc::new(VecModel::from(
+                                rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
+                            ));
+                            let count = model.row_count();
+                            window.set_results(ModelRc::from(model));
+                            window.set_result_count(count as i32);
+                            window.set_selected_index(if count > 0 { 0 } else { -1 });
+                        }
+                    });
+                }
+            }
+        });
     }
 
     let hotkey_events = platform.register_hotkey(&config.hotkey, follow_system_theme)?;
@@ -251,35 +340,24 @@ struct ResultRowPayload {
     title: String,
     location: String,
     icon: Option<crate::platform::IconData>,
+    category: String,
 }
 
-impl From<&SearchResult> for ResultRowPayload {
-    fn from(item: &SearchResult) -> Self {
-        let icon_target = item
-            .launch_entries
-            .iter()
-            .filter(|entry| {
-                !entry.target.to_string_lossy().starts_with("shell:")
-                    && !entry
-                        .target
-                        .to_string_lossy()
-                        .to_lowercase()
-                        .contains("\\update.exe")
-            })
-            .min_by_key(|entry| entry.target.to_string_lossy().to_lowercase())
-            .map(|entry| &entry.target)
-            .unwrap_or(&item.launch_target);
-        let icon = crate::platform::application_icon(icon_target).or_else(|| {
-            item.launch_entries
-                .iter()
-                .map(|entry| &entry.path)
-                .find_map(|path| crate::platform::application_icon(path))
-        });
+impl ResultRowPayload {
+    fn from(item: &SearchResult, icon_service: &IconService) -> Self {
+        let icon = icon_service.resolve(item);
         Self {
             id: item.id.clone().into(),
             title: item.title.clone().into(),
             location: item.location.clone().into(),
             icon,
+            category: match item.category {
+                ResultCategory::Game => "Game",
+                ResultCategory::Application => "Application",
+                ResultCategory::Website => "Website",
+                ResultCategory::ControlPanel => "Control Panel",
+            }
+            .into(),
         }
     }
 }
@@ -302,6 +380,7 @@ impl From<ResultRowPayload> for ResultRow {
             title: payload.title.into(),
             location: payload.location.into(),
             icon,
+            category: payload.category.into(),
         }
     }
 }

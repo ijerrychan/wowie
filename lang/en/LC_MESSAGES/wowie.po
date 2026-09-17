@@ -20,5 +20,21 @@ msgid "Could not open application"
 msgstr "Could not open application"
 
 msgctxt "Launcher"
+msgid "Game"
+msgstr "Game"
+
+msgctxt "Launcher"
+msgid "Application"
+msgstr "Application"
+
+msgctxt "Launcher"
+msgid "Website"
+msgstr "Website"
+
+msgctxt "Launcher"
+msgid "Control Panel"
+msgstr "Control Panel"
+
+msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  Navigate     Enter  Open     Esc  Hide"

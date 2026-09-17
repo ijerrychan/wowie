@@ -14,10 +14,15 @@ use url::Url;
 use windows_sys::Win32::{
     Foundation::{GetLastError, POINT},
     Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED},
+    Storage::FileSystem::{
+        FindCloseChangeNotification, FindFirstChangeNotificationW, FindNextChangeNotification,
+        FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE,
+    },
     System::Registry::{
         RegCloseKey, RegNotifyChangeKeyValue, RegOpenKeyExW, RegQueryValueExW, HKEY,
         HKEY_CURRENT_USER, KEY_READ, REG_NOTIFY_CHANGE_LAST_SET,
     },
+    System::Threading::{WaitForSingleObject, INFINITE},
     UI::{
         Input::KeyboardAndMouse::{
             RegisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
@@ -31,6 +36,102 @@ use windows_sys::Win32::{
 
 pub struct WindowsPlatform;
 
+/// Watch each indexed source with the Win32 directory notification API.
+///
+/// The provider intentionally receives source-level invalidations instead of
+/// raw file events. Windows can coalesce directory notifications, so a
+/// complete source re-enumeration is the safe recovery path.
+pub(crate) fn watch_app_provider_sources() -> std::sync::mpsc::Receiver<super::AppProviderSource> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let mut watches = Vec::new();
+    watches.extend(
+        start_menu_watch_roots()
+            .into_iter()
+            .map(|path| (path, super::AppProviderSource::StartMenu)),
+    );
+    watches.extend(
+        desktop_watch_roots()
+            .into_iter()
+            .map(|path| (path, super::AppProviderSource::Desktop)),
+    );
+    watches.extend(
+        store_watch_roots()
+            .into_iter()
+            .map(|path| (path, super::AppProviderSource::StoreApps)),
+    );
+    for (path, source) in watches {
+        let sender = sender.clone();
+        thread::spawn(move || watch_directory(path, source, sender));
+    }
+    receiver
+}
+
+fn start_menu_watch_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(value) = std::env::var("APPDATA") {
+        roots.push(PathBuf::from(value).join(r"Microsoft\Windows\Start Menu\Programs"));
+    }
+    if let Ok(value) = std::env::var("ProgramData") {
+        roots.push(PathBuf::from(value).join(r"Microsoft\Windows\Start Menu\Programs"));
+    }
+    roots
+}
+
+fn desktop_watch_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(value) = std::env::var("USERPROFILE") {
+        roots.push(PathBuf::from(value).join("Desktop"));
+    }
+    if let Ok(value) = std::env::var("PUBLIC") {
+        roots.push(PathBuf::from(value).join("Desktop"));
+    }
+    roots
+}
+
+fn store_watch_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(value) = std::env::var("LOCALAPPDATA") {
+        roots.push(PathBuf::from(value).join("Packages"));
+    }
+    if let Ok(value) = std::env::var("ProgramFiles") {
+        roots.push(PathBuf::from(value).join("WindowsApps"));
+    }
+    roots
+}
+
+fn watch_directory(
+    path: PathBuf,
+    source: super::AppProviderSource,
+    sender: std::sync::mpsc::Sender<super::AppProviderSource>,
+) {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let handle = unsafe {
+        FindFirstChangeNotificationW(
+            wide.as_ptr(),
+            1,
+            FILE_NOTIFY_CHANGE_FILE_NAME
+                | FILE_NOTIFY_CHANGE_DIR_NAME
+                | FILE_NOTIFY_CHANGE_LAST_WRITE,
+        )
+    };
+    if handle.is_null() || handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+        return;
+    }
+    loop {
+        let wait = unsafe { WaitForSingleObject(handle, INFINITE) };
+        if wait != 0 {
+            break;
+        }
+        if sender.send(source).is_err() {
+            break;
+        }
+        if unsafe { FindNextChangeNotification(handle) } == 0 {
+            break;
+        }
+    }
+    unsafe { FindCloseChangeNotification(handle) };
+}
+
 /// Legacy store index: enumerate the shell's AppsFolder first (which provides
 /// the localized display name), then use PackageManager only for entries that
 /// AppsFolder did not expose.
@@ -41,10 +142,202 @@ pub(crate) fn discover_store_applications() -> Vec<super::StoreApplication> {
     applications
 }
 
+/// Enumerate the localized items exposed by the Control Panel shell folder.
+///
+/// The shell namespace is preferable to reading the `Cpls` registry values:
+/// it includes modern and third-party applets and gives us the same localized
+/// display names that Explorer shows to the user.
+pub(crate) fn discover_control_panel_items() -> Vec<super::ControlPanelItem> {
+    use windows::Win32::{
+        Foundation::HWND,
+        System::Com::{CoTaskMemFree, IBindCtx},
+        UI::Shell::{
+            IShellFolder, SHGetDesktopFolder, SHParseDisplayName, SHCONTF_FOLDERS,
+            SHCONTF_NONFOLDERS, SHGDN_FORPARSING, SHGDN_NORMAL,
+        },
+    };
+
+    let Some(_com) = ComScope::initialize() else {
+        provider_debug("Control Panel skipped: COM initialization failed");
+        return Vec::new();
+    };
+    let namespace = wide_path(Path::new("shell:ControlPanelFolder"));
+    let mut root_pidl = std::ptr::null_mut();
+    if unsafe {
+        SHParseDisplayName(
+            windows::core::PCWSTR(namespace.as_ptr()),
+            None::<&IBindCtx>,
+            &mut root_pidl,
+            0,
+            None,
+        )
+    }
+    .is_err()
+        || root_pidl.is_null()
+    {
+        provider_debug("Control Panel parse failed");
+        return Vec::new();
+    }
+
+    let result = (|| {
+        let desktop = unsafe { SHGetDesktopFolder().ok()? };
+        let folder = unsafe {
+            desktop
+                .BindToObject::<_, IShellFolder>(root_pidl, None::<&IBindCtx>)
+                .ok()?
+        };
+        let mut enumerator = None;
+        let flags = (SHCONTF_FOLDERS.0 | SHCONTF_NONFOLDERS.0) as u32;
+        if unsafe { folder.EnumObjects(HWND(std::ptr::null_mut()), flags, &mut enumerator) }
+            .is_err()
+        {
+            return None;
+        }
+        let enumerator = enumerator?;
+        let mut items = Vec::new();
+        loop {
+            let mut child = std::ptr::null_mut();
+            let mut fetched = 0;
+            if unsafe { enumerator.Next(std::slice::from_mut(&mut child), Some(&mut fetched)) }
+                .is_err()
+                || fetched == 0
+                || child.is_null()
+            {
+                break;
+            }
+            let title = shell_display_name(&folder, child, SHGDN_NORMAL);
+            let parsing = shell_display_name(&folder, child, SHGDN_FORPARSING);
+            unsafe { CoTaskMemFree(Some(child.cast())) };
+            let (Some(title), Some(parsing)) = (title, parsing) else {
+                continue;
+            };
+            if title.trim().is_empty() || parsing.trim().is_empty() {
+                continue;
+            }
+            let target = PathBuf::from(parsing);
+            let identity = format!("control-panel:{}", target.to_string_lossy().to_lowercase());
+            items.push(super::ControlPanelItem {
+                identity,
+                title,
+                aliases: vec![target.to_string_lossy().into_owned()],
+                launch_target: target,
+            });
+        }
+        items.sort_by(|left, right| {
+            left.title
+                .to_lowercase()
+                .cmp(&right.title.to_lowercase())
+                .then_with(|| left.identity.cmp(&right.identity))
+        });
+        Some(items)
+    })()
+    .unwrap_or_default();
+    unsafe { CoTaskMemFree(Some(root_pidl.cast())) };
+    result
+}
+
+/// Find Steam's installation root without assuming the default drive. Steam
+/// stores this value in the per-user registry in normal installations.
+pub(crate) fn steam_install_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for (hive, subkey) in [
+        (HKEY_CURRENT_USER, r"Software\Valve\Steam"),
+        (
+            windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\WOW6432Node\Valve\Steam",
+        ),
+        (
+            windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Valve\Steam",
+        ),
+    ] {
+        let Some(key) = open_registry_key(hive, subkey) else {
+            continue;
+        };
+        if let Some(path) = read_registry_string(key, "SteamPath")
+            .or_else(|| read_registry_string(key, "InstallPath"))
+        {
+            roots.push(PathBuf::from(path));
+        }
+        unsafe { RegCloseKey(key) };
+    }
+    roots
+}
+
+fn open_registry_key(hive: HKEY, subkey: &str) -> Option<HKEY> {
+    let wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut key = std::ptr::null_mut();
+    let result = unsafe { RegOpenKeyExW(hive, wide.as_ptr(), 0, KEY_READ, &mut key) };
+    (result == 0).then_some(key)
+}
+
+fn read_registry_string(key: HKEY, name: &str) -> Option<String> {
+    let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut kind = 0u32;
+    let mut size = 0u32;
+    let first = unsafe {
+        RegQueryValueExW(
+            key,
+            wide.as_ptr(),
+            std::ptr::null(),
+            &mut kind,
+            std::ptr::null_mut(),
+            &mut size,
+        )
+    };
+    if first != 0 || (kind != 1 && kind != 2) || size < 2 {
+        return None;
+    }
+    let mut buffer = vec![0u16; (size as usize).div_ceil(2)];
+    let result = unsafe {
+        RegQueryValueExW(
+            key,
+            wide.as_ptr(),
+            std::ptr::null(),
+            &mut kind,
+            buffer.as_mut_ptr() as *mut u8,
+            &mut size,
+        )
+    };
+    if result != 0 {
+        return None;
+    }
+    while buffer.last() == Some(&0) {
+        buffer.pop();
+    }
+    String::from_utf16(&buffer).ok()
+}
+
 /// Native icon extraction entry point. The pixel conversion is intentionally
 /// kept behind the platform boundary so callers can cache the result without
 /// depending on HICON/HBITMAP types.
 pub(crate) fn application_icon(_target: &Path) -> Option<super::IconData> {
+    application_icon_with_flags(_target, false)
+}
+
+pub(crate) fn default_open_icon(_target: &Path) -> Option<super::IconData> {
+    let is_web_url = _target
+        .to_string_lossy()
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
+        || _target
+            .to_string_lossy()
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"));
+    if is_web_url {
+        // URL associations are exposed through the browser's HTML file
+        // association on Windows. Query a synthetic HTML name so Shell32
+        // returns the actual default browser icon instead of a generic URL
+        // shortcut icon.
+        return application_icon_with_flags(Path::new("wowie-default-browser.html"), true);
+    }
+    application_icon_with_flags(_target, true)
+}
+
+fn application_icon_with_flags(
+    _target: &Path,
+    use_file_attributes: bool,
+) -> Option<super::IconData> {
     use std::{mem, os::windows::ffi::OsStrExt};
     use windows_sys::Win32::{
         Graphics::Gdi::{GetDC, GetDIBits, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS},
@@ -55,20 +348,25 @@ pub(crate) fn application_icon(_target: &Path) -> Option<super::IconData> {
     };
     let wide: Vec<u16> = _target.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut file_info: SHFILEINFOW = unsafe { mem::zeroed() };
+    let shell_flags = SHGFI_ICON
+        | SHGFI_LARGEICON
+        | if use_file_attributes {
+            windows_sys::Win32::UI::Shell::SHGFI_USEFILEATTRIBUTES
+        } else {
+            0
+        };
     let mut ok = unsafe {
         SHGetFileInfoW(
             wide.as_ptr(),
-            0,
+            if use_file_attributes { 0x80 } else { 0 },
             &mut file_info,
             mem::size_of::<SHFILEINFOW>() as u32,
-            SHGFI_ICON | SHGFI_LARGEICON,
+            shell_flags,
         )
     };
-    if (ok == 0 || file_info.hIcon.is_null())
-        && _target
-            .to_string_lossy()
-            .get(.."shell:".len())
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("shell:"))
+    if !use_file_attributes
+        && (ok == 0 || file_info.hIcon.is_null())
+        && is_shell_namespace_target(_target)
     {
         use windows::{
             core::PCWSTR,
@@ -152,6 +450,14 @@ pub(crate) fn application_icon(_target: &Path) -> Option<super::IconData> {
         }
     }
     result
+}
+
+fn is_shell_namespace_target(target: &Path) -> bool {
+    let value = target.to_string_lossy();
+    value
+        .get(.."shell:".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("shell:"))
+        || value.starts_with("::")
 }
 
 fn collect_apps_folder(applications: &mut Vec<super::StoreApplication>) {
