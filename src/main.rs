@@ -1,20 +1,24 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod classifier;
 mod config;
+mod details;
+mod http;
 mod i18n;
 mod icon_service;
 mod launcher;
 mod platform;
 mod plugin;
+mod provider;
 mod providers;
 mod ranking;
 mod result;
 mod search;
-mod shortcuts;
 
 use anyhow::Result;
 use icon_service::IconService;
 use providers::app::AppProvider;
-use result::{ResultCategory, SearchResult};
+use result::{DetailBlock as ResultDetailBlock, DetailView, ResultCategory, SearchResult};
 use slint::{ComponentHandle, Model, ModelRc, Timer, VecModel};
 use std::{
     collections::HashSet,
@@ -44,7 +48,7 @@ fn main() -> Result<()> {
             .map_err(|error| anyhow::anyhow!("could not select language: {error}"))?;
     }
     let platform = platform::current();
-    let tray_registration = platform.start_tray(i18n::exit_name(&config.language).to_owned());
+    let tray_registration = platform.start_tray(i18n::tr(&config.language, "Exit").to_owned());
     let tray_updates = tray_registration.updates.clone();
     let dark_mode = match config.theme.as_str() {
         "dark" => true,
@@ -56,7 +60,9 @@ fn main() -> Result<()> {
             eprintln!("could not persist configuration: {error:#}");
         }
     }
-    let mut provider = AppProvider::discover_with_config(&config.providers);
+    // Do not block process startup on Windows Shell/Steam enumeration. The
+    // provider worker populates this empty snapshot after the UI is running.
+    let mut provider = AppProvider::empty_with_config(&config.providers);
     let custom_directories = Arc::new(Mutex::new(config.providers.indexed_directories.clone()));
     let app_source_events = AppProvider::watch_sources(Arc::clone(&custom_directories));
     let config_events = config::watch_changes();
@@ -67,7 +73,7 @@ fn main() -> Result<()> {
     );
     let engine = Arc::new(engine);
     engine.replace_fuzzy_search(config.fuzzy_search);
-    engine.replace_shortcut_language(config.language.clone());
+    engine.replace_provider_language(config.language.clone());
     let icon_service = IconService::new();
     let results = Rc::new(VecModel::<ResultRow>::default());
     let visible = Arc::new(AtomicBool::new(false));
@@ -78,8 +84,13 @@ fn main() -> Result<()> {
     let follow_system_theme = Arc::new(AtomicBool::new(config.theme == "system"));
     let hide_on_focus_loss = Arc::new(AtomicBool::new(config.hide_on_focus_loss));
     let query_generation = Arc::new(AtomicU64::new(0));
+    let detail_generation = Arc::new(AtomicU64::new(0));
+    let detail_registry = details::DetailRegistry::default_providers();
     let current_query = Arc::new(Mutex::new(String::new()));
-    let icon_items = Arc::new(Mutex::new((0_u64, Vec::<SearchResult>::new())));
+    // Keep one shared result snapshot for icon loading. Cloning the complete
+    // result list on every visible-range notification caused avoidable memory
+    // spikes while scrolling.
+    let icon_items = Arc::new(Mutex::new((0_u64, Arc::new(Vec::<SearchResult>::new()))));
     let icon_requests = Arc::new(Mutex::new((0_u64, HashSet::<usize>::new())));
 
     window.set_results(ModelRc::from(results.clone()));
@@ -130,6 +141,47 @@ fn main() -> Result<()> {
 
     {
         let engine = engine.clone();
+        let weak = window.as_weak();
+        let current_query = Arc::clone(&current_query);
+        window.on_detail_action_requested(move |index| {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let selected = window.get_selected_index();
+            let Some(row) = (selected >= 0)
+                .then(|| window.get_results().row_data(selected as usize))
+                .flatten()
+            else {
+                return;
+            };
+            let Some(item) = engine.by_id(row.id.as_str()) else {
+                return;
+            };
+            let Some(detail_action) = item
+                .detail
+                .as_ref()
+                .and_then(|view| view.actions.get(index as usize))
+            else {
+                return;
+            };
+            match engine.execute_plugin_action(&item.id, &detail_action.id) {
+                Ok(output) => {
+                    let query = current_query
+                        .lock()
+                        .map(|query| query.clone())
+                        .unwrap_or_default();
+                    engine.record_success(&item.id, &query);
+                    window.set_last_action_id(item.id.into());
+                    window.set_last_action_result(output.title.into());
+                    window.set_last_action_subtitle(output.subtitle.into());
+                    window.set_launch_error(String::new().into());
+                }
+                Err(error) => window.set_launch_error(error.to_string().into()),
+            }
+        });
+    }
+    {
+        let engine = engine.clone();
         let icon_service = icon_service.clone();
         let icon_items = Arc::clone(&icon_items);
         let icon_requests = Arc::clone(&icon_requests);
@@ -137,7 +189,15 @@ fn main() -> Result<()> {
         let query_generation = Arc::clone(&query_generation);
         let current_query = Arc::clone(&current_query);
         let show_advanced_details = Arc::clone(&show_advanced_details);
+        let detail_registry = detail_registry.clone();
+        let detail_language = config.language.clone();
+        let detail_generation = Arc::clone(&detail_generation);
         window.on_query_changed(move |query| {
+            // Invalidate an in-flight detail request immediately. The result
+            // list for the new query may arrive slightly later on the worker
+            // thread, so waiting for selection changes here can let stale
+            // weather data briefly overwrite the new query's detail panel.
+            detail_generation.fetch_add(1, Ordering::AcqRel);
             if let Ok(mut current) = current_query.lock() {
                 *current = query.to_string();
             }
@@ -146,6 +206,7 @@ fn main() -> Result<()> {
                 window.set_last_action_result(String::new().into());
                 window.set_last_action_subtitle(String::new().into());
                 window.set_launch_error(String::new().into());
+                window.set_detail_panel_visible(false);
             }
             let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
             let engine = Arc::clone(&engine);
@@ -154,7 +215,10 @@ fn main() -> Result<()> {
             let icon_requests = Arc::clone(&icon_requests);
             let weak = weak.clone();
             let query_generation = Arc::clone(&query_generation);
+            let detail_generation = Arc::clone(&detail_generation);
             let show_advanced_details_for_query = Arc::clone(&show_advanced_details);
+            let detail_registry_for_query = detail_registry.clone();
+            let detail_language_for_query = detail_language.clone();
             std::thread::spawn(move || {
                 let found = if query.trim().is_empty() {
                     Vec::new()
@@ -170,14 +234,16 @@ fn main() -> Result<()> {
                         )
                     })
                     .collect::<Vec<_>>();
-                let found_for_icons = found;
+                let detail_panel = found.first().is_some_and(|item| item.detail.is_some());
+                let first_detail = found.first().and_then(|item| item.detail.clone());
+                let found_for_icons = Arc::new(found);
                 let _ = slint::invoke_from_event_loop(move || {
                     if query_generation.load(Ordering::Acquire) != query_id {
                         return;
                     }
                     if let Some(window) = weak.upgrade() {
                         if let Ok(mut state) = icon_items.lock() {
-                            *state = (query_id, found_for_icons);
+                            *state = (query_id, Arc::clone(&found_for_icons));
                         }
                         if let Ok(mut state) = icon_requests.lock() {
                             *state = (query_id, HashSet::new());
@@ -188,7 +254,23 @@ fn main() -> Result<()> {
                         let count = model.row_count();
                         window.set_results(ModelRc::from(model));
                         window.set_result_count(count as i32);
+                        let cached_detail = found_for_icons
+                            .first()
+                            .and_then(|item| detail_registry_for_query.provider_for(item))
+                            .and_then(|provider| provider.cached(&detail_language_for_query));
+                        set_detail_view(&window, cached_detail.as_ref().or(first_detail.as_ref()));
+                        window.set_detail_panel_visible(detail_panel);
+                        window.set_selected_index(-1);
                         window.set_selected_index(if count > 0 { 0 } else { -1 });
+                        if let Some(item) = found_for_icons.first().cloned() {
+                            request_dynamic_detail(
+                                item,
+                                detail_registry_for_query.clone(),
+                                detail_language_for_query.clone(),
+                                Arc::clone(&detail_generation),
+                                weak.clone(),
+                            );
+                        }
                         request_icons(
                             0,
                             count.min(8) as i32,
@@ -201,6 +283,35 @@ fn main() -> Result<()> {
                     }
                 });
             });
+        });
+    }
+    {
+        let engine = engine.clone();
+        let weak = window.as_weak();
+        let detail_generation = Arc::clone(&detail_generation);
+        let detail_registry = detail_registry.clone();
+        let language = config.language.clone();
+        window.on_selection_changed(move |index| {
+            let item = weak
+                .upgrade()
+                .and_then(|window| window.get_results().row_data(index as usize))
+                .and_then(|row| engine.by_id(row.id.as_str()));
+            if let Some(window) = weak.upgrade() {
+                set_detail_view(&window, item.as_ref().and_then(|item| item.detail.as_ref()));
+                window.set_detail_panel_visible(
+                    item.as_ref().is_some_and(|item| item.detail.is_some()),
+                );
+            }
+            let request_id = detail_generation.fetch_add(1, Ordering::AcqRel) + 1;
+            let Some(item) = item else { return };
+            request_dynamic_detail_with_id(
+                item,
+                detail_registry.clone(),
+                language.clone(),
+                Arc::clone(&detail_generation),
+                weak.clone(),
+                request_id,
+            );
         });
     }
     {
@@ -353,8 +464,30 @@ fn main() -> Result<()> {
             let Some(item) = context_item.lock().ok().and_then(|current| current.clone()) else {
                 return;
             };
+            if action_id == "open-directory" {
+                hide_context_menu(
+                    &context_weak,
+                    &weak,
+                    &context_visible,
+                    &context_generation,
+                    &context_item,
+                    false,
+                    &visible,
+                );
+                let weak_for_result = weak.clone();
+                std::thread::spawn(move || {
+                    let result = launcher::open_containing_directory(&item);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Err(error) = result {
+                            if let Some(window) = weak_for_result.upgrade() {
+                                window.set_launch_error(error.to_string().into());
+                            }
+                        }
+                    });
+                });
+                return;
+            }
             let result = match action_id.as_str() {
-                "open-directory" => launcher::open_containing_directory(&item),
                 "run-as-admin" => {
                     let entry = result::LaunchEntry {
                         source: item.source.clone(),
@@ -430,112 +563,129 @@ fn main() -> Result<()> {
         let follow_system_theme = Arc::clone(&follow_system_theme);
         let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
         let platform_for_config = Arc::clone(&platform);
-        std::thread::spawn(move || loop {
-            let mut changed = match app_source_events.recv_timeout(Duration::from_millis(200)) {
-                Ok(source) => provider.refresh_source(source),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-            };
-            if config_events.try_recv().is_ok() {
-                let (updated, valid) = config::Config::load();
-                if valid {
-                    let _ = hotkey_updates.send(updated.hotkey.clone());
-                    let _ = tray_updates.send(i18n::exit_name(&updated.language).to_owned());
-                    follow_system_theme.store(updated.theme == "system", Ordering::Release);
-                    hide_on_focus_loss.store(updated.hide_on_focus_loss, Ordering::Release);
-                    if let Ok(mut directories) = custom_directories.lock() {
-                        *directories = updated.providers.indexed_directories.clone();
+        std::thread::spawn(move || {
+            provider.discover_initial();
+            let mut initial_refresh = true;
+            loop {
+                let mut changed = if initial_refresh {
+                    initial_refresh = false;
+                    true
+                } else {
+                    match app_source_events.recv_timeout(Duration::from_millis(200)) {
+                        Ok(source) => provider.refresh_source(source),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
-                    provider.apply_config(&updated.providers);
-                    engine.replace_shortcuts(updated.shortcuts);
-                    engine.replace_fuzzy_search(updated.fuzzy_search);
-                    engine.replace_shortcut_language(updated.language.clone());
-                    engine.replace_plugin_language(updated.language.clone());
-                    show_advanced_details.store(updated.show_advanced_details, Ordering::Release);
-                    let weak_for_config = weak.clone();
-                    let platform_for_config = Arc::clone(&platform_for_config);
-                    let theme = updated.theme.clone();
-                    let language = updated.language.clone();
-                    let window_width = updated.window_width as i32;
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if language != "system" {
-                            let _ = slint::select_bundled_translation(&language);
+                };
+                if config_events.try_recv().is_ok() {
+                    let (updated, valid) = config::Config::load();
+                    if valid {
+                        let _ = hotkey_updates.send(updated.hotkey.clone());
+                        let _ = tray_updates.send(i18n::tr(&updated.language, "Exit").to_owned());
+                        follow_system_theme.store(updated.theme == "system", Ordering::Release);
+                        hide_on_focus_loss.store(updated.hide_on_focus_loss, Ordering::Release);
+                        if let Ok(mut directories) = custom_directories.lock() {
+                            *directories = updated.providers.indexed_directories.clone();
                         }
-                        let dark_mode = match theme.as_str() {
-                            "dark" => true,
-                            "light" => false,
-                            _ => platform_for_config.system_prefers_dark_theme(),
-                        };
-                        if let Some(window) = weak_for_config.upgrade() {
-                            window.set_window_width(window_width);
-                            window.set_dark_mode(dark_mode);
-                            let accent = platform_for_config.system_accent_color();
-                            window.set_accent_background(slint::Color::from_argb_u8(
-                                if dark_mode { 0x42 } else { 0x28 },
-                                ((accent >> 16) & 0xff) as u8,
-                                ((accent >> 8) & 0xff) as u8,
-                                (accent & 0xff) as u8,
+                        provider.apply_config(&updated.providers);
+                        engine.replace_shortcuts(updated.shortcuts);
+                        engine.replace_fuzzy_search(updated.fuzzy_search);
+                        engine.replace_provider_language(updated.language.clone());
+                        show_advanced_details
+                            .store(updated.show_advanced_details, Ordering::Release);
+                        let weak_for_config = weak.clone();
+                        let platform_for_config = Arc::clone(&platform_for_config);
+                        let theme = updated.theme.clone();
+                        let language = updated.language.clone();
+                        let window_width = updated.window_width as i32;
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if language != "system" {
+                                let _ = slint::select_bundled_translation(&language);
+                            }
+                            let dark_mode = match theme.as_str() {
+                                "dark" => true,
+                                "light" => false,
+                                _ => platform_for_config.system_prefers_dark_theme(),
+                            };
+                            if let Some(window) = weak_for_config.upgrade() {
+                                window.set_window_width(window_width);
+                                window.set_dark_mode(dark_mode);
+                                let accent = platform_for_config.system_accent_color();
+                                window.set_accent_background(slint::Color::from_argb_u8(
+                                    if dark_mode { 0x42 } else { 0x28 },
+                                    ((accent >> 16) & 0xff) as u8,
+                                    ((accent >> 8) & 0xff) as u8,
+                                    (accent & 0xff) as u8,
+                                ));
+                            }
+                        });
+                        changed = true;
+                    }
+                }
+                if changed {
+                    let indexed = provider.snapshot();
+                    engine.replace_results(indexed);
+                    let query = current_query
+                        .lock()
+                        .map(|value| value.clone())
+                        .unwrap_or_default();
+                    let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
+                    let found = if query.trim().is_empty() {
+                        Vec::new()
+                    } else {
+                        engine.search(&query)
+                    };
+                    let rows = found
+                        .iter()
+                        .map(|item| {
+                            ResultRowPayload::from(
+                                item,
+                                show_advanced_details.load(Ordering::Acquire),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let detail_panel = found.first().is_some_and(|item| item.detail.is_some());
+                    let first_detail = found.first().and_then(|item| item.detail.clone());
+                    let found_for_icons = Arc::new(found);
+                    let query_generation_for_ui = Arc::clone(&query_generation);
+                    let weak_for_ui = weak.clone();
+                    let icon_items_for_ui = Arc::clone(&icon_items);
+                    let icon_requests_for_ui = Arc::clone(&icon_requests);
+                    let icon_service_for_ui = icon_service.clone();
+                    let query_generation_for_icons = Arc::clone(&query_generation);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if query_generation_for_ui.load(Ordering::Acquire) != query_id {
+                            return;
+                        }
+                        if let Some(window) = weak_for_ui.upgrade() {
+                            if let Ok(mut state) = icon_items_for_ui.lock() {
+                                *state = (query_id, Arc::clone(&found_for_icons));
+                            }
+                            if let Ok(mut state) = icon_requests_for_ui.lock() {
+                                *state = (query_id, HashSet::new());
+                            }
+                            let model = Rc::new(VecModel::from(
+                                rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
                             ));
+                            let count = model.row_count();
+                            window.set_results(ModelRc::from(model));
+                            window.set_result_count(count as i32);
+                            set_detail_view(&window, first_detail.as_ref());
+                            window.set_detail_panel_visible(detail_panel);
+                            window.set_selected_index(-1);
+                            window.set_selected_index(if count > 0 { 0 } else { -1 });
+                            request_icons(
+                                0,
+                                count.min(8) as i32,
+                                &icon_items_for_ui,
+                                &icon_requests_for_ui,
+                                &icon_service_for_ui,
+                                &window.as_weak(),
+                                &query_generation_for_icons,
+                            );
                         }
                     });
-                    changed = true;
                 }
-            }
-            if changed {
-                let indexed = provider.snapshot();
-                engine.replace_results(indexed);
-                let query = current_query
-                    .lock()
-                    .map(|value| value.clone())
-                    .unwrap_or_default();
-                let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
-                let found = if query.trim().is_empty() {
-                    Vec::new()
-                } else {
-                    engine.search(&query)
-                };
-                let rows = found
-                    .iter()
-                    .map(|item| {
-                        ResultRowPayload::from(item, show_advanced_details.load(Ordering::Acquire))
-                    })
-                    .collect::<Vec<_>>();
-                let found_for_icons = found;
-                let query_generation_for_ui = Arc::clone(&query_generation);
-                let weak_for_ui = weak.clone();
-                let icon_items_for_ui = Arc::clone(&icon_items);
-                let icon_requests_for_ui = Arc::clone(&icon_requests);
-                let icon_service_for_ui = icon_service.clone();
-                let query_generation_for_icons = Arc::clone(&query_generation);
-                let _ = slint::invoke_from_event_loop(move || {
-                    if query_generation_for_ui.load(Ordering::Acquire) != query_id {
-                        return;
-                    }
-                    if let Some(window) = weak_for_ui.upgrade() {
-                        if let Ok(mut state) = icon_items_for_ui.lock() {
-                            *state = (query_id, found_for_icons);
-                        }
-                        if let Ok(mut state) = icon_requests_for_ui.lock() {
-                            *state = (query_id, HashSet::new());
-                        }
-                        let model = Rc::new(VecModel::from(
-                            rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
-                        ));
-                        let count = model.row_count();
-                        window.set_results(ModelRc::from(model));
-                        window.set_result_count(count as i32);
-                        window.set_selected_index(if count > 0 { 0 } else { -1 });
-                        request_icons(
-                            0,
-                            count.min(8) as i32,
-                            &icon_items_for_ui,
-                            &icon_requests_for_ui,
-                            &icon_service_for_ui,
-                            &window.as_weak(),
-                            &query_generation_for_icons,
-                        );
-                    }
-                });
             }
         });
     }
@@ -682,12 +832,190 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn request_dynamic_detail(
+    item: SearchResult,
+    registry: details::DetailRegistry,
+    language: String,
+    generation: Arc<AtomicU64>,
+    weak: slint::Weak<Launcher>,
+) {
+    let request_id = generation.fetch_add(1, Ordering::AcqRel) + 1;
+    request_dynamic_detail_with_id(item, registry, language, generation, weak, request_id);
+}
+
+fn request_dynamic_detail_with_id(
+    item: SearchResult,
+    registry: details::DetailRegistry,
+    language: String,
+    generation: Arc<AtomicU64>,
+    weak: slint::Weak<Launcher>,
+    request_id: u64,
+) {
+    let Some(provider) = registry.provider_for(&item) else {
+        return;
+    };
+    if let Some(cached) = provider.cached(&language) {
+        if let Some(window) = weak.upgrade() {
+            set_detail_view(&window, Some(&cached));
+            window.set_detail_panel_visible(true);
+        }
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let result = provider.load(&language);
+        let _ = slint::invoke_from_event_loop(move || {
+            if generation.load(Ordering::Acquire) != request_id {
+                return;
+            }
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            match result {
+                Ok(detail) => {
+                    set_detail_view(&window, Some(&detail));
+                    window.set_detail_panel_visible(true);
+                }
+                Err(error) => {
+                    eprintln!("dynamic detail request failed: {error:#}");
+                    let detail = provider.error_view(&language);
+                    set_detail_view(&window, Some(&detail));
+                    window.set_detail_panel_visible(true);
+                }
+            }
+        });
+    });
+}
+
+fn set_detail_view(window: &Launcher, view: Option<&DetailView>) {
+    if let Some(view) = view {
+        window.set_detail_title(view.title.clone().into());
+        window.set_detail_subtitle(view.subtitle.clone().into());
+        window.set_detail_source(view.source.clone().into());
+        window.set_detail_blocks(detail_blocks_model(view));
+        window.set_detail_actions(detail_actions_model(view));
+    } else {
+        window.set_detail_title(String::new().into());
+        window.set_detail_subtitle(String::new().into());
+        window.set_detail_source(String::new().into());
+        window.set_detail_blocks(ModelRc::from(Rc::new(VecModel::from(
+            Vec::<DetailBlock>::new(),
+        ))));
+        window.set_detail_actions(ModelRc::from(Rc::new(VecModel::from(Vec::<
+            ContextActionRow,
+        >::new()))));
+    }
+}
+
+fn detail_blocks_model(view: &DetailView) -> ModelRc<DetailBlock> {
+    let blocks = view
+        .blocks
+        .iter()
+        .map(|block| match block {
+            ResultDetailBlock::Text { text, color } => DetailBlock {
+                kind: "text".into(),
+                label: String::new().into(),
+                value: text.clone().into(),
+                color: color.clone().into(),
+            },
+            ResultDetailBlock::Metric {
+                label,
+                value,
+                color,
+            } => DetailBlock {
+                kind: "metric".into(),
+                label: label.clone().into(),
+                value: value.clone().into(),
+                color: color.clone().into(),
+            },
+            ResultDetailBlock::Icon { glyph, color } => DetailBlock {
+                kind: "icon".into(),
+                label: String::new().into(),
+                value: glyph.clone().into(),
+                color: color.clone().into(),
+            },
+            ResultDetailBlock::Weather { value } => DetailBlock {
+                kind: "weather".into(),
+                label: String::new().into(),
+                value: value.clone().into(),
+                color: String::new().into(),
+            },
+            ResultDetailBlock::Separator => DetailBlock {
+                kind: "separator".into(),
+                label: String::new().into(),
+                value: String::new().into(),
+                color: String::new().into(),
+            },
+        })
+        .collect::<Vec<_>>();
+    ModelRc::from(Rc::new(VecModel::from(blocks)))
+}
+
+fn detail_actions_model(view: &DetailView) -> ModelRc<ContextActionRow> {
+    let actions = view
+        .actions
+        .iter()
+        .take(3)
+        .map(|action| ContextActionRow {
+            id: action.id.clone().into(),
+            title: action.title.clone().into(),
+            subtitle: String::new().into(),
+            kind: "detail".into(),
+        })
+        .collect::<Vec<_>>();
+    ModelRc::from(Rc::new(VecModel::from(actions)))
+}
+
+#[cfg(any())]
+fn weather_detail_view(data: &details::weather::WeatherData, language: &str) -> DetailView {
+    DetailView {
+        title: i18n::tr(language, "Weather").into(),
+        subtitle: data.location.clone(),
+        source: format!(
+            "{}: Open-Meteo · {}",
+            i18n::tr(language, "Source"),
+            data.source
+        ),
+        actions: Vec::new(),
+        blocks: vec![
+            ResultDetailBlock::Weather {
+                value: match data.weather_code {
+                    0 => "clear",
+                    71..=77 | 85..=86 => "snow",
+                    51..=67 | 80..=82 => "rain",
+                    95..=99 => "storm",
+                    _ => "cloud",
+                }
+                .into(),
+            },
+            ResultDetailBlock::Text {
+                text: format!("{}  {}", data.temperature, data.condition),
+                color: "primary".into(),
+            },
+            ResultDetailBlock::Separator,
+            ResultDetailBlock::Metric {
+                label: i18n::tr(language, "Humidity").into(),
+                value: data.humidity.clone(),
+                color: "secondary".into(),
+            },
+            ResultDetailBlock::Metric {
+                label: i18n::tr(language, "Wind").into(),
+                value: data.wind.clone(),
+                color: "secondary".into(),
+            },
+        ],
+    }
+}
+
 fn create_window(config: &config::Config) -> Result<Launcher> {
     select_renderer(&config.renderer)?;
     match Launcher::new() {
         Ok(window) => Ok(window),
-        Err(error) if config.renderer == "skia" => {
-            eprintln!("Skia renderer could not create a window: {error}; falling back to software renderer");
+        Err(error) if config.renderer != "software" => {
+            eprintln!(
+                "{} renderer could not create a window: {error}; falling back to software renderer",
+                config.renderer
+            );
             select_renderer("software")?;
             Ok(Launcher::new()?)
         }
@@ -696,6 +1024,12 @@ fn create_window(config: &config::Config) -> Result<Launcher> {
 }
 
 fn select_renderer(renderer: &str) -> Result<()> {
+    let renderer = match renderer {
+        // Keep the old config value working while selecting the explicit
+        // OpenGL Skia backend that is compiled for this platform.
+        "skia" => "skia-opengl",
+        other => other,
+    };
     slint::BackendSelector::new()
         .with_winit_window_attributes_hook(|attributes| {
             attributes
@@ -932,7 +1266,7 @@ fn is_store_application_shell_target(item: &SearchResult) -> bool {
 fn request_icons(
     start: i32,
     end: i32,
-    icon_items: &Arc<Mutex<(u64, Vec<SearchResult>)>>,
+    icon_items: &Arc<Mutex<(u64, Arc<Vec<SearchResult>>)>>,
     icon_requests: &Arc<Mutex<(u64, HashSet<usize>)>>,
     icon_service: &IconService,
     weak: &slint::Weak<Launcher>,
@@ -940,8 +1274,8 @@ fn request_icons(
 ) {
     let (query_id, items) = icon_items
         .lock()
-        .map(|state| (state.0, state.1.clone()))
-        .unwrap_or_default();
+        .map(|state| (state.0, Arc::clone(&state.1)))
+        .unwrap_or_else(|_| (0, Arc::new(Vec::new())));
     if query_id == 0 || query_generation.load(Ordering::Acquire) != query_id {
         return;
     }
@@ -1046,6 +1380,7 @@ mod tests {
                 arguments: "-Command \"echo test\"".into(),
                 working_directory: None,
             })],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };

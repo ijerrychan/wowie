@@ -1,4 +1,5 @@
 use crate::plugin::PluginManager;
+use crate::provider::ProviderRegistry;
 use crate::ranking::Ranker;
 use crate::result::SearchResult;
 use anyhow::{Context, Result};
@@ -10,9 +11,8 @@ use std::sync::{
 
 pub struct SearchCore {
     results: Mutex<Vec<SearchResult>>,
-    plugins: PluginManager,
+    providers: ProviderRegistry,
     dynamic_results: Mutex<Vec<SearchResult>>,
-    shortcuts: Option<Mutex<crate::shortcuts::ShortcutProvider>>,
     ranker: Ranker,
     fuzzy_search: AtomicBool,
 }
@@ -22,9 +22,8 @@ impl SearchCore {
     pub fn new(results: Vec<SearchResult>) -> Self {
         Self {
             results: Mutex::new(results),
-            plugins: PluginManager::discover_with_locale("en"),
+            providers: ProviderRegistry::without_dynamic(PluginManager::discover_with_locale("en")),
             dynamic_results: Mutex::new(Vec::new()),
-            shortcuts: None,
             ranker: Ranker::in_memory(),
             fuzzy_search: AtomicBool::new(true),
         }
@@ -37,38 +36,23 @@ impl SearchCore {
     ) -> Self {
         Self {
             results: Mutex::new(results),
-            plugins,
+            providers: ProviderRegistry::default_providers(plugins, shortcuts),
             dynamic_results: Mutex::new(Vec::new()),
-            shortcuts: Some(Mutex::new(crate::shortcuts::ShortcutProvider::new(
-                shortcuts,
-            ))),
             ranker: Ranker::load(),
             fuzzy_search: AtomicBool::new(true),
         }
     }
 
     pub fn replace_shortcuts(&self, shortcuts: Vec<crate::config::ShortcutConfig>) {
-        if let Some(provider) = &self.shortcuts {
-            if let Ok(mut provider) = provider.lock() {
-                provider.replace_config(shortcuts);
-            }
-        }
+        self.providers.replace_shortcuts(shortcuts);
     }
 
     pub fn replace_fuzzy_search(&self, enabled: bool) {
         self.fuzzy_search.store(enabled, Ordering::Release);
     }
 
-    pub fn replace_shortcut_language(&self, language: String) {
-        if let Some(provider) = &self.shortcuts {
-            if let Ok(mut provider) = provider.lock() {
-                provider.set_language(language);
-            }
-        }
-    }
-
-    pub fn replace_plugin_language(&self, language: String) {
-        self.plugins.set_locale(language);
+    pub fn replace_provider_language(&self, language: String) {
+        self.providers.set_language(language);
     }
 
     pub fn record_success(&self, item_id: &str, query: &str) {
@@ -99,19 +83,35 @@ impl SearchCore {
 
     pub fn execute_action(&self, item_id: &str) -> Result<crate::plugin::ExecuteResponse> {
         let item = self.by_id(item_id).context("result not found")?;
-        let Some(crate::result::Action::Plugin {
-            plugin_id,
-            action_id,
-        }) = item.actions.first()
+        let action_id = item
+            .actions
+            .iter()
+            .find_map(|action| match action {
+                crate::result::Action::Plugin { action_id, .. } => Some(action_id.as_str()),
+                crate::result::Action::Launch(_) => None,
+            })
+            .context("result has no plugin action")?;
+        self.execute_plugin_action(item_id, action_id)
+    }
+
+    pub fn execute_plugin_action(
+        &self,
+        item_id: &str,
+        requested_action_id: &str,
+    ) -> Result<crate::plugin::ExecuteResponse> {
+        let item = self.by_id(item_id).context("result not found")?;
+        let Some(crate::result::Action::Plugin { action_id, .. }) =
+            item.actions.iter().find(|action| {
+                matches!(
+                    action,
+                    crate::result::Action::Plugin { action_id, .. }
+                        if action_id == requested_action_id
+                )
+            })
         else {
             anyhow::bail!("result has no plugin action")
         };
-        let output = self.plugins.execute(
-            plugin_id,
-            item.id.rsplit(':').next().unwrap_or_default(),
-            action_id,
-        )?;
-        serde_json::from_str(&output).context("decode plugin execute response")
+        self.providers.execute_plugin_action(&item, action_id)
     }
 
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
@@ -138,22 +138,14 @@ impl SearchCore {
             .lock()
             .map(|results| results.clone())
             .unwrap_or_default();
-        let dynamic = self.plugins.query(&query);
+        let dynamic = self.providers.query(&input);
         all.extend(dynamic.iter().cloned());
-        let mut generated_shortcuts = Vec::new();
-        if let Some(provider) = &self.shortcuts {
-            if let Ok(provider) = provider.lock() {
-                generated_shortcuts = provider.results(&input);
-            }
-            all.extend(generated_shortcuts.iter().cloned());
-        }
         // Launch callbacks resolve rows by id after the search worker returns.
         // Keep only the current query's dynamic records so a repeated shortcut
         // id cannot resolve to an older command or URL.
         if let Ok(mut cached) = self.dynamic_results.lock() {
             cached.clear();
             cached.extend(dynamic);
-            cached.extend(generated_shortcuts);
         }
         let mut ranked: Vec<(RankKey, &SearchResult)> = all
             .iter()
@@ -343,6 +335,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -365,6 +358,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -390,6 +384,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -414,6 +409,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -437,6 +433,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -460,6 +457,7 @@ mod tests {
                 sources: vec![source.into()],
                 launch_entries: vec![],
                 actions: vec![],
+                detail: None,
                 icon: None,
                 ranking_bias: 0,
             }
@@ -488,6 +486,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -510,6 +509,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -532,6 +532,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -558,6 +559,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -582,6 +584,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -611,6 +614,7 @@ mod tests {
             sources: vec!["AppsFolder".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -633,7 +637,7 @@ mod tests {
             PluginManager::discover_with_locale("en"),
             Vec::new(),
         );
-        core.replace_shortcut_language("en".into());
+        core.replace_provider_language("en".into());
         let found = core.search("> ");
         assert_eq!(found[0].title, "Execute Command");
         assert!(found[0].actions.is_empty());
@@ -655,6 +659,7 @@ mod tests {
             sources: vec!["test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };

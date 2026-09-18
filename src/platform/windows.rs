@@ -471,7 +471,7 @@ fn icon_pixels(
 ) -> Option<super::IconData> {
     use std::mem;
     use windows_sys::Win32::Graphics::Gdi::{
-        GetDC, GetDIBits, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+        GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
     };
     let width = 32_u32;
     let height = 32_u32;
@@ -489,8 +489,8 @@ fn icon_pixels(
         bmiColors: [unsafe { mem::zeroed() }],
     };
     let dc = unsafe { GetDC(std::ptr::null_mut()) };
-    if dc.is_null()
-        || unsafe {
+    let copied = !dc.is_null()
+        && unsafe {
             GetDIBits(
                 dc,
                 icon_info.hbmColor,
@@ -500,8 +500,11 @@ fn icon_pixels(
                 &mut bitmap_info,
                 DIB_RGB_COLORS,
             )
-        } == 0
-    {
+        } != 0;
+    if !dc.is_null() {
+        unsafe { ReleaseDC(std::ptr::null_mut(), dc) };
+    }
+    if !copied {
         return None;
     }
     for pixel in pixels.chunks_exact_mut(4) {
@@ -559,7 +562,9 @@ fn application_icon_with_flags(
 ) -> Option<super::IconData> {
     use std::{mem, os::windows::ffi::OsStrExt};
     use windows_sys::Win32::{
-        Graphics::Gdi::{GetDC, GetDIBits, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS},
+        Graphics::Gdi::{
+            GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+        },
         UI::{
             Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON},
             WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO},
@@ -631,8 +636,8 @@ fn application_icon_with_flags(
             bmiColors: [unsafe { mem::zeroed() }],
         };
         let dc = unsafe { GetDC(std::ptr::null_mut()) };
-        if dc.is_null()
-            || unsafe {
+        let copied = !dc.is_null()
+            && unsafe {
                 GetDIBits(
                     dc,
                     icon_info.hbmColor,
@@ -642,8 +647,11 @@ fn application_icon_with_flags(
                     &mut bitmap_info,
                     DIB_RGB_COLORS,
                 )
-            } == 0
-        {
+            } != 0;
+        if !dc.is_null() {
+            unsafe { ReleaseDC(std::ptr::null_mut(), dc) };
+        }
+        if !copied {
             return None;
         }
         for pixel in pixels.chunks_exact_mut(4) {

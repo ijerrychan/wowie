@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::PathBuf};
 
 const DEFAULT_HOTKEY: &str = "Alt+Space";
-const DEFAULT_RENDERER: &str = "skia";
-const DEFAULT_WINDOW_WIDTH: u32 = 680;
+const DEFAULT_RENDERER: &str = "femtovg";
+const DEFAULT_WINDOW_WIDTH: u32 = 720;
 const MIN_WINDOW_WIDTH: u32 = 420;
 const MAX_WINDOW_WIDTH: u32 = 1200;
 const DEFAULT_THEME: &str = "system";
@@ -30,7 +30,13 @@ pub struct Config {
 pub struct ShortcutConfig {
     pub name: String,
     pub prefix: String,
+    #[serde(rename = "type", default)]
+    pub shortcut_type: String,
     pub template: String,
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub arguments: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,7 +84,10 @@ impl Default for Config {
             shortcuts: vec![ShortcutConfig {
                 name: "Search with Google".into(),
                 prefix: "g".into(),
+                shortcut_type: "url".into(),
                 template: "https://www.google.com/search?q={query}".into(),
+                target: String::new(),
+                arguments: String::new(),
             }],
             providers: ProviderConfig::default(),
         }
@@ -110,7 +119,11 @@ impl Config {
         if self.hotkey.is_empty() {
             self.hotkey = DEFAULT_HOTKEY.into();
         }
-        if self.renderer != "skia" && self.renderer != "software" {
+        if self.renderer != "femtovg"
+            && self.renderer != "skia"
+            && self.renderer != "skia-opengl"
+            && self.renderer != "software"
+        {
             self.renderer = DEFAULT_RENDERER.into();
         }
         self.window_width = self.window_width.clamp(MIN_WINDOW_WIDTH, MAX_WINDOW_WIDTH);
@@ -123,12 +136,22 @@ impl Config {
         for shortcut in &mut self.shortcuts {
             shortcut.name = shortcut.name.trim().to_string();
             shortcut.prefix = shortcut.prefix.trim().to_string();
+            shortcut.shortcut_type = shortcut.shortcut_type.trim().to_ascii_lowercase();
+            if shortcut.shortcut_type.is_empty() {
+                shortcut.shortcut_type = "url".into();
+            }
             shortcut.template = shortcut.template.trim().to_string();
+            shortcut.target = shortcut.target.trim().to_string();
+            shortcut.arguments = shortcut.arguments.trim().to_string();
         }
         self.shortcuts.retain(|shortcut| {
             !shortcut.name.is_empty()
                 && !shortcut.prefix.is_empty()
-                && shortcut.template.contains("{query}")
+                && match shortcut.shortcut_type.as_str() {
+                    "url" => shortcut.template.contains("{query}"),
+                    "application" | "command" => !shortcut.target.is_empty(),
+                    _ => false,
+                }
         });
         self.providers
             .steam_excluded_app_ids
@@ -212,6 +235,7 @@ mod tests {
     fn defaults_are_stable() {
         let config = Config::default();
         assert_eq!(config.hotkey, "Alt+Space");
+        assert_eq!(config.renderer, "femtovg");
         assert!(config.show_on_startup);
         assert!(config.hide_on_focus_loss);
         assert!(!config.show_advanced_details);

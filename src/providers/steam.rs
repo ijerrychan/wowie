@@ -111,6 +111,7 @@ fn game_result(
             working_directory: Some(location),
         }],
         actions: Vec::new(),
+        detail: None,
         icon,
         ranking_bias: -600,
     }

@@ -1,4 +1,6 @@
 fn main() {
+    println!("cargo:rerun-if-changed=src/providers/dynamic");
+    println!("cargo:rerun-if-changed=src/details");
     println!("cargo:rerun-if-changed=lang");
     println!("cargo:rerun-if-changed=wowie.ico");
     println!("cargo:rerun-if-changed=wowie.png");
@@ -20,52 +22,25 @@ fn main() {
         .map(|language| format!("{language:?}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let shortcut_translations = languages
+    let translations = languages
         .iter()
-        .map(|language| {
+        .flat_map(|language| {
             let path = std::path::Path::new("lang")
                 .join(language)
                 .join("LC_MESSAGES")
                 .join("wowie.po");
             let text = std::fs::read_to_string(path).unwrap_or_default();
-            let value = po_translation(&text, "Execute Command")
-                .unwrap_or_else(|| "Execute Command".into());
-            format!("({language:?}, {value:?})")
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let exit_translations = languages
-        .iter()
-        .map(|language| {
-            let path = std::path::Path::new("lang")
-                .join(language)
-                .join("LC_MESSAGES")
-                .join("wowie.po");
-            let text = std::fs::read_to_string(path).unwrap_or_default();
-            let value = po_translation(&text, "Exit").unwrap_or_else(|| "Exit".into());
-            format!("({language:?}, {value:?})")
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let open_website_translations = languages
-        .iter()
-        .map(|language| {
-            let path = std::path::Path::new("lang")
-                .join(language)
-                .join("LC_MESSAGES")
-                .join("wowie.po");
-            let text = std::fs::read_to_string(path).unwrap_or_default();
-            let value =
-                po_translation(&text, "Open website").unwrap_or_else(|| "Open website".into());
-            format!("({language:?}, {value:?})")
+            po_entries(&text)
+                .into_iter()
+                .map(move |(context, message_id, value)| {
+                    format!("({language:?}, {context:?}, {message_id:?}, {value:?})")
+                })
         })
         .collect::<Vec<_>>()
         .join(", ");
     let generated = format!(
         "pub const SUPPORTED_LANGUAGES: &[&str] = &[{language_list}];\n\
-         pub const EXECUTE_COMMAND_TRANSLATIONS: &[(&str, &str)] = &[{shortcut_translations}];\n\
-         pub const OPEN_WEBSITE_TRANSLATIONS: &[(&str, &str)] = &[{open_website_translations}];\n\
-         pub const EXIT_TRANSLATIONS: &[(&str, &str)] = &[{exit_translations}];\n"
+         pub const TRANSLATIONS: &[(&str, &str, &str, &str)] = &[{translations}];\n"
     );
     std::fs::write(
         std::path::Path::new(&std::env::var_os("OUT_DIR").expect("OUT_DIR is not set"))
@@ -73,6 +48,8 @@ fn main() {
         generated,
     )
     .expect("failed to write supported language list");
+
+    generate_provider_catalog();
 
     #[cfg(windows)]
     winresource::WindowsResource::new()
@@ -85,14 +62,114 @@ fn main() {
         .expect("failed to compile Slint UI");
 }
 
-fn po_translation(text: &str, message_id: &str) -> Option<String> {
+fn generate_provider_catalog() {
+    let out_dir =
+        std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is not set"));
+    let dynamic = generated_modules("src/providers/dynamic", "provider");
+    let details = generated_modules("src/details", "detail");
+    let dynamic_dir = std::env::current_dir()
+        .unwrap()
+        .join("src/providers/dynamic")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let detail_dir = std::env::current_dir()
+        .unwrap()
+        .join("src/details")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+
+    std::fs::write(
+        out_dir.join("dynamic_providers.rs"),
+        format!(
+            "{}\npub fn register_all(registry: &mut crate::provider::ProviderRegistry, shortcuts: Vec<crate::config::ShortcutConfig>) {{\n{}\n}}\n",
+            dynamic
+                .iter()
+                .map(|name| format!("#[path = \"{}/{}.rs\"] pub mod {};", dynamic_dir, name, name))
+                .collect::<Vec<_>>().join("\n"),
+            dynamic.iter().map(|name| format!("    {}::register(registry, shortcuts.clone());", name)).collect::<Vec<_>>().join("\n")
+        ),
+    ).expect("failed to write dynamic provider catalog");
+
+    std::fs::write(
+        out_dir.join("detail_providers.rs"),
+        format!(
+            "{}\npub fn register_all(registry: &mut crate::details::DetailRegistry) {{\n{}\n}}\n",
+            details
+                .iter()
+                .map(|name| format!("#[path = \"{}/{}.rs\"] pub mod {};", detail_dir, name, name))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            details
+                .iter()
+                .map(|name| format!("    {}::register(registry);", name))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    )
+    .expect("failed to write detail provider catalog");
+}
+
+fn generated_modules(directory: &str, kind: &str) -> Vec<String> {
+    let path = std::path::Path::new(directory);
+    let mut modules = std::fs::read_dir(path)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let file = entry.path();
+            (file.extension().and_then(|value| value.to_str()) == Some("rs")
+                && file.file_stem().and_then(|value| value.to_str()) != Some("mod"))
+            .then(|| file.file_stem()?.to_str().map(str::to_owned))
+            .flatten()
+        })
+        .collect::<Vec<_>>();
+    modules.sort();
+    println!(
+        "cargo:warning=discovered {} {} module(s): {:?}",
+        modules.len(),
+        kind,
+        modules
+    );
+    modules
+}
+
+fn po_entries(text: &str) -> Vec<(String, String, String)> {
     let lines = text.lines().collect::<Vec<_>>();
-    let message_id_line = format!("msgid {message_id:?}");
-    let index = lines.iter().position(|line| *line == message_id_line)?;
-    let message = lines.get(index + 1)?.strip_prefix("msgstr ")?;
-    let message = message.strip_prefix('"')?.strip_suffix('"')?;
+    let mut entries = Vec::new();
+    let mut context = String::new();
+    for index in 0..lines.len().saturating_sub(1) {
+        if let Some(value) = lines[index].strip_prefix("msgctxt ") {
+            context = po_string(value).unwrap_or_default();
+            continue;
+        }
+        let Some(message_id) = lines[index].strip_prefix("msgid ") else {
+            continue;
+        };
+        let Some(message_id) = po_string(message_id) else {
+            continue;
+        };
+        if message_id.is_empty() {
+            continue;
+        }
+        let Some(message) = lines[index + 1].strip_prefix("msgstr ") else {
+            continue;
+        };
+        let Some(message) = po_string(message) else {
+            continue;
+        };
+        entries.push((context.clone(), message_id, message));
+        context.clear();
+    }
+    entries
+}
+
+fn po_string(value: &str) -> Option<String> {
+    let value = value.strip_prefix('"')?.strip_suffix('"')?;
     Some(
-        message
+        value
             .replace("\\\\", "\\")
             .replace("\\\"", "\"")
             .replace("\\n", "\n"),

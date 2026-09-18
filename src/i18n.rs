@@ -4,31 +4,57 @@ pub fn is_supported_language(language: &str) -> bool {
     SUPPORTED_LANGUAGES.contains(&language)
 }
 
-pub fn execute_command_name(language: &str) -> &'static str {
-    let language = effective_language(language);
-    EXECUTE_COMMAND_TRANSLATIONS
-        .iter()
-        .find(|(locale, _)| locale.eq_ignore_ascii_case(language.as_str()))
-        .map(|(_, value)| *value)
-        .unwrap_or("Execute Command")
+pub fn tr(language: &str, message_id: &'static str) -> &'static str {
+    tr_in_context(language, "", message_id)
 }
 
-pub fn open_website_name(language: &str) -> &'static str {
+pub fn tr_in_context(
+    language: &str,
+    context: &'static str,
+    message_id: &'static str,
+) -> &'static str {
     let language = effective_language(language);
-    OPEN_WEBSITE_TRANSLATIONS
+    TRANSLATIONS
         .iter()
-        .find(|(locale, _)| locale.eq_ignore_ascii_case(language.as_str()))
-        .map(|(_, value)| *value)
-        .unwrap_or("Open website")
+        .find(|(locale, entry_context, id, _)| {
+            locale.eq_ignore_ascii_case(language.as_str())
+                && (context.is_empty() || *entry_context == context)
+                && *id == message_id
+        })
+        .map(|(_, _, _, value)| *value)
+        .unwrap_or(message_id)
 }
 
-pub fn exit_name(language: &str) -> &'static str {
+/// Returns a translated list. Values use `|` as the separator in the `.po` file.
+pub fn tr_list(
+    language: &str,
+    context: &'static str,
+    message_id: &'static str,
+) -> Vec<&'static str> {
+    tr_in_context(language, context, message_id)
+        .split('|')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+/// Returns localized values followed by English fallback values, without duplicates.
+pub fn tr_aliases(
+    language: &str,
+    context: &'static str,
+    message_id: &'static str,
+) -> Vec<&'static str> {
     let language = effective_language(language);
-    EXIT_TRANSLATIONS
-        .iter()
-        .find(|(locale, _)| locale.eq_ignore_ascii_case(language.as_str()))
-        .map(|(_, value)| *value)
-        .unwrap_or("Exit")
+    let mut aliases = tr_list(&language, context, message_id);
+    for value in tr_list("en", context, message_id) {
+        if !aliases
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case(value))
+        {
+            aliases.push(value);
+        }
+    }
+    aliases
 }
 
 fn effective_language(language: &str) -> String {
@@ -69,6 +95,22 @@ mod tests {
 
     #[test]
     fn explicit_chinese_language_uses_translation() {
-        assert_eq!(execute_command_name("zh-CN"), "执行命令");
+        assert_eq!(tr("zh-CN", "Execute Command"), "执行命令");
+    }
+
+    #[test]
+    fn contextual_translation_can_return_multiple_values() {
+        assert_eq!(
+            tr_list("zh-CN", "Launcher", "Weather keyword"),
+            vec!["天气"]
+        );
+    }
+
+    #[test]
+    fn aliases_include_localized_and_english_values() {
+        assert_eq!(
+            tr_aliases("zh-CN", "Launcher", "Weather keyword"),
+            vec!["天气", "weather"]
+        );
     }
 }

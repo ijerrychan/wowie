@@ -79,6 +79,98 @@ msgctxt "ContextMenu"
 msgid "Other launch entries"
 msgstr "Other launch entries"
 
+msgctxt "Launcher"
+msgid "Weather"
+msgstr "Weather"
+
+msgctxt "Launcher"
+msgid "Weather keyword"
+msgstr "weather"
+
+msgctxt "Launcher"
+msgid "View weather information"
+msgstr "View weather information"
+
+msgctxt "Launcher"
+msgid "Current location"
+msgstr "Current location"
+
+msgctxt "Launcher"
+msgid "Loading weather"
+msgstr "Loading weather"
+
+msgctxt "Launcher"
+msgid "Weather unavailable"
+msgstr "Weather unavailable"
+
+msgctxt "Launcher"
+msgid "Humidity"
+msgstr "Humidity"
+
+msgctxt "Launcher"
+msgid "Wind"
+msgstr "Wind"
+
+msgctxt "Launcher"
+msgid "Source"
+msgstr "Source"
+
+msgctxt "Launcher"
+msgid "Windows location"
+msgstr "Windows location"
+
+msgctxt "Launcher"
+msgid "IP location"
+msgstr "IP location"
+
+msgctxt "Launcher"
+msgid "Locating device"
+msgstr "Locating device"
+
+msgctxt "Launcher"
+msgid "Unavailable"
+msgstr "Unavailable"
+
+msgctxt "Launcher"
+msgid "Clear sky"
+msgstr "Clear sky"
+
+msgctxt "Launcher"
+msgid "Partly cloudy"
+msgstr "Partly cloudy"
+
+msgctxt "Launcher"
+msgid "Foggy"
+msgstr "Foggy"
+
+msgctxt "Launcher"
+msgid "Drizzle"
+msgstr "Drizzle"
+
+msgctxt "Launcher"
+msgid "Rain"
+msgstr "Rain"
+
+msgctxt "Launcher"
+msgid "Snow"
+msgstr "Snow"
+
+msgctxt "Launcher"
+msgid "Rain showers"
+msgstr "Rain showers"
+
+msgctxt "Launcher"
+msgid "Snow showers"
+msgstr "Snow showers"
+
+msgctxt "Launcher"
+msgid "Thunderstorm"
+msgstr "Thunderstorm"
+
+msgctxt "Launcher"
+msgid "Thunderstorm with hail"
+msgstr "Thunderstorm with hail"
+
 msgctxt "Tray"
 msgid "Exit"
 msgstr "Exit"

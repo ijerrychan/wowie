@@ -1,6 +1,7 @@
 use crate::{
     config::ShortcutConfig,
     platform::SourceId,
+    provider::{DynamicProvider, ProviderRegistry},
     result::{Action, IconSpec, ResultCategory, SearchResult},
 };
 use std::path::PathBuf;
@@ -42,16 +43,32 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
         return Vec::new();
     }
 
+    // Temporary detail-view fixture. Keep this in the dynamic shortcut path so
+    // the UI can exercise a provider-owned result before a weather provider is
+    // introduced. The right-hand panel currently uses static sample data.
+    if crate::i18n::tr_aliases(language, "Launcher", "Weather keyword")
+        .iter()
+        .any(|keyword| query.eq_ignore_ascii_case(keyword))
+    {
+        return vec![weather_test_result(language)];
+    }
+
     let mut definitions = Vec::with_capacity(configured.len() + 2);
     definitions.push(ShortcutConfig {
-        name: crate::i18n::execute_command_name(language).into(),
+        name: crate::i18n::tr(language, "Execute Command").into(),
         prefix: COMMAND_PREFIX.into(),
+        shortcut_type: "command".into(),
         template: String::new(),
+        target: String::new(),
+        arguments: String::new(),
     });
     definitions.push(ShortcutConfig {
-        name: crate::i18n::open_website_name(language).into(),
+        name: crate::i18n::tr(language, "Open website").into(),
         prefix: WEB_PREFIX.into(),
+        shortcut_type: "url".into(),
         template: String::new(),
+        target: String::new(),
+        arguments: String::new(),
     });
     definitions.extend(configured.iter().cloned());
 
@@ -66,6 +83,13 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
                 return None;
             }
             let preview = explicit && argument.is_empty();
+            let shortcut_type = if shortcut.prefix == COMMAND_PREFIX {
+                "command"
+            } else if shortcut.prefix == WEB_PREFIX {
+                "url"
+            } else {
+                shortcut.shortcut_type.as_str()
+            };
             let is_web = shortcut.prefix == WEB_PREFIX;
             let web_target = is_web.then(|| web_url(argument)).flatten();
             let web_target = web_target
@@ -73,21 +97,35 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
             if is_web && !preview && !explicit && web_target.is_none() {
                 return None;
             }
-            let target = if let Some(url) = &web_target {
-                PathBuf::from(url)
-            } else if shortcut.prefix == COMMAND_PREFIX {
-                command_shell()
-            } else {
-                PathBuf::from(expand_template(&shortcut.template, argument))
-            };
-            let launch_arguments = if shortcut.prefix == COMMAND_PREFIX {
-                powershell_arguments(argument)
-            } else {
-                String::new()
+            let (target, launch_arguments) = match shortcut_type {
+                "url" => (
+                    PathBuf::from(
+                        web_target
+                            .as_deref()
+                            .unwrap_or(&expand_template(&shortcut.template, argument)),
+                    ),
+                    String::new(),
+                ),
+                "application" => (
+                    PathBuf::from(expand_raw_template(&shortcut.target, argument)),
+                    expand_raw_template(&shortcut.arguments, argument),
+                ),
+                "command" => {
+                    let command = if shortcut.prefix == COMMAND_PREFIX {
+                        argument.to_string()
+                    } else {
+                        join_command_and_arguments(
+                            &expand_raw_template(&shortcut.target, argument),
+                            &expand_raw_template(&shortcut.arguments, argument),
+                        )
+                    };
+                    (command_shell(), powershell_arguments(&command))
+                }
+                _ => return None,
             };
             let location = if is_web {
                 web_target.clone().unwrap_or_default()
-            } else if shortcut.prefix == COMMAND_PREFIX {
+            } else if shortcut_type == "command" {
                 command_shell_label(&target)
             } else {
                 target.display().to_string()
@@ -127,6 +165,7 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
                         working_directory: None,
                     })]
                 },
+                detail: None,
                 icon: if is_web {
                     Some(IconSpec::DefaultOpen(PathBuf::from(
                         web_target.as_deref().unwrap_or("https://example.com"),
@@ -138,6 +177,64 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
             })
         })
         .collect()
+}
+
+pub fn register(registry: &mut ProviderRegistry, shortcuts: Vec<ShortcutConfig>) {
+    registry.register(ShortcutProvider::new(shortcuts));
+}
+
+impl DynamicProvider for ShortcutProvider {
+    fn query(&self, query: &str) -> Vec<SearchResult> {
+        self.results(query)
+    }
+
+    fn replace_config(&mut self, shortcuts: Vec<ShortcutConfig>) {
+        ShortcutProvider::replace_config(self, shortcuts);
+    }
+
+    fn set_language(&mut self, language: String) {
+        ShortcutProvider::set_language(self, language);
+    }
+}
+
+fn weather_test_result(language: &str) -> SearchResult {
+    let weather_name = crate::i18n::tr(language, "Weather");
+    let weather_keywords = crate::i18n::tr_aliases(language, "Launcher", "Weather keyword");
+    SearchResult {
+        id: "shortcut:weather-test".into(),
+        identity: "shortcut:weather-test".into(),
+        title: weather_name.into(),
+        category: ResultCategory::Shortcut,
+        aliases: weather_keywords
+            .into_iter()
+            .map(String::from)
+            .chain(std::iter::once(weather_name.into()))
+            .collect(),
+        location: crate::i18n::tr(language, "View weather information").into(),
+        launch_target: PathBuf::new(),
+        launch_arguments: String::new(),
+        launch_working_directory: None,
+        source: SourceId::Shortcut,
+        sources: vec![SourceId::Shortcut],
+        launch_entries: Vec::new(),
+        actions: Vec::new(),
+        detail: Some(weather_detail_view(language)),
+        icon: Some(IconSpec::Weather),
+        ranking_bias: 0,
+    }
+}
+
+fn weather_detail_view(language: &str) -> crate::result::DetailView {
+    crate::result::DetailView {
+        title: crate::i18n::tr(language, "Weather").into(),
+        subtitle: crate::i18n::tr(language, "Current location").into(),
+        source: "Open-Meteo".into(),
+        blocks: vec![crate::result::DetailBlock::Text {
+            text: crate::i18n::tr(language, "Loading weather").into(),
+            color: "secondary".into(),
+        }],
+        actions: Vec::new(),
+    }
 }
 
 fn shortcut_argument<'a>(query: &'a str, prefix: &str) -> Option<&'a str> {
@@ -371,7 +468,10 @@ mod tests {
         let shortcut = ShortcutConfig {
             name: "用谷歌搜索".into(),
             prefix: "g".into(),
+            shortcut_type: "url".into(),
             template: "https://www.google.com/search?q={query}".into(),
+            target: String::new(),
+            arguments: String::new(),
         };
         let item = results("g rust lang", &[shortcut], "en")
             .into_iter()
@@ -381,5 +481,74 @@ mod tests {
             item.launch_target,
             PathBuf::from("https://www.google.com/search?q=rust+lang")
         );
+    }
+
+    #[test]
+    fn weather_test_shortcut_returns_a_single_detail_fixture() {
+        let found = results("weather", &[], "en");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "shortcut:weather-test");
+        assert!(found[0].actions.is_empty());
+        assert!(matches!(found[0].icon, Some(IconSpec::Weather)));
+    }
+
+    #[test]
+    fn localized_weather_keyword_is_loaded_from_i18n() {
+        let found = results("天气", &[], "zh-CN");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].title, "天气");
+        assert_eq!(found[0].location, "查看天气信息");
+
+        let english = results("weather", &[], "zh-CN");
+        assert_eq!(english.len(), 1);
+        assert_eq!(english[0].id, "shortcut:weather-test");
+    }
+    #[test]
+    fn configured_application_shortcut_expands_raw_arguments() {
+        let shortcut = ShortcutConfig {
+            name: "Notepad".into(),
+            prefix: "n".into(),
+            shortcut_type: "application".into(),
+            template: String::new(),
+            target: "notepad.exe".into(),
+            arguments: "{query}".into(),
+        };
+        let item = results("n notes.txt", &[shortcut], "en")
+            .into_iter()
+            .find(|item| item.title.starts_with("Notepad"))
+            .expect("configured application shortcut result");
+        assert_eq!(item.launch_target, PathBuf::from("notepad.exe"));
+        assert_eq!(item.launch_arguments, "notes.txt");
+        assert!(matches!(item.actions.first(), Some(Action::Launch(_))));
+    }
+
+    #[test]
+    fn configured_command_shortcut_uses_shell_with_arguments() {
+        let shortcut = ShortcutConfig {
+            name: "Git status".into(),
+            prefix: "gs".into(),
+            shortcut_type: "command".into(),
+            template: String::new(),
+            target: "git".into(),
+            arguments: "status --short {query}".into(),
+        };
+        let item = results("gs wowie", &[shortcut], "en")
+            .into_iter()
+            .find(|item| item.title.starts_with("Git status"))
+            .expect("configured command shortcut result");
+        assert!(item.launch_arguments.contains("git status --short wowie"));
+        assert!(matches!(item.actions.first(), Some(Action::Launch(_))));
+    }
+}
+
+fn expand_raw_template(template: &str, query: &str) -> String {
+    template.replace("{query}", query)
+}
+
+fn join_command_and_arguments(command: &str, arguments: &str) -> String {
+    if arguments.trim().is_empty() {
+        command.trim().to_string()
+    } else {
+        format!("{} {}", command.trim(), arguments.trim())
     }
 }

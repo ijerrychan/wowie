@@ -79,6 +79,98 @@ msgctxt "ContextMenu"
 msgid "Other launch entries"
 msgstr "其他启动入口"
 
+msgctxt "Launcher"
+msgid "Weather"
+msgstr "天气"
+
+msgctxt "Launcher"
+msgid "Weather keyword"
+msgstr "天气"
+
+msgctxt "Launcher"
+msgid "View weather information"
+msgstr "查看天气信息"
+
+msgctxt "Launcher"
+msgid "Current location"
+msgstr "当前位置"
+
+msgctxt "Launcher"
+msgid "Loading weather"
+msgstr "正在获取天气"
+
+msgctxt "Launcher"
+msgid "Weather unavailable"
+msgstr "天气不可用"
+
+msgctxt "Launcher"
+msgid "Humidity"
+msgstr "湿度"
+
+msgctxt "Launcher"
+msgid "Wind"
+msgstr "风"
+
+msgctxt "Launcher"
+msgid "Source"
+msgstr "数据来源"
+
+msgctxt "Launcher"
+msgid "Windows location"
+msgstr "Windows 定位"
+
+msgctxt "Launcher"
+msgid "IP location"
+msgstr "IP 定位"
+
+msgctxt "Launcher"
+msgid "Locating device"
+msgstr "正在定位设备"
+
+msgctxt "Launcher"
+msgid "Unavailable"
+msgstr "不可用"
+
+msgctxt "Launcher"
+msgid "Clear sky"
+msgstr "晴朗"
+
+msgctxt "Launcher"
+msgid "Partly cloudy"
+msgstr "局部多云"
+
+msgctxt "Launcher"
+msgid "Foggy"
+msgstr "有雾"
+
+msgctxt "Launcher"
+msgid "Drizzle"
+msgstr "毛毛雨"
+
+msgctxt "Launcher"
+msgid "Rain"
+msgstr "下雨"
+
+msgctxt "Launcher"
+msgid "Snow"
+msgstr "下雪"
+
+msgctxt "Launcher"
+msgid "Rain showers"
+msgstr "阵雨"
+
+msgctxt "Launcher"
+msgid "Snow showers"
+msgstr "阵雪"
+
+msgctxt "Launcher"
+msgid "Thunderstorm"
+msgstr "雷暴"
+
+msgctxt "Launcher"
+msgid "Thunderstorm with hail"
+msgstr "雷暴伴冰雹"
+
 msgctxt "Tray"
 msgid "Exit"
 msgstr "退出"

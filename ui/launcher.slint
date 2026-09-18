@@ -2,19 +2,31 @@ import { VerticalBox, ListView } from "std-widgets.slint";
 
 export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, category: string }
 export struct ContextActionRow { id: string, title: string, subtitle: string, kind: string }
+export struct DetailBlock { kind: string, label: string, value: string, color: string }
+
+component SearchGlyph inherits Rectangle {
+    background: transparent;
+    Image { x: 2px; y: 2px; width: 20px; height: 20px; source: @image-url("../wowie.png"); image-fit: contain; }
+}
 
 export component Launcher inherits Window {
     title: "Wowie";
     no-frame: true;
     width: window-width * 1px;
-    height: search-field.text == "" ? 68px : results.length > 0 ? min(538px, 140px + results.length * root.result-row-height) : 224px;
+    height: search-field.text == "" ? 68px : detail-visible ? (100px + root.detail-panel-height) : results.length > 0 ? min(506px, 108px + results.length * root.result-row-height) : 192px;
     background: transparent;
 
-    in-out property <int> window-width: 680;
+    in-out property <int> window-width: 900;
     in property <bool> dark-mode: true;
     in property <color> accent-color: #0067c0;
     in property <color> accent-background: #280067c0;
     in property <int> result-count: 0;
+    in property <bool> detail-panel-visible: false;
+    in property <string> detail-title: "";
+    in property <string> detail-subtitle: "";
+    in property <string> detail-source: "";
+    in property <[DetailBlock]> detail-blocks;
+    in property <[ContextActionRow]> detail-actions;
     in-out property <string> launch-error: "";
     in-out property <string> last-action-id: "";
     in-out property <string> last-action-result: "";
@@ -24,12 +36,16 @@ export component Launcher inherits Window {
     in-out property <int> selected-index: -1;
     callback query-changed(string);
     callback visible-range-changed(int, int);
+    callback selection-changed(int);
     callback launch-requested(int);
+    callback detail-action-requested(int);
     callback context-menu-requested(int);
     callback context-menu-dismissed;
     callback dismiss-requested;
 
     private property <length> result-row-height: 56px;
+    private property <length> detail-panel-height: max(340px, 118px + root.detail-blocks.length * 60px + (root.detail-actions.length > 0 ? 50px : 0px));
+    private property <bool> detail-visible: root.detail-panel-visible && root.selected-index >= 0;
     private property <int> first-visible-index: max(0, round(-results-list.content-y / root.result-row-height));
     private property <bool> context-click-consumed: false;
     private property <int> last-visible-index: min(root.results.length, round((-results-list.content-y + results-list.visible-height) / root.result-row-height) + 1);
@@ -53,7 +69,10 @@ export component Launcher inherits Window {
         }
     }
 
-    changed selected-index => { root.ensure-selected-visible(); }
+    changed selected-index => {
+        root.ensure-selected-visible();
+        root.selection-changed(root.selected-index);
+    }
     changed first-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
     changed last-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
 
@@ -73,7 +92,7 @@ export component Launcher inherits Window {
                 height: 40px;
                 background: transparent;
 
-                Text { x: 14px; y: 0px; width: 24px; height: parent.height; text: "🔍"; color: root.text-secondary; font-size: 17px; horizontal-alignment: center; vertical-alignment: center; }
+                SearchGlyph { x: 14px; y: 8px; width: 24px; height: 24px; }
                 Text { x: 48px; y: 0px; width: parent.width - 126px; height: parent.height; text: @tr("Search applications"); color: root.text-tertiary; font-size: 16px; vertical-alignment: center; visible: search-field.text == ""; }
                 search-field := TextInput {
                     x: 48px; y: 0px; width: parent.width - 126px; height: parent.height;
@@ -89,22 +108,22 @@ export component Launcher inherits Window {
                         reject
                     }
                 }
-                Text { x: parent.width - 58px; y: 0px; width: 46px; height: parent.height; text: "Esc"; color: root.text-tertiary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                Text { x: parent.width - 122px; y: 0px; width: 92px; height: parent.height; text: @tr("{} results", root.result-count); color: root.text-tertiary; font-size: 10px; horizontal-alignment: right; vertical-alignment: center; overflow: elide; visible: search-field.text != ""; }
             }
 
-            if (search-field.text != "") : Rectangle {
-                height: 24px; background: transparent;
-                Text { x: 6px; y: 0px; width: parent.width - 12px; height: parent.height; text: @tr("{} results", root.result-count); color: root.text-tertiary; font-size: 11px; vertical-alignment: center; }
-            }
+            results-area := Rectangle {
+                height: root.detail-visible ? root.detail-panel-height : min(398px, root.results.length * root.result-row-height);
+                background: transparent;
 
-            results-list := ListView {
-                height: min(398px, root.results.length * root.result-row-height);
+                results-list := ListView {
+                    x: 0px; y: 0px;
+                    width: parent.width - (root.detail-visible ? parent.width / 2 + 12px : 0px);
+                    height: parent.height;
                 for row[index] in root.results : Rectangle {
                     height: root.result-row-height;
-                    background: index == root.selected-index ? root.surface-selected : item-area.has-hover ? root.surface-hover : transparent;
-                    border-radius: 10px;
-                    animate background { duration: 100ms; }
-                    Rectangle { x: 0px; y: 12px; width: index == root.selected-index ? 3px : 0px; height: 32px; background: root.accent; border-radius: 2px; animate width { duration: 100ms; } }
+                    // A single flat row background replaces the old Fluent-like
+                    // rounded selection plus accent indicator.
+                    background: index == root.selected-index ? root.surface-selected : transparent;
                     item-area := TouchArea {
                         pointer-event(event) => {
                             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
@@ -127,24 +146,61 @@ export component Launcher inherits Window {
                             }
                         }
                     }
-                    Rectangle {
-                        x: 12px; y: 10px; width: 36px; height: 36px;
-                        background: root.dark-mode ? #373737 : #ffffff;
-                        border-color: root.dark-mode ? #4b4b4b : #e2e5ea;
-                        border-width: 1px; border-radius: 9px;
-                        Image { x: 6px; y: 6px; width: 24px; height: 24px; source: row.icon; image-fit: contain; }
-                    }
+                    Image { x: 18px; y: 16px; width: 24px; height: 24px; source: row.icon; image-fit: contain; }
                     VerticalBox {
                         x: 60px; y: 5px; width: parent.width - 76px; height: 40px; spacing: 2px;
                         Text { text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: 14px; font-weight: 500; overflow: elide; }
-                        Text { width: parent.width - 78px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "store-application" ? @tr("Store application") : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
+                        Text { width: parent.width - 4px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "store-application" ? @tr("Store application") : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
                     }
                     Text {
                         x: parent.width - 76px; y: 17px; width: 68px; height: 22px;
                         text: row.category == "game" ? @tr("Game") : row.category == "website" ? @tr("Website") : row.category == "shortcut" ? @tr("Shortcut") : row.category == "document" ? @tr("Document") : row.category == "other" ? @tr("Other") : row.category == "control-panel" ? @tr("Control Panel") : @tr("Application");
                         color: root.text-tertiary; font-size: 10px;
                         horizontal-alignment: center; vertical-alignment: center;
+                        visible: !root.detail-visible;
                     }
+                }
+                }
+
+                if (root.detail-visible) : Rectangle {
+                    x: parent.width / 2; y: 0px; width: parent.width / 2; height: parent.height;
+                    background: root.dark-mode ? #242424 : #fbfcfe;
+
+                    Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: root.border; }
+
+                    Text { x: 20px; y: 18px; width: parent.width - 40px; height: 24px; text: root.detail-title; color: root.text-primary; font-size: 17px; font-weight: 600; overflow: elide; }
+                    Text { x: 20px; y: 44px; width: parent.width - 40px; height: 18px; text: root.detail-subtitle; color: root.text-secondary; font-size: 11px; overflow: elide; }
+                    VerticalBox {
+                        x: 20px; y: 76px; width: parent.width - 40px; height: parent.height - (root.detail-actions.length > 0 ? 168px : 118px); spacing: 6px;
+                        for block in root.detail-blocks : Rectangle {
+                            height: block.kind == "metric" ? 48px : block.kind == "weather" ? 48px : block.kind == "separator" ? 1px : block.kind == "icon" ? 40px : 24px;
+                            background: transparent;
+                            if (block.kind == "text") : Text {
+                                width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 13px; vertical-alignment: center; overflow: elide;
+                            }
+                            if (block.kind == "metric") : Rectangle {
+                                width: parent.width; height: parent.height; background: root.dark-mode ? #2b2b2b : #f1f3f6; border-radius: 8px;
+                                Text { x: 10px; y: 8px; width: parent.width - 20px; height: 14px; text: block.label; color: root.text-tertiary; font-size: 10px; }
+                                Text { x: 10px; y: 26px; width: parent.width - 20px; height: 18px; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 13px; font-weight: 600; overflow: elide; }
+                            }
+                            if (block.kind == "icon") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
+                            if (block.kind == "separator") : Rectangle { y: 0px; width: parent.width; height: 1px; background: transparent; }
+                            if (block.kind == "weather") : Text {
+                                width: parent.width; height: parent.height;
+                                text: block.value == "clear" ? "☀" : block.value == "snow" ? "❄" : block.value == "storm" ? "⚡" : block.value == "rain" ? "☂" : "☁";
+                                color: block.value == "clear" ? #ffc144 : block.value == "storm" ? #ffd34e : block.value == "rain" ? #4da3e6 : #b8c5d4;
+                                font-size: 38px; horizontal-alignment: center; vertical-alignment: center;
+                            }
+                        }
+                    }
+                    for action[index] in root.detail-actions : Rectangle {
+                        x: 20px + index * 104px; y: parent.height - 78px; width: 96px; height: 28px;
+                        background: action-area.has-hover ? root.surface-hover : root.dark-mode ? #2b2b2b : #f1f3f6;
+                        border-color: root.border; border-width: 1px; border-radius: 7px;
+                        action-area := TouchArea { clicked => { root.detail-action-requested(index); } }
+                        Text { x: 8px; y: 0px; width: parent.width - 16px; height: parent.height; text: action.title; color: root.text-secondary; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+                    }
+                    Text { x: 20px; y: parent.height - 42px; width: parent.width - 40px; height: 18px; text: root.detail-source; color: root.text-tertiary; font-size: 10px; overflow: elide; }
                 }
             }
 

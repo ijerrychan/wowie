@@ -10,8 +10,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::{BufRead, BufReader, Write},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Arc, Mutex},
 };
 
@@ -27,6 +28,8 @@ pub struct PluginManifest {
     pub api_version: u32,
     pub runtime: String,
     pub entry_point: String,
+    #[serde(default)]
+    pub mode: PluginMode,
     #[serde(default)]
     pub keywords: Vec<String>,
     #[serde(default)]
@@ -46,10 +49,31 @@ fn default_locale() -> String {
     "en".into()
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginMode {
+    ShortLived,
+    Resident,
+}
+
+impl Default for PluginMode {
+    fn default() -> Self {
+        Self::ShortLived
+    }
+}
+
 #[derive(Debug, Clone)]
 struct InstalledPlugin {
     root: PathBuf,
     manifest: PluginManifest,
+    process: Option<Arc<Mutex<ResidentProcess>>>,
+}
+
+#[derive(Debug)]
+struct ResidentProcess {
+    _child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +113,58 @@ struct PluginItem {
     actions: Vec<PluginAction>,
     #[serde(default)]
     icon: Option<PluginIcon>,
+    #[serde(default)]
+    detail: Option<PluginDetailView>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginDetailView {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    subtitle: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    blocks: Vec<PluginDetailBlock>,
+    #[serde(default)]
+    actions: Vec<PluginDetailAction>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginDetailAction {
+    id: String,
+    #[serde(default)]
+    title: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PluginDetailBlock {
+    Text {
+        text: String,
+        #[serde(default = "default_detail_color")]
+        color: String,
+    },
+    Metric {
+        label: String,
+        value: String,
+        #[serde(default = "default_detail_color")]
+        color: String,
+    },
+    Icon {
+        glyph: String,
+        #[serde(default = "default_detail_color")]
+        color: String,
+    },
+    Weather {
+        value: String,
+    },
+    Separator,
+}
+
+fn default_detail_color() -> String {
+    "secondary".into()
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,10 +203,27 @@ impl PluginManager {
                     continue;
                 };
                 match serde_json::from_str::<PluginManifest>(&text) {
-                    Ok(manifest) => plugins.push(InstalledPlugin {
-                        root: dir,
-                        manifest,
-                    }),
+                    Ok(manifest) => {
+                        let process = if manifest.mode == PluginMode::Resident {
+                            match start_resident(&dir, &manifest, locale) {
+                                Ok(process) => Some(Arc::new(Mutex::new(process))),
+                                Err(error) => {
+                                    eprintln!(
+                                        "[plugin:{}] resident start failed: {error:#}",
+                                        manifest.id
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        plugins.push(InstalledPlugin {
+                            root: dir,
+                            manifest,
+                            process,
+                        });
+                    }
                     Err(error) => {
                         eprintln!("[plugin] invalid manifest {:?}: {error}", manifest_path)
                     }
@@ -178,13 +271,18 @@ impl PluginManager {
             .find(|p| p.manifest.id == plugin_id)
             .context("plugin not found")?;
         let request = serde_json::json!({"method":"execute", "item_id":item_id, "action_id":action_id, "api_version":plugin.manifest.api_version});
-        let mut child = Command::new(&plugin.manifest.runtime)
+        if let Some(process) = &plugin.process {
+            return resident_request(process, &request);
+        }
+        let mut command = Command::new(&plugin.manifest.runtime);
+        command
             .arg(&plugin.manifest.entry_point)
             .current_dir(&plugin.root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        hide_console_window(&mut command);
+        let mut child = command.spawn()?;
         use std::io::Write;
         child
             .stdin
@@ -211,12 +309,32 @@ fn query_plugin(plugin: &InstalledPlugin, query: &str, locale: &str) -> Result<V
         locale: locale.to_owned(),
         fallback_locale: &plugin.manifest.default_locale,
     })?;
-    let mut child = Command::new(&plugin.manifest.runtime)
+    if let Some(process) = &plugin.process {
+        let request = serde_json::json!({
+            "method": "query",
+            "query": query,
+            "api_version": plugin.manifest.api_version,
+            "locale": locale,
+            "fallback_locale": plugin.manifest.default_locale,
+        });
+        let output = resident_request(process, &request)?;
+        let response: QueryResponse =
+            serde_json::from_str(&output).context("decode plugin response")?;
+        return Ok(response
+            .items
+            .into_iter()
+            .map(|item| to_result(plugin, item))
+            .collect());
+    }
+    let mut command = Command::new(&plugin.manifest.runtime);
+    command
         .arg(&plugin.manifest.entry_point)
         .current_dir(&plugin.root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_console_window(&mut command);
+    let mut child = command
         .spawn()
         .with_context(|| format!("start runtime {}", plugin.manifest.runtime))?;
     use std::io::Write;
@@ -240,6 +358,80 @@ fn query_plugin(plugin: &InstalledPlugin, query: &str, locale: &str) -> Result<V
         .into_iter()
         .map(|item| to_result(plugin, item))
         .collect())
+}
+
+fn hide_console_window(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Plugin queries run once per search update. Console runtimes such as
+        // python.exe must not flash a window for every typed character.
+        command.creation_flags(0x0800_0000);
+    }
+}
+
+fn start_resident(
+    root: &PathBuf,
+    manifest: &PluginManifest,
+    locale: &str,
+) -> Result<ResidentProcess> {
+    let mut command = Command::new(&manifest.runtime);
+    command
+        .arg(&manifest.entry_point)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    hide_console_window(&mut command);
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("start resident runtime {}", manifest.runtime))?;
+    let stdin = child
+        .stdin
+        .take()
+        .context("resident plugin stdin unavailable")?;
+    let stdout = BufReader::new(
+        child
+            .stdout
+            .take()
+            .context("resident plugin stdout unavailable")?,
+    );
+    let mut process = ResidentProcess {
+        _child: child,
+        stdin,
+        stdout,
+    };
+    let init = serde_json::json!({
+        "method": "initialize",
+        "api_version": manifest.api_version,
+        "locale": locale,
+        "fallback_locale": manifest.default_locale,
+    });
+    let _ = resident_request_inner(&mut process, &init)?;
+    Ok(process)
+}
+
+fn resident_request(
+    process: &Arc<Mutex<ResidentProcess>>,
+    request: &serde_json::Value,
+) -> Result<String> {
+    let mut process = process
+        .lock()
+        .map_err(|_| anyhow::anyhow!("resident plugin lock poisoned"))?;
+    resident_request_inner(&mut process, request)
+}
+
+fn resident_request_inner(
+    process: &mut ResidentProcess,
+    request: &serde_json::Value,
+) -> Result<String> {
+    writeln!(process.stdin, "{}", serde_json::to_string(request)?)?;
+    process.stdin.flush()?;
+    let mut response = String::new();
+    if process.stdout.read_line(&mut response)? == 0 {
+        anyhow::bail!("resident plugin exited unexpectedly");
+    }
+    Ok(response.trim().to_owned())
 }
 
 fn to_result(plugin: &InstalledPlugin, item: PluginItem) -> SearchResult {
@@ -270,11 +462,75 @@ fn to_result(plugin: &InstalledPlugin, item: PluginItem) -> SearchResult {
         sources: vec![format!("plugin:{}", plugin.manifest.id).into()],
         launch_entries: Vec::<LaunchEntry>::new(),
         actions,
+        detail: item.detail.map(to_detail_view),
         icon: item.icon.map(|icon| match icon {
             PluginIcon::Resource { path } => IconSpec::Resource(plugin.root.join(path)),
             PluginIcon::System { target } => IconSpec::System(target.into()),
         }),
         ranking_bias: 0,
+    }
+}
+
+fn to_detail_view(view: PluginDetailView) -> crate::result::DetailView {
+    crate::result::DetailView {
+        title: detail_text(view.title),
+        subtitle: detail_text(view.subtitle),
+        source: detail_text(view.source),
+        actions: view
+            .actions
+            .into_iter()
+            .take(3)
+            .map(|action| crate::result::DetailAction {
+                title: if action.title.is_empty() {
+                    detail_text(action.id.as_str().into())
+                } else {
+                    detail_text(action.title)
+                },
+                id: detail_text(action.id),
+            })
+            .collect(),
+        blocks: view
+            .blocks
+            .into_iter()
+            .take(10)
+            .map(|block| match block {
+                PluginDetailBlock::Text { text, color } => crate::result::DetailBlock::Text {
+                    text: detail_text(text),
+                    color: detail_color(&color),
+                },
+                PluginDetailBlock::Metric {
+                    label,
+                    value,
+                    color,
+                } => crate::result::DetailBlock::Metric {
+                    label: detail_text(label),
+                    value: detail_text(value),
+                    color: detail_color(&color),
+                },
+                PluginDetailBlock::Icon { glyph, color } => crate::result::DetailBlock::Icon {
+                    glyph: detail_text(glyph),
+                    color: detail_color(&color),
+                },
+                PluginDetailBlock::Weather { value } => crate::result::DetailBlock::Weather {
+                    value: match value.as_str() {
+                        "clear" | "cloud" | "rain" | "snow" | "storm" => value,
+                        _ => "cloud".into(),
+                    },
+                },
+                PluginDetailBlock::Separator => crate::result::DetailBlock::Separator,
+            })
+            .collect(),
+    }
+}
+
+fn detail_text(value: String) -> String {
+    value.chars().take(512).collect()
+}
+
+fn detail_color(value: &str) -> String {
+    match value {
+        "primary" | "secondary" | "tertiary" | "accent" => value.into(),
+        _ => "secondary".into(),
     }
 }
 
@@ -289,5 +545,36 @@ mod tests {
         .unwrap();
         assert_eq!(m.api_version, 1);
         assert_eq!(m.version, "0.1.0");
+    }
+
+    #[test]
+    fn detail_view_is_deserialized_and_limited() {
+        let view: PluginDetailView = serde_json::from_str(
+            r#"{
+                "title":"Repository",
+                "blocks":[
+                    {"type":"metric","label":"Stars","value":"230k","color":"primary"},
+                    {"type":"weather","value":"storm"},
+                    {"type":"text","text":"ignored","color":"invalid"}
+                ],
+                "actions":[{"id":"open","title":"Open"}]
+            }"#,
+        )
+        .unwrap();
+        let detail = to_detail_view(view);
+        assert_eq!(detail.title, "Repository");
+        assert_eq!(detail.blocks.len(), 3);
+        assert_eq!(detail.actions[0].title, "Open");
+        assert!(matches!(
+            detail.blocks[1],
+            crate::result::DetailBlock::Weather { .. }
+        ));
+        assert_eq!(
+            detail.blocks[2],
+            crate::result::DetailBlock::Text {
+                text: "ignored".into(),
+                color: "secondary".into(),
+            }
+        );
     }
 }

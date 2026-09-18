@@ -32,6 +32,7 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
                     working_directory: None,
                 }],
                 actions: Vec::new(),
+                detail: None,
                 icon: Some(IconSpec::System(target)),
                 ranking_bias: 0,
             }

@@ -5,14 +5,31 @@ use crate::{
     result::{IconSpec, SearchResult},
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::Path,
     sync::{Arc, Mutex},
 };
 
+const MAX_ICON_DIMENSION: u32 = 64;
+const MAX_CACHED_ICONS: usize = 96;
+const MAX_CACHED_ICON_BYTES: usize = 2 * 1024 * 1024;
+
 #[derive(Clone, Default)]
 pub struct IconService {
-    cache: Arc<Mutex<HashMap<String, Option<IconData>>>>,
+    cache: Arc<Mutex<IconCache>>,
+}
+
+#[derive(Default)]
+struct IconCache {
+    entries: HashMap<String, CachedIcon>,
+    // The front is the least recently used key.
+    lru: VecDeque<String>,
+    bytes: usize,
+}
+
+struct CachedIcon {
+    icon: Option<IconData>,
+    bytes: usize,
 }
 
 impl IconService {
@@ -25,9 +42,9 @@ impl IconService {
     /// repeatedly call into the Windows Shell while the user types.
     pub fn resolve(&self, item: &SearchResult) -> Option<IconData> {
         let source_key = icon_source_key(item);
-        if let Ok(cache) = self.cache.lock() {
+        if let Ok(mut cache) = self.cache.lock() {
             if let Some(icon) = cache.get(&source_key) {
-                return icon.clone();
+                return icon;
             }
         }
 
@@ -37,6 +54,44 @@ impl IconService {
         }
         icon
     }
+}
+
+impl IconCache {
+    fn get(&mut self, key: &str) -> Option<Option<IconData>> {
+        let icon = self.entries.get(key).map(|entry| entry.icon.clone())?;
+        self.touch(key);
+        Some(icon)
+    }
+
+    fn insert(&mut self, key: String, icon: Option<IconData>) {
+        if let Some(previous) = self.entries.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(previous.bytes);
+            self.lru.retain(|existing| existing != &key);
+        }
+
+        let bytes = icon.as_ref().map_or(0, icon_bytes);
+        self.bytes += bytes;
+        self.lru.push_back(key.clone());
+        self.entries.insert(key, CachedIcon { icon, bytes });
+
+        while self.entries.len() > MAX_CACHED_ICONS || self.bytes > MAX_CACHED_ICON_BYTES {
+            let Some(oldest) = self.lru.pop_front() else {
+                break;
+            };
+            if let Some(removed) = self.entries.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(removed.bytes);
+            }
+        }
+    }
+
+    fn touch(&mut self, key: &str) {
+        self.lru.retain(|existing| existing != key);
+        self.lru.push_back(key.to_owned());
+    }
+}
+
+fn icon_bytes(icon: &IconData) -> usize {
+    icon.rgba.len()
 }
 
 fn resolve_uncached(item: &SearchResult) -> Option<IconData> {
@@ -66,23 +121,17 @@ fn resolve_uncached(item: &SearchResult) -> Option<IconData> {
 fn fetch_favicon(target: &Path) -> Option<IconData> {
     let origin = favicon_origin(target)?;
     let favicon = format!("{origin}/favicon.ico");
-    let output = std::process::Command::new("curl.exe")
-        .args([
-            "-fsSL",
-            "--max-time",
-            "2",
-            "--max-filesize",
-            "1048576",
-            &favicon,
-        ])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())?;
-    decode_image(&output.stdout)
+    let bytes = crate::http::get_bytes(&favicon, 1_048_576).ok()?;
+    decode_image(&bytes)
 }
 
 fn decode_image(bytes: &[u8]) -> Option<IconData> {
-    let image = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let image = image::load_from_memory(bytes).ok()?;
+    // Favicon and plugin assets are not trusted to be small. Keep the payload
+    // close to the 24px UI size before it reaches the renderer/GPU.
+    let image = image
+        .thumbnail(MAX_ICON_DIMENSION, MAX_ICON_DIMENSION)
+        .to_rgba8();
     let (width, height) = image.dimensions();
     Some(IconData {
         width,
@@ -93,6 +142,7 @@ fn decode_image(bytes: &[u8]) -> Option<IconData> {
 
 fn resolve_spec(spec: &IconSpec) -> Option<IconData> {
     match spec {
+        IconSpec::Weather => Some(weather_icon()),
         IconSpec::System(target) => crate::platform::application_icon(target),
         IconSpec::SystemIndexed { path, index } => {
             crate::platform::indexed_application_icon(path, *index)
@@ -129,6 +179,7 @@ fn icon_source_key(item: &SearchResult) -> String {
                 };
                 format!("default-open:{extension}")
             }
+            IconSpec::Weather => "weather".into(),
         };
     }
 
@@ -144,6 +195,43 @@ fn icon_source_key(item: &SearchResult) -> String {
         .map(|entry| entry.target.display().to_string())
         .unwrap_or_else(|| item.launch_target.display().to_string());
     format!("fallback:{fallback}")
+}
+
+fn weather_icon() -> IconData {
+    let size = 64_u32;
+    let mut rgba = vec![0_u8; (size * size * 4) as usize];
+    let mut pixel = |x: u32, y: u32, color: [u8; 4]| {
+        if x < size && y < size {
+            let index = ((y * size + x) * 4) as usize;
+            rgba[index..index + 4].copy_from_slice(&color);
+        }
+    };
+    let sun = [255, 193, 68, 255];
+    for y in 8..42 {
+        for x in 8..42 {
+            let dx = x as i32 - 25;
+            let dy = y as i32 - 25;
+            if dx * dx + dy * dy <= 13 * 13 {
+                pixel(x, y, sun);
+            }
+        }
+    }
+    let cloud = [235, 241, 248, 255];
+    for y in 31..53 {
+        for x in 19..57 {
+            let left = (x as i32 - 29).pow(2) + (y as i32 - 42).pow(2) <= 11 * 11;
+            let middle = (x as i32 - 39).pow(2) + (y as i32 - 35).pow(2) <= 13 * 13;
+            let right = (x as i32 - 49).pow(2) + (y as i32 - 43).pow(2) <= 10 * 10;
+            if left || middle || right || (y >= 42 && x >= 24 && x <= 53) {
+                pixel(x, y, cloud);
+            }
+        }
+    }
+    IconData {
+        width: size,
+        height: size,
+        rgba,
+    }
 }
 
 fn favicon_origin(target: &Path) -> Option<String> {
@@ -184,6 +272,7 @@ mod tests {
             sources: vec!["Steam".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -246,6 +335,7 @@ mod tests {
             sources: vec!["Test".into()],
             launch_entries: vec![],
             actions: vec![],
+            detail: None,
             icon: None,
             ranking_bias: 0,
         }

@@ -60,6 +60,27 @@ const PROVIDER_DEFINITIONS: [ProviderDefinition; 6] = [
 ];
 
 impl AppProvider {
+    /// Create an empty provider so the launcher can enter its event loop
+    /// before the potentially slow Windows Shell enumeration starts.
+    pub fn empty_with_config(config: &crate::config::ProviderConfig) -> Self {
+        Self {
+            items: Vec::new(),
+            sources: HashMap::new(),
+            config: config.clone(),
+        }
+    }
+
+    /// Populate the initial index. This is intentionally separate from
+    /// construction so callers can run it on the provider worker thread.
+    pub fn discover_initial(&mut self) {
+        self.sources = PROVIDER_DEFINITIONS
+            .into_iter()
+            .filter(|provider| (provider.enabled)(&self.config))
+            .map(|provider| (provider.source, (provider.discover)(&self.config)))
+            .collect();
+        self.items = merge_sources(&self.sources);
+    }
+
     #[allow(dead_code)]
     pub fn discover() -> Self {
         Self::discover_with_config(&crate::config::ProviderConfig::default())
@@ -337,6 +358,7 @@ fn collect_store_apps(output: &mut Vec<SearchResult>) {
                 working_directory: None,
             }],
             actions: Vec::new(),
+            detail: None,
             icon: None,
             ranking_bias: 0,
         });
@@ -431,6 +453,7 @@ fn collect_tree(
                     working_directory: None,
                 }],
                 actions: Vec::new(),
+                detail: None,
                 icon: None,
                 ranking_bias: 0,
             });
@@ -477,6 +500,7 @@ fn collect_tree(
                     working_directory: None,
                 }],
                 actions: Vec::new(),
+                detail: None,
                 icon: Some(IconSpec::DefaultOpen(PathBuf::from(&url))),
                 ranking_bias: 0,
             });
@@ -529,6 +553,7 @@ fn collect_tree(
                 working_directory: shortcut.working_directory.clone(),
             }],
             actions: Vec::new(),
+            detail: None,
             icon: website_url
                 .map(PathBuf::from)
                 .map(IconSpec::DefaultOpen)
@@ -574,6 +599,7 @@ fn generic_file_result(path: &Path, title: &str, source: &str) -> SearchResult {
             working_directory: None,
         }],
         actions: Vec::new(),
+        detail: None,
         icon: Some(IconSpec::DefaultOpen(path.to_owned())),
         ranking_bias: 0,
     }
@@ -1222,6 +1248,7 @@ mod tests {
             sources: vec![source.into()],
             launch_entries: vec![],
             actions: Vec::new(),
+            detail: None,
             icon: None,
             ranking_bias: 0,
         }

@@ -48,13 +48,53 @@ pub struct SearchResult {
     pub sources: Vec<crate::platform::SourceId>,
     pub launch_entries: Vec<LaunchEntry>,
     pub actions: Vec<Action>,
+    /// Optional declarative content rendered in the launcher's detail pane.
+    pub detail: Option<DetailView>,
     pub icon: Option<IconSpec>,
     /// Provider-supplied ranking adjustment consumed generically by SearchCore.
     pub ranking_bias: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailView {
+    pub title: String,
+    pub subtitle: String,
+    pub blocks: Vec<DetailBlock>,
+    pub actions: Vec<DetailAction>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailAction {
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetailBlock {
+    Text {
+        text: String,
+        color: String,
+    },
+    Metric {
+        label: String,
+        value: String,
+        color: String,
+    },
+    Icon {
+        glyph: String,
+        color: String,
+    },
+    Weather {
+        value: String,
+    },
+    Separator,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IconSpec {
+    /// A built-in colored weather glyph used by the weather shortcut.
+    Weather,
     /// A plugin-owned PNG/ICO resource resolved to an absolute path.
     Resource(std::path::PathBuf),
     /// A path or shell target whose icon is provided by the operating system.

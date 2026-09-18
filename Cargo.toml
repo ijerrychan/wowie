@@ -12,10 +12,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
 png = "0.17"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 image = { version = "0.25.10", default-features = false, features = ["ico", "jpeg", "png"] }
 nucleo-matcher = "0.3.1"
 steam-vdf-parser = "0.1.1"
-slint = { version = "~1.18.0", default-features = false, features = ["std", "compat-1-18", "backend-winit", "unstable-winit-030", "renderer-skia-opengl", "renderer-software", "raw-window-handle-06"] }
+slint = { version = "~1.18.0", default-features = false, features = ["std", "compat-1-18", "backend-winit", "unstable-winit-030", "renderer-femtovg", "renderer-skia-opengl", "renderer-software", "raw-window-handle-06"] }
 raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
