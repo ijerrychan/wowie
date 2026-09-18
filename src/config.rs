@@ -175,6 +175,13 @@ pub fn config_path() -> PathBuf {
         .join("config.json")
 }
 
+pub fn history_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("wowie")
+        .join("history.json")
+}
+
 pub fn watch_changes() -> std::sync::mpsc::Receiver<()> {
     let (sender, receiver) = std::sync::mpsc::channel();
     let path = config_path();

@@ -1,11 +1,16 @@
-use super::super::PlatformEvent;
-use std::{mem, sync::mpsc::Receiver, thread};
+use super::super::{PlatformEvent, TrayRegistration};
+use std::{
+    mem,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 const WM_TRAY: u32 = 0x8001;
 const WM_COMMAND: u32 = 0x0111;
 const WM_LBUTTONUP: usize = 0x0202;
 const WM_RBUTTONUP: usize = 0x0205;
 const WM_NULL: u32 = 0x0000;
+const WM_QUIT: u32 = 0x0012;
 const ID_EXIT: usize = 1001;
 const NIF_MESSAGE: u32 = 0x00000001;
 const NIF_ICON: u32 = 0x00000002;
@@ -70,7 +75,7 @@ struct WindowClass {
 
 struct CallbackState {
     sender: std::sync::mpsc::Sender<PlatformEvent>,
-    exit_label: String,
+    exit_label: Arc<Mutex<String>>,
 }
 
 #[link(name = "user32")]
@@ -96,7 +101,7 @@ unsafe extern "system" {
     fn SetForegroundWindow(hwnd: isize) -> i32;
     fn PostMessageW(hwnd: isize, message: u32, wparam: usize, lparam: isize) -> i32;
     fn PostQuitMessage(exit_code: i32);
-    fn GetMessageW(message: *mut Message, hwnd: isize, min: u32, max: u32) -> i32;
+    fn PeekMessageW(message: *mut Message, hwnd: isize, min: u32, max: u32, remove: u32) -> i32;
     fn TranslateMessage(message: *const Message) -> i32;
     fn DispatchMessageW(message: *const Message) -> isize;
     fn CreatePopupMenu() -> isize;
@@ -138,7 +143,9 @@ unsafe extern "system" fn window_proc(
             }
             WM_RBUTTONUP => {
                 if !state().is_null() {
-                    show_menu(hwnd, &(*state()).exit_label);
+                    if let Ok(exit_label) = (*state()).exit_label.lock() {
+                        show_menu(hwnd, &exit_label);
+                    }
                 }
             }
             _ => {}
@@ -185,12 +192,18 @@ fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-pub(crate) fn start(exit_label: String) -> Receiver<PlatformEvent> {
+pub(crate) fn start(exit_label: String) -> TrayRegistration {
     let (sender, receiver) = std::sync::mpsc::channel();
+    let (updates, update_receiver) = std::sync::mpsc::channel::<String>();
+    let exit_label = Arc::new(Mutex::new(exit_label));
+    let exit_label_for_thread = Arc::clone(&exit_label);
     thread::spawn(move || unsafe {
         let class_name = wide("WowieTrayWindow");
         let instance = GetModuleHandleW(std::ptr::null());
-        let state = Box::into_raw(Box::new(CallbackState { sender, exit_label }));
+        let state = Box::into_raw(Box::new(CallbackState {
+            sender,
+            exit_label: exit_label_for_thread,
+        }));
         let class = WindowClass {
             style: 0,
             proc: Some(window_proc),
@@ -259,14 +272,29 @@ pub(crate) fn start(exit_label: String) -> Receiver<PlatformEvent> {
             point: Point { x: 0, y: 0 },
             private: 0,
         };
-        while GetMessageW(&mut message, 0, 0, 0) > 0 {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
+        loop {
+            while let Ok(updated) = update_receiver.try_recv() {
+                if let Ok(mut current) = (*state).exit_label.lock() {
+                    *current = updated;
+                }
+            }
+            if PeekMessageW(&mut message, 0, 0, 0, 1) != 0 {
+                if message.message == WM_QUIT {
+                    break;
+                }
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            } else {
+                thread::sleep(std::time::Duration::from_millis(50));
+            }
         }
         Shell_NotifyIconW(NIM_DELETE, &data);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         drop(Box::from_raw(state));
         DestroyWindow(hwnd);
     });
-    receiver
+    TrayRegistration {
+        events: receiver,
+        updates,
+    }
 }

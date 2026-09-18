@@ -15,6 +15,16 @@ pub enum PlatformEvent {
     Quit,
 }
 
+pub struct HotkeyRegistration {
+    pub events: std::sync::mpsc::Receiver<PlatformEvent>,
+    pub updates: std::sync::mpsc::Sender<String>,
+}
+
+pub struct TrayRegistration {
+    pub events: std::sync::mpsc::Receiver<PlatformEvent>,
+    pub updates: std::sync::mpsc::Sender<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AppProviderSource {
     StoreApps,
@@ -212,12 +222,9 @@ pub fn watch_app_provider_sources(
 }
 
 pub trait PlatformIntegration: Send + Sync {
-    fn register_hotkey(
-        &self,
-        hotkey: &str,
-        watch_system_theme: bool,
-    ) -> Result<std::sync::mpsc::Receiver<PlatformEvent>>;
-    fn start_tray(&self, exit_label: String) -> std::sync::mpsc::Receiver<PlatformEvent>;
+    fn register_hotkey(&self, hotkey: &str, watch_system_theme: bool)
+        -> Result<HotkeyRegistration>;
+    fn start_tray(&self, exit_label: String) -> TrayRegistration;
     fn system_prefers_dark_theme(&self) -> bool;
     fn system_accent_color(&self) -> u32;
     fn position_palette(&self, window: &slint::Window);

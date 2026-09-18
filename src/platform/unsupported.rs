@@ -1,4 +1,4 @@
-use super::PlatformIntegration;
+use super::{HotkeyRegistration, PlatformIntegration, TrayRegistration};
 use anyhow::Result;
 use std::sync::mpsc::Receiver;
 
@@ -17,15 +17,23 @@ impl PlatformIntegration for UnsupportedPlatform {
         &self,
         hotkey: &str,
         _watch_system_theme: bool,
-    ) -> Result<Receiver<super::PlatformEvent>> {
+    ) -> Result<HotkeyRegistration> {
         eprintln!("global hotkey '{hotkey}' is only available on Windows");
         let (_sender, receiver) = std::sync::mpsc::channel();
-        Ok(receiver)
+        let (updates, _update_receiver) = std::sync::mpsc::channel();
+        Ok(HotkeyRegistration {
+            events: receiver,
+            updates,
+        })
     }
 
-    fn start_tray(&self, _exit_label: String) -> Receiver<super::PlatformEvent> {
+    fn start_tray(&self, _exit_label: String) -> TrayRegistration {
         let (_sender, receiver) = std::sync::mpsc::channel();
-        receiver
+        let (updates, _update_receiver) = std::sync::mpsc::channel();
+        TrayRegistration {
+            events: receiver,
+            updates,
+        }
     }
 
     fn position_palette(&self, _window: &slint::Window) {}

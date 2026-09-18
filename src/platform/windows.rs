@@ -9,7 +9,7 @@ use std::{
     fs,
     os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver},
+    sync::mpsc,
     thread,
 };
 use url::Url;
@@ -27,11 +27,12 @@ use windows_sys::Win32::{
     System::Threading::{WaitForSingleObject, INFINITE},
     UI::{
         Input::KeyboardAndMouse::{
-            RegisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
+            RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,
+            MOD_WIN,
         },
         WindowsAndMessaging::{
-            DispatchMessageW, GetForegroundWindow, GetMessageW, GetSystemMetrics,
-            SetForegroundWindow, ShowWindow, TranslateMessage, MSG, SW_SHOW, WM_HOTKEY,
+            DispatchMessageW, GetForegroundWindow, GetSystemMetrics, PeekMessageW,
+            SetForegroundWindow, ShowWindow, TranslateMessage, MSG, PM_REMOVE, SW_SHOW, WM_HOTKEY,
         },
     },
 };
@@ -1248,6 +1249,28 @@ fn u32_at(data: &[u8], offset: usize) -> Option<u32> {
     ))
 }
 
+fn register_hotkey_value(hotkey: &str) -> bool {
+    let (modifiers, key) = match parse_hotkey(hotkey) {
+        Some(parsed) => parsed,
+        None => {
+            eprintln!(
+                "unsupported global hotkey '{hotkey}'; a modifier is required, using Alt+Space"
+            );
+            (MOD_ALT, 0x20)
+        }
+    };
+    if unsafe { RegisterHotKey(std::ptr::null_mut(), 1, modifiers | MOD_NOREPEAT, key) } != 0 {
+        return true;
+    }
+    let error = unsafe { GetLastError() };
+    if error == 1409 {
+        eprintln!("could not register global hotkey {hotkey}: already registered by another application (Windows error 1409)");
+    } else {
+        eprintln!("could not register global hotkey {hotkey}: Windows error {error}");
+    }
+    false
+}
+
 impl PlatformIntegration for WindowsPlatform {
     fn system_prefers_dark_theme(&self) -> bool {
         read_system_prefers_dark_theme()
@@ -1257,33 +1280,17 @@ impl PlatformIntegration for WindowsPlatform {
         read_system_accent_color()
     }
 
-    fn register_hotkey(&self, hotkey: &str, watch_theme: bool) -> Result<Receiver<PlatformEvent>> {
+    fn register_hotkey(
+        &self,
+        hotkey: &str,
+        _watch_theme: bool,
+    ) -> Result<super::HotkeyRegistration> {
         let (sender, receiver) = mpsc::channel();
-        if watch_theme {
-            watch_system_theme(sender.clone());
-        }
+        let (updates, update_receiver) = mpsc::channel::<String>();
+        watch_system_theme(sender.clone());
         let hotkey = hotkey.to_owned();
-        let (modifiers, key) = match parse_hotkey(&hotkey) {
-            Some(parsed) => parsed,
-            None => {
-                eprintln!(
-                    "unsupported global hotkey '{hotkey}'; a modifier is required, using Alt+Space"
-                );
-                (MOD_ALT, 0x20)
-            }
-        };
         thread::spawn(move || {
-            if unsafe { RegisterHotKey(std::ptr::null_mut(), 1, modifiers | MOD_NOREPEAT, key) }
-                == 0
-            {
-                let error = unsafe { GetLastError() };
-                if error == 1409 {
-                    eprintln!("could not register global hotkey {hotkey}: already registered by another application (Windows error 1409)");
-                } else {
-                    eprintln!("could not register global hotkey {hotkey}: Windows error {error}");
-                }
-                return;
-            }
+            let mut registered = register_hotkey_value(&hotkey);
             let mut message = MSG {
                 hwnd: std::ptr::null_mut(),
                 message: 0,
@@ -1293,28 +1300,33 @@ impl PlatformIntegration for WindowsPlatform {
                 pt: POINT { x: 0, y: 0 },
             };
             loop {
-                let result = unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) };
-                if result == -1 {
-                    let error = unsafe { GetLastError() };
-                    eprintln!("global hotkey message loop failed: Windows error {error}");
-                    break;
+                while let Ok(updated) = update_receiver.try_recv() {
+                    if registered {
+                        unsafe { UnregisterHotKey(std::ptr::null_mut(), 1) };
+                    }
+                    registered = register_hotkey_value(&updated);
                 }
-                if result == 0 {
-                    break;
-                }
-                if message.message == WM_HOTKEY && message.wParam == 1 {
-                    let _ = sender.send(PlatformEvent::TogglePalette);
-                }
-                unsafe {
-                    TranslateMessage(&message);
-                    DispatchMessageW(&message);
+                if unsafe { PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) } != 0
+                {
+                    if message.message == WM_HOTKEY && message.wParam == 1 {
+                        let _ = sender.send(PlatformEvent::TogglePalette);
+                    }
+                    unsafe {
+                        TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    }
+                } else {
+                    thread::sleep(std::time::Duration::from_millis(50));
                 }
             }
         });
-        Ok(receiver)
+        Ok(super::HotkeyRegistration {
+            events: receiver,
+            updates,
+        })
     }
 
-    fn start_tray(&self, exit_label: String) -> Receiver<PlatformEvent> {
+    fn start_tray(&self, exit_label: String) -> super::TrayRegistration {
         tray::start(exit_label)
     }
 

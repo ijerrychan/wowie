@@ -35,8 +35,9 @@ impl ShortcutProvider {
 
 /// Dynamic results generated from the current query rather than an index.
 pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Vec<SearchResult> {
-    let query = query.trim();
-    if query.is_empty() {
+    let input = query;
+    let query = input.trim();
+    if query.is_empty() && input.trim().is_empty() {
         return Vec::new();
     }
 
@@ -52,12 +53,13 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
         .into_iter()
         .enumerate()
         .filter_map(|(index, shortcut)| {
-            let argument = shortcut_argument(query, &shortcut.prefix);
+            let argument = shortcut_argument(input, &shortcut.prefix);
             let explicit = argument.is_some();
             let argument = argument.unwrap_or(query).trim();
-            if argument.is_empty() {
+            if argument.is_empty() && !explicit {
                 return None;
             }
+            let preview = explicit && argument.is_empty();
             let target = if shortcut.prefix == COMMAND_PREFIX {
                 command_shell()
             } else {
@@ -73,7 +75,11 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
             } else {
                 target.display().to_string()
             };
-            let title = format!("{} \"{}\"", shortcut.name, argument);
+            let title = if preview {
+                shortcut.name.clone()
+            } else {
+                format!("{} \"{}\"", shortcut.name, argument)
+            };
             let id = format!("shortcut:{}:{}", index, shortcut.prefix);
             let mut aliases = vec![format!("{} {}", shortcut.prefix, argument)];
             if explicit {
@@ -92,17 +98,21 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
                 source: SourceId::Shortcut,
                 sources: vec![SourceId::Shortcut],
                 launch_entries: Vec::new(),
-                actions: vec![Action::Launch(crate::result::LaunchEntry {
-                    source: SourceId::Shortcut,
-                    path: PathBuf::new(),
-                    target: if shortcut.prefix == COMMAND_PREFIX {
-                        command_shell()
-                    } else {
-                        PathBuf::from(expand_template(&shortcut.template, argument))
-                    },
-                    arguments: launch_arguments.clone(),
-                    working_directory: None,
-                })],
+                actions: if preview {
+                    Vec::new()
+                } else {
+                    vec![Action::Launch(crate::result::LaunchEntry {
+                        source: SourceId::Shortcut,
+                        path: PathBuf::new(),
+                        target: if shortcut.prefix == COMMAND_PREFIX {
+                            command_shell()
+                        } else {
+                            PathBuf::from(expand_template(&shortcut.template, argument))
+                        },
+                        arguments: launch_arguments.clone(),
+                        working_directory: None,
+                    })]
+                },
                 icon: None,
                 ranking_bias: if explicit { 0 } else { -400 },
             })
@@ -191,6 +201,15 @@ mod tests {
         let implicit = results("ipconfig", &[], "zh-CN");
         assert_eq!(implicit[0].title, "执行命令 \"ipconfig\"");
         assert_eq!(implicit[0].ranking_bias, -400);
+    }
+
+    #[test]
+    fn explicit_prefix_without_argument_returns_a_non_executable_preview() {
+        let preview = results("> ", &[], "zh-CN");
+        assert_eq!(preview.len(), 1);
+        assert_eq!(preview[0].title, "执行命令");
+        assert!(preview[0].actions.is_empty());
+        assert_eq!(preview[0].ranking_bias, 0);
     }
 
     #[test]

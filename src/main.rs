@@ -6,6 +6,7 @@ mod launcher;
 mod platform;
 mod plugin;
 mod providers;
+mod ranking;
 mod result;
 mod search;
 mod shortcuts;
@@ -43,7 +44,8 @@ fn main() -> Result<()> {
             .map_err(|error| anyhow::anyhow!("could not select language: {error}"))?;
     }
     let platform = platform::current();
-    let tray_events = platform.start_tray(i18n::exit_name(&config.language).to_owned());
+    let tray_registration = platform.start_tray(i18n::exit_name(&config.language).to_owned());
+    let tray_updates = tray_registration.updates.clone();
     let dark_mode = match config.theme.as_str() {
         "dark" => true,
         "light" => false,
@@ -72,7 +74,8 @@ fn main() -> Result<()> {
     let context_generation = Arc::new(AtomicU64::new(0));
     let context_item = Arc::new(Mutex::new(None::<SearchResult>));
     let show_advanced_details = Arc::new(AtomicBool::new(config.show_advanced_details));
-    let follow_system_theme = config.theme == "system";
+    let follow_system_theme = Arc::new(AtomicBool::new(config.theme == "system"));
+    let hide_on_focus_loss = Arc::new(AtomicBool::new(config.hide_on_focus_loss));
     let query_generation = Arc::new(AtomicU64::new(0));
     let current_query = Arc::new(Mutex::new(String::new()));
     let icon_items = Arc::new(Mutex::new((0_u64, Vec::<SearchResult>::new())));
@@ -101,6 +104,9 @@ fn main() -> Result<()> {
         ((accent >> 8) & 0xff) as u8,
         (accent & 0xff) as u8,
     ));
+
+    let hotkey_registration = platform.register_hotkey(&config.hotkey, true)?;
+    let hotkey_updates = hotkey_registration.updates.clone();
 
     {
         let icon_items = Arc::clone(&icon_items);
@@ -200,6 +206,7 @@ fn main() -> Result<()> {
         let engine = engine.clone();
         let weak = window.as_weak();
         let visible = Arc::clone(&visible);
+        let current_query = Arc::clone(&current_query);
         window.on_launch_requested(move |index| {
             let item = weak.upgrade().and_then(|window| {
                 window
@@ -208,9 +215,17 @@ fn main() -> Result<()> {
                     .and_then(|row| engine.by_id(row.id.as_str()))
             });
             if let Some(item) = item {
+                if item.category == ResultCategory::Shortcut && item.actions.is_empty() {
+                    return;
+                }
                 if matches!(item.actions.first(), Some(result::Action::Plugin { .. })) {
                     match engine.execute_action(&item.id) {
                         Ok(output) => {
+                            let query = current_query
+                                .lock()
+                                .map(|query| query.clone())
+                                .unwrap_or_default();
+                            engine.record_success(&item.id, &query);
                             if let Some(window) = weak.upgrade() {
                                 window.set_last_action_id(item.id.clone().into());
                                 window.set_last_action_result(output.title.into());
@@ -230,6 +245,11 @@ fn main() -> Result<()> {
                 let result = launcher::launch(&item);
                 match result {
                     Ok(()) => {
+                        let query = current_query
+                            .lock()
+                            .map(|query| query.clone())
+                            .unwrap_or_default();
+                        engine.record_success(&item.id, &query);
                         if let Some(window) = weak.upgrade() {
                             window.set_launch_error(String::new().into());
                             let _ = window.hide();
@@ -406,6 +426,9 @@ fn main() -> Result<()> {
         let query_generation = Arc::clone(&query_generation);
         let current_query = Arc::clone(&current_query);
         let show_advanced_details = Arc::clone(&show_advanced_details);
+        let follow_system_theme = Arc::clone(&follow_system_theme);
+        let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
+        let platform_for_config = Arc::clone(&platform);
         std::thread::spawn(move || loop {
             let mut changed = match app_source_events.recv_timeout(Duration::from_millis(200)) {
                 Ok(source) => provider.refresh_source(source),
@@ -415,13 +438,44 @@ fn main() -> Result<()> {
             if config_events.try_recv().is_ok() {
                 let (updated, valid) = config::Config::load();
                 if valid {
+                    let _ = hotkey_updates.send(updated.hotkey.clone());
+                    let _ = tray_updates.send(i18n::exit_name(&updated.language).to_owned());
+                    follow_system_theme.store(updated.theme == "system", Ordering::Release);
+                    hide_on_focus_loss.store(updated.hide_on_focus_loss, Ordering::Release);
                     if let Ok(mut directories) = custom_directories.lock() {
                         *directories = updated.providers.indexed_directories.clone();
                     }
                     provider.apply_config(&updated.providers);
                     engine.replace_shortcuts(updated.shortcuts);
-                    engine.replace_shortcut_language(updated.language);
+                    engine.replace_shortcut_language(updated.language.clone());
+                    engine.replace_plugin_language(updated.language.clone());
                     show_advanced_details.store(updated.show_advanced_details, Ordering::Release);
+                    let weak_for_config = weak.clone();
+                    let platform_for_config = Arc::clone(&platform_for_config);
+                    let theme = updated.theme.clone();
+                    let language = updated.language.clone();
+                    let window_width = updated.window_width as i32;
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if language != "system" {
+                            let _ = slint::select_bundled_translation(&language);
+                        }
+                        let dark_mode = match theme.as_str() {
+                            "dark" => true,
+                            "light" => false,
+                            _ => platform_for_config.system_prefers_dark_theme(),
+                        };
+                        if let Some(window) = weak_for_config.upgrade() {
+                            window.set_window_width(window_width);
+                            window.set_dark_mode(dark_mode);
+                            let accent = platform_for_config.system_accent_color();
+                            window.set_accent_background(slint::Color::from_argb_u8(
+                                if dark_mode { 0x42 } else { 0x28 },
+                                ((accent >> 16) & 0xff) as u8,
+                                ((accent >> 8) & 0xff) as u8,
+                                (accent & 0xff) as u8,
+                            ));
+                        }
+                    });
                     changed = true;
                 }
             }
@@ -484,18 +538,20 @@ fn main() -> Result<()> {
         });
     }
 
-    let hotkey_events = platform.register_hotkey(&config.hotkey, follow_system_theme)?;
-    if config.hide_on_focus_loss {
+    {
         let weak = window.as_weak();
         let visible = Arc::clone(&visible);
         let context_visible = Arc::clone(&context_visible);
+        let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
         platform.install_focus_listener(
             window.window(),
             Box::new(move || {
                 if context_visible.load(Ordering::Acquire) {
                     return;
                 }
-                if visible.swap(false, Ordering::AcqRel) {
+                if hide_on_focus_loss.load(Ordering::Acquire)
+                    && visible.swap(false, Ordering::AcqRel)
+                {
                     if let Some(window) = weak.upgrade() {
                         let _ = window.hide();
                     }
@@ -510,7 +566,7 @@ fn main() -> Result<()> {
         let context_generation = Arc::clone(&context_generation);
         let context_item = Arc::clone(&context_item);
         let visible = Arc::clone(&visible);
-        let hide_on_focus_loss = config.hide_on_focus_loss;
+        let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
         let platform_for_context_focus = Arc::clone(&platform);
         platform.install_focus_listener(
             context_window.window(),
@@ -522,6 +578,7 @@ fn main() -> Result<()> {
                 let weak = weak.clone();
                 let visible = Arc::clone(&visible);
                 let platform = Arc::clone(&platform_for_context_focus);
+                let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
                 let observed_generation = context_generation.load(Ordering::Acquire);
                 Timer::single_shot(Duration::from_millis(30), move || {
                     if context_generation.load(Ordering::Acquire) == observed_generation {
@@ -534,7 +591,7 @@ fn main() -> Result<()> {
                             &context_visible,
                             &context_generation,
                             &context_item,
-                            !launcher_focused && hide_on_focus_loss,
+                            !launcher_focused && hide_on_focus_loss.load(Ordering::Acquire),
                             &visible,
                         );
                     }
@@ -554,7 +611,7 @@ fn main() -> Result<()> {
     {
         let sender = platform_event_sender.clone();
         std::thread::spawn(move || {
-            for event in hotkey_events {
+            for event in hotkey_registration.events {
                 if sender.send(event).is_err() {
                     break;
                 }
@@ -562,7 +619,7 @@ fn main() -> Result<()> {
         });
     }
     std::thread::spawn(move || {
-        for event in tray_events {
+        for event in tray_registration.events {
             if platform_event_sender.send(event).is_err() {
                 break;
             }
@@ -571,6 +628,7 @@ fn main() -> Result<()> {
 
     let weak = window.as_weak();
     let platform_for_hotkey = Arc::clone(&platform);
+    let follow_system_theme_for_hotkey = Arc::clone(&follow_system_theme);
     let visible_for_hotkey = Arc::clone(&visible);
     let context_weak_for_hotkey = context_window.as_weak();
     let context_visible_for_hotkey = Arc::clone(&context_visible);
@@ -585,6 +643,7 @@ fn main() -> Result<()> {
             let context_visible = Arc::clone(&context_visible_for_hotkey);
             let context_generation = Arc::clone(&context_generation_for_hotkey);
             let context_item = Arc::clone(&context_item_for_hotkey);
+            let follow_system_theme = Arc::clone(&follow_system_theme_for_hotkey);
             let _ = slint::invoke_from_event_loop(move || match event {
                 platform::PlatformEvent::TogglePalette => {
                     hide_context_menu(
@@ -600,7 +659,9 @@ fn main() -> Result<()> {
                         toggle_palette(&window, platform, &visible);
                     }
                 }
-                platform::PlatformEvent::SystemThemeChanged if follow_system_theme => {
+                platform::PlatformEvent::SystemThemeChanged
+                    if follow_system_theme.load(Ordering::Acquire) =>
+                {
                     if let Some(window) = weak.upgrade() {
                         window.set_dark_mode(platform.system_prefers_dark_theme());
                     }

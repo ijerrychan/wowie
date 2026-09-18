@@ -41,6 +41,14 @@
 - [ ] 审查 identity 合并时的字段保留规则，确保高优先级来源替换记录时不会丢失图标、别名、来源、入口或其他展示元数据
 - [ ] 增加完整的“发现 → 入口关联 → identity 合并 → 分类 → 图标解析”快照测试，避免阶段顺序变化造成回归
 
+## 低优先级：别名与搜索排序优化
+
+- [ ] 将 `SearchResult.aliases: Vec<String>` 重构为带来源类型的 `SearchAlias`，区分备用标题、产品名、可执行文件名、Provider 别名、技术别名和插件关键词。
+- [ ] 完善 Windows AUMID 产品名拆分：在现有分隔符拆分基础上增加 CamelCase 拆分，例如将 `Microsoft.WindowsNotepad` 解析为 `Microsoft`、`Windows`、`Notepad`。
+- [ ] 对 AUMID 生成的完整技术名称采用低权重，对拆出的产品词采用正常搜索权重，避免 `Microsoft WindowsNotepad` 只能作为普通包含匹配。
+- [ ] 在匹配结果中保留标题/别名来源，使产品词别名可以与标题前缀匹配公平竞争，并允许 Frecency 在同一竞争层级内发挥作用。
+- [ ] 增加 `notepad`、`WindowsNotepad`、CamelCase 产品名和技术别名排序回归测试，确保用户多次使用“记事本”后可以稳定优先于 `Notepad++`。
+
 ## 下一步
 
 - [x] 将窗口改为启动器面板：圆角深色样式、快捷键隐藏/唤起、启动时按实际尺寸居中偏上

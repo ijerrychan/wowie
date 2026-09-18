@@ -716,6 +716,15 @@ fn is_legacy_tools_shortcut(path: &Path) -> bool {
     crate::platform::windows_rules::is_legacy_tools_path(path)
 }
 
+fn supports_exact_title_association(target: &Path) -> bool {
+    target
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("ico")
+        })
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MatchStrength {
     Strong,
@@ -741,6 +750,18 @@ fn shortcut_match_strength(
             .iter()
             .any(|app_entry| same_filesystem_target(&app_entry.target, &entry.target))
             .then_some(MatchStrength::Strong);
+    }
+    // Some Windows AppsFolder entries expose a virtual shell identity while
+    // their Start Menu shortcut points at a real executable. WSL is a notable
+    // exception: both WSL shortcuts can point at an installer-generated .ico
+    // placeholder. Associate these only when the title matches exactly and
+    // the target has a known executable/placeholder extension.
+    if (application.identity.starts_with("shell:") || application.identity.starts_with("exe:"))
+        && !application.title.is_empty()
+        && shortcut.title.eq_ignore_ascii_case(&application.title)
+        && supports_exact_title_association(&entry.target)
+    {
+        return Some(MatchStrength::TitleFallback);
     }
     if application.identity.starts_with("shell:") {
         // The legacy Administrative Tools and System Tools folders contain
@@ -1317,6 +1338,74 @@ mod tests {
             .sources
             .iter()
             .any(|source| *source == crate::platform::SourceId::StartMenu));
+    }
+
+    #[test]
+    fn wsl_shortcut_with_ico_target_is_attached_by_exact_title() {
+        let mut app = item(
+            "exe:c:\\program files\\wsl\\wslsettings\\wslsettings.exe",
+            "WSL Settings",
+            "AppsFolder",
+        );
+        app.launch_entries = vec![LaunchEntry {
+            source: "AppsFolder".into(),
+            path: PathBuf::from(r"shell:AppsFolder\Microsoft.WSLSettings"),
+            target: PathBuf::from(r"C:\Program Files\WSL\WslSettings\wslsettings.exe"),
+            arguments: String::new(),
+            working_directory: None,
+        }];
+        let mut shortcut = item(
+            "target:c:\\windows\\installer\\wsl.ico",
+            "WSL Settings",
+            "StartMenu",
+        );
+        shortcut.launch_entries = vec![LaunchEntry {
+            source: "StartMenu".into(),
+            path: PathBuf::from(r"C:\Start Menu\WSL Settings.lnk"),
+            target: PathBuf::from(r"C:\Windows\Installer\{guid}\wsl.ico"),
+            arguments: String::new(),
+            working_directory: None,
+        }];
+        let mut items = vec![app, shortcut];
+        associate_file_entries(&mut items);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].launch_entries.len(), 2);
+    }
+
+    #[test]
+    fn shell_app_shortcut_with_executable_target_is_attached_by_exact_title() {
+        let mut app = item(
+            "shell:docker.dockerforwindows.settings",
+            "Docker Desktop",
+            "AppsFolder",
+        );
+        app.launch_entries = vec![LaunchEntry {
+            source: "AppsFolder".into(),
+            path: PathBuf::from(r"shell:AppsFolder\Docker.DockerForWindows.Settings"),
+            target: PathBuf::from(r"shell:AppsFolder\Docker.DockerForWindows.Settings"),
+            arguments: String::new(),
+            working_directory: None,
+        }];
+        let mut shortcut = item(
+            "exe:c:\\users\\user\\appdata\\local\\programs\\dockerdesktop\\docker desktop.exe",
+            "Docker Desktop",
+            "StartMenu",
+        );
+        shortcut.launch_entries = vec![LaunchEntry {
+            source: "StartMenu".into(),
+            path: PathBuf::from(r"C:\Start Menu\Docker Desktop.lnk"),
+            target: PathBuf::from(
+                r"C:\Users\User\AppData\Local\Programs\DockerDesktop\Docker Desktop.exe",
+            ),
+            arguments: String::new(),
+            working_directory: Some(PathBuf::from(
+                r"C:\Users\User\AppData\Local\Programs\DockerDesktop\frontend",
+            )),
+        }];
+        let mut items = vec![app, shortcut];
+        associate_file_entries(&mut items);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].launch_entries.len(), 2);
     }
 
     #[test]

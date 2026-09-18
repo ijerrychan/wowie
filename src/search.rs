@@ -1,4 +1,5 @@
 use crate::plugin::PluginManager;
+use crate::ranking::Ranker;
 use crate::result::SearchResult;
 use anyhow::{Context, Result};
 use std::sync::Mutex;
@@ -8,6 +9,7 @@ pub struct SearchCore {
     plugins: PluginManager,
     dynamic_results: Mutex<Vec<SearchResult>>,
     shortcuts: Option<Mutex<crate::shortcuts::ShortcutProvider>>,
+    ranker: Ranker,
 }
 
 impl SearchCore {
@@ -18,6 +20,7 @@ impl SearchCore {
             plugins: PluginManager::discover_with_locale("en"),
             dynamic_results: Mutex::new(Vec::new()),
             shortcuts: None,
+            ranker: Ranker::in_memory(),
         }
     }
 
@@ -33,6 +36,7 @@ impl SearchCore {
             shortcuts: Some(Mutex::new(crate::shortcuts::ShortcutProvider::new(
                 shortcuts,
             ))),
+            ranker: Ranker::load(),
         }
     }
 
@@ -50,6 +54,14 @@ impl SearchCore {
                 provider.set_language(language);
             }
         }
+    }
+
+    pub fn replace_plugin_language(&self, language: String) {
+        self.plugins.set_locale(language);
+    }
+
+    pub fn record_success(&self, item_id: &str, query: &str) {
+        self.ranker.record_success(item_id, query);
     }
     pub fn by_id(&self, id: &str) -> Option<SearchResult> {
         self.results
@@ -92,7 +104,8 @@ impl SearchCore {
     }
 
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
-        let raw_query = query.trim().to_owned();
+        let input = query.to_owned();
+        let raw_query = input.trim().to_owned();
         let query = raw_query.to_lowercase();
         let debug = std::env::var_os("WOWIE_SEARCH_DEBUG").is_some_and(|value| value != "0");
         if debug {
@@ -115,7 +128,7 @@ impl SearchCore {
         let mut generated_shortcuts = Vec::new();
         if let Some(provider) = &self.shortcuts {
             if let Ok(provider) = provider.lock() {
-                generated_shortcuts = provider.results(&raw_query);
+                generated_shortcuts = provider.results(&input);
             }
             all.extend(generated_shortcuts.iter().cloned());
         }
@@ -127,7 +140,7 @@ impl SearchCore {
             cached.extend(dynamic);
             cached.extend(generated_shortcuts);
         }
-        let mut ranked: Vec<(i32, &SearchResult)> = all
+        let mut ranked: Vec<(RankKey, &SearchResult)> = all
             .iter()
             .filter_map(|item| {
                 let title_score = match_score(&query, &item.title);
@@ -138,12 +151,11 @@ impl SearchCore {
                         let score = match_score(&query, alias)?;
                         Some(score)
                     })
-                    .max();
+                    .max_by_key(|score| (score.class, score.quality));
                 let score = [title_score, alias_score]
                     .into_iter()
                     .flatten()
-                    .max()
-                    .filter(|score| *score > 0);
+                    .max_by_key(|score| (score.class, score.quality));
                 if debug && score.is_some() {
                     eprintln!(
                         "[search] candidate title={:?} title_score={:?} alias_score={:?} matched={} identity={:?} sources={:?} location={:?} launch_target={:?} args={:?}",
@@ -158,10 +170,30 @@ impl SearchCore {
                         item.launch_arguments
                     );
                 }
-                score.map(|score| (score + item.ranking_bias, item))
+                score.map(|score| {
+                    (
+                        RankKey {
+                            intent_priority: intent_priority(item, &query),
+                            match_class: score.class,
+                            match_quality: score.quality,
+                            behavior: self.ranker.score(&item.id, &query),
+                            provider_bias: item.ranking_bias,
+                        },
+                        item,
+                    )
+                })
             })
             .collect();
-        ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.title.cmp(&b.1.title)));
+        ranked.sort_by(|a, b| {
+            b.0.intent_priority
+                .cmp(&a.0.intent_priority)
+                .then_with(|| b.0.match_class.cmp(&a.0.match_class))
+                .then_with(|| b.0.match_quality.cmp(&a.0.match_quality))
+                .then_with(|| b.0.behavior.cmp(&a.0.behavior))
+                .then_with(|| b.0.provider_bias.cmp(&a.0.provider_bias))
+                .then_with(|| a.1.title.cmp(&b.1.title))
+                .then_with(|| a.1.id.cmp(&b.1.id))
+        });
         let found: Vec<SearchResult> = ranked.into_iter().map(|(_, item)| item.clone()).collect();
         if debug {
             eprintln!("[search] final_results={}", found.len());
@@ -184,19 +216,63 @@ impl SearchCore {
     }
 }
 
-fn match_score(query: &str, title: &str) -> Option<i32> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MatchScore {
+    class: u8,
+    quality: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RankKey {
+    intent_priority: u8,
+    match_class: u8,
+    match_quality: i32,
+    behavior: i32,
+    provider_bias: i32,
+}
+
+/// Explicit shortcut syntax expresses direct intent. An unprefixed shortcut
+/// is only a fallback and must not outrank ordinary indexed results.
+fn intent_priority(item: &SearchResult, query: &str) -> u8 {
+    if item.category != crate::result::ResultCategory::Shortcut {
+        return 1;
+    }
+    if item
+        .aliases
+        .iter()
+        .any(|alias| alias.eq_ignore_ascii_case(query))
+    {
+        2
+    } else {
+        0
+    }
+}
+
+fn match_score(query: &str, title: &str) -> Option<MatchScore> {
     if query.is_empty() {
-        return Some(0);
+        return Some(MatchScore {
+            class: 0,
+            quality: 0,
+        });
     }
     let text = title.to_lowercase();
     if text == query {
-        return Some(1000);
+        return Some(MatchScore {
+            class: 4,
+            quality: 1000,
+        });
     }
     if text.starts_with(query) {
-        return Some((800 - text.chars().count() as i32).max(1));
+        return Some(MatchScore {
+            class: 3,
+            quality: (1000 - text.chars().count() as i32).max(1),
+        });
     }
     if text.contains(query) {
-        return Some((600 - text.chars().count() as i32).max(1));
+        return Some(MatchScore {
+            class: 2,
+            quality: (1000 - text.chars().count() as i32).max(1),
+        });
     }
     None
 }
@@ -368,6 +444,103 @@ mod tests {
             make("short", "Calculator"),
         ]);
         assert_eq!(core.search("calc")[0].id, "short");
+    }
+
+    #[test]
+    fn successful_use_breaks_a_matching_score_tie() {
+        let make = |id: &str, title: &str| SearchResult {
+            id: id.into(),
+            identity: id.into(),
+            title: title.into(),
+            category: ResultCategory::Application,
+            aliases: vec![],
+            location: String::new(),
+            launch_target: title.into(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: "test".into(),
+            sources: vec!["test".into()],
+            launch_entries: vec![],
+            actions: vec![],
+            icon: None,
+            ranking_bias: 0,
+        };
+        let core = SearchCore::new(vec![make("a", "Calculator A"), make("b", "Calculator B")]);
+        core.record_success("b", "calculator");
+        assert_eq!(core.search("calculator")[0].id, "b");
+    }
+
+    #[test]
+    fn behavior_does_not_cross_match_classes() {
+        let make = |id: &str, title: &str| SearchResult {
+            id: id.into(),
+            identity: id.into(),
+            title: title.into(),
+            category: ResultCategory::Application,
+            aliases: vec![],
+            location: String::new(),
+            launch_target: title.into(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: "test".into(),
+            sources: vec!["test".into()],
+            launch_entries: vec![],
+            actions: vec![],
+            icon: None,
+            ranking_bias: 0,
+        };
+        let core = SearchCore::new(vec![
+            make("exact", "calc"),
+            make("contains", "my calculator"),
+        ]);
+        for _ in 0..20 {
+            core.record_success("contains", "calc");
+        }
+        assert_eq!(core.search("calc")[0].id, "exact");
+    }
+
+    #[test]
+    fn implicit_shortcuts_stay_after_ordinary_results() {
+        let notepad = SearchResult {
+            id: "aumid:notepad".into(),
+            identity: "aumid:notepad".into(),
+            title: "记事本".into(),
+            category: ResultCategory::Application,
+            aliases: vec!["Microsoft WindowsNotepad".into()],
+            location: String::new(),
+            launch_target: "shell:AppsFolder\\Microsoft.WindowsNotepad!App".into(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: "AppsFolder".into(),
+            sources: vec!["AppsFolder".into()],
+            launch_entries: vec![],
+            actions: vec![],
+            icon: None,
+            ranking_bias: 0,
+        };
+        let core = SearchCore::with_plugins_and_shortcuts(
+            vec![notepad],
+            PluginManager::discover_with_locale("en"),
+            Vec::new(),
+        );
+        let found = core.search("notepad");
+        assert_eq!(found[0].title, "记事本");
+        assert!(found
+            .iter()
+            .any(|item| item.category == ResultCategory::Shortcut));
+    }
+
+    #[test]
+    fn explicit_shortcut_prefix_is_available_before_an_argument() {
+        let core = SearchCore::with_plugins_and_shortcuts(
+            Vec::new(),
+            PluginManager::discover_with_locale("en"),
+            Vec::new(),
+        );
+        core.replace_shortcut_language("en".into());
+        let found = core.search("> ");
+        assert_eq!(found[0].title, "Execute Command");
+        assert!(found[0].actions.is_empty());
     }
 
     #[test]

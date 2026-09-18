@@ -12,6 +12,7 @@ use std::{
     fs,
     path::PathBuf,
     process::{Command, Stdio},
+    sync::{Arc, Mutex},
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -105,7 +106,7 @@ struct PluginAction {
 #[derive(Debug, Clone)]
 pub struct PluginManager {
     plugins: Vec<InstalledPlugin>,
-    locale: String,
+    locale: Arc<Mutex<String>>,
 }
 
 impl PluginManager {
@@ -142,14 +143,25 @@ impl PluginManager {
         }
         Self {
             plugins,
-            locale: locale.to_owned(),
+            locale: Arc::new(Mutex::new(locale.to_owned())),
+        }
+    }
+
+    pub fn set_locale(&self, locale: String) {
+        if let Ok(mut current) = self.locale.lock() {
+            *current = locale;
         }
     }
 
     pub fn query(&self, query: &str) -> Vec<SearchResult> {
+        let locale = self
+            .locale
+            .lock()
+            .map(|locale| locale.clone())
+            .unwrap_or_else(|_| "system".into());
         self.plugins
             .iter()
-            .flat_map(|plugin| match query_plugin(plugin, query, &self.locale) {
+            .flat_map(|plugin| match query_plugin(plugin, query, &locale) {
                 Ok(items) => items,
                 Err(error) => {
                     eprintln!("[plugin:{}] query failed: {error:#}", plugin.manifest.id);
