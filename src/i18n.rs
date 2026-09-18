@@ -13,6 +13,15 @@ pub fn execute_command_name(language: &str) -> &'static str {
         .unwrap_or("Execute Command")
 }
 
+pub fn open_website_name(language: &str) -> &'static str {
+    let language = effective_language(language);
+    OPEN_WEBSITE_TRANSLATIONS
+        .iter()
+        .find(|(locale, _)| locale.eq_ignore_ascii_case(language.as_str()))
+        .map(|(_, value)| *value)
+        .unwrap_or("Open website")
+}
+
 pub fn exit_name(language: &str) -> &'static str {
     let language = effective_language(language);
     EXIT_TRANSLATIONS

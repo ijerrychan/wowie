@@ -210,6 +210,17 @@ mod tests {
     }
 
     #[test]
+    fn default_open_web_icon_does_not_use_favicon_cache_key() {
+        let mut item = test_result("web");
+        item.category = ResultCategory::Shortcut;
+        item.source = "Shortcut".into();
+        item.icon = Some(IconSpec::DefaultOpen(PathBuf::from(
+            "https://untrusted.example",
+        )));
+        assert_eq!(icon_source_key(&item), "default-open:web");
+    }
+
+    #[test]
     fn favicon_cache_key_ignores_query_parameters() {
         let mut first = test_result("one");
         let mut second = test_result("two");

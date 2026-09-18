@@ -60,6 +60,10 @@ msgid "Execute Command"
 msgstr "Execute Command"
 
 msgctxt "Launcher"
+msgid "Open website"
+msgstr "Open website"
+
+msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 

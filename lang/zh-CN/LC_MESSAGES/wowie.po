@@ -60,6 +60,10 @@ msgid "Execute Command"
 msgstr "执行命令"
 
 msgctxt "Launcher"
+msgid "Open website"
+msgstr "打开网址"
+
+msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  导航     Enter  打开     Esc  隐藏"
 

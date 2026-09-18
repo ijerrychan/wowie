@@ -2,7 +2,11 @@ use crate::plugin::PluginManager;
 use crate::ranking::Ranker;
 use crate::result::SearchResult;
 use anyhow::{Context, Result};
-use std::sync::Mutex;
+use nucleo_matcher::{Config as MatcherConfig, Matcher, Utf32Str};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 
 pub struct SearchCore {
     results: Mutex<Vec<SearchResult>>,
@@ -10,6 +14,7 @@ pub struct SearchCore {
     dynamic_results: Mutex<Vec<SearchResult>>,
     shortcuts: Option<Mutex<crate::shortcuts::ShortcutProvider>>,
     ranker: Ranker,
+    fuzzy_search: AtomicBool,
 }
 
 impl SearchCore {
@@ -21,6 +26,7 @@ impl SearchCore {
             dynamic_results: Mutex::new(Vec::new()),
             shortcuts: None,
             ranker: Ranker::in_memory(),
+            fuzzy_search: AtomicBool::new(true),
         }
     }
 
@@ -37,6 +43,7 @@ impl SearchCore {
                 shortcuts,
             ))),
             ranker: Ranker::load(),
+            fuzzy_search: AtomicBool::new(true),
         }
     }
 
@@ -46,6 +53,10 @@ impl SearchCore {
                 provider.replace_config(shortcuts);
             }
         }
+    }
+
+    pub fn replace_fuzzy_search(&self, enabled: bool) {
+        self.fuzzy_search.store(enabled, Ordering::Release);
     }
 
     pub fn replace_shortcut_language(&self, language: String) {
@@ -107,6 +118,10 @@ impl SearchCore {
         let input = query.to_owned();
         let raw_query = input.trim().to_owned();
         let query = raw_query.to_lowercase();
+        let fuzzy_search = self.fuzzy_search.load(Ordering::Acquire);
+        let mut matcher = Matcher::new(MatcherConfig::DEFAULT);
+        let mut matcher_buffer = Vec::new();
+        let mut needle_buffer = Vec::new();
         let debug = std::env::var_os("WOWIE_SEARCH_DEBUG").is_some_and(|value| value != "0");
         if debug {
             eprintln!(
@@ -143,12 +158,26 @@ impl SearchCore {
         let mut ranked: Vec<(RankKey, &SearchResult)> = all
             .iter()
             .filter_map(|item| {
-                let title_score = match_score(&query, &item.title);
+                let title_score = match_score(
+                    &query,
+                    &item.title,
+                    fuzzy_search,
+                    &mut matcher,
+                    &mut matcher_buffer,
+                    &mut needle_buffer,
+                );
                 let alias_score = item
                     .aliases
                     .iter()
                     .filter_map(|alias| {
-                        let score = match_score(&query, alias)?;
+                        let score = match_score(
+                            &query,
+                            alias,
+                            fuzzy_search,
+                            &mut matcher,
+                            &mut matcher_buffer,
+                            &mut needle_buffer,
+                        )?;
                         Some(score)
                     })
                     .max_by_key(|score| (score.class, score.quality));
@@ -248,7 +277,14 @@ fn intent_priority(item: &SearchResult, query: &str) -> u8 {
     }
 }
 
-fn match_score(query: &str, title: &str) -> Option<MatchScore> {
+fn match_score(
+    query: &str,
+    title: &str,
+    fuzzy_search: bool,
+    matcher: &mut Matcher,
+    matcher_buffer: &mut Vec<char>,
+    needle_buffer: &mut Vec<char>,
+) -> Option<MatchScore> {
     if query.is_empty() {
         return Some(MatchScore {
             class: 0,
@@ -273,6 +309,16 @@ fn match_score(query: &str, title: &str) -> Option<MatchScore> {
             class: 2,
             quality: (1000 - text.chars().count() as i32).max(1),
         });
+    }
+    if fuzzy_search {
+        let haystack = Utf32Str::new(&text, matcher_buffer);
+        let needle = Utf32Str::new(query, needle_buffer);
+        if let Some(score) = matcher.fuzzy_match(haystack, needle) {
+            return Some(MatchScore {
+                class: 1,
+                quality: score as i32,
+            });
+        }
     }
     None
 }
@@ -304,7 +350,7 @@ mod tests {
         assert_eq!(core.search("calc")[0].title, "Calculator");
     }
     #[test]
-    fn does_not_support_fuzzy_typo() {
+    fn fuzzy_search_matches_typo_by_default() {
         let item = SearchResult {
             id: "1".into(),
             identity: "1".into(),
@@ -322,7 +368,57 @@ mod tests {
             icon: None,
             ranking_bias: 0,
         };
-        assert!(SearchCore::new(vec![item]).search("ntpd").is_empty());
+        assert_eq!(
+            SearchCore::new(vec![item]).search("ntpd")[0].title,
+            "Notepad"
+        );
+    }
+
+    #[test]
+    fn fuzzy_search_can_be_disabled() {
+        let item = SearchResult {
+            id: "1".into(),
+            identity: "1".into(),
+            title: "Notepad".into(),
+            category: ResultCategory::Application,
+            aliases: vec![],
+            location: "".into(),
+            launch_target: "notepad.exe".into(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: "test".into(),
+            sources: vec!["test".into()],
+            launch_entries: vec![],
+            actions: vec![],
+            icon: None,
+            ranking_bias: 0,
+        };
+        let core = SearchCore::new(vec![item]);
+        core.replace_fuzzy_search(false);
+        assert!(core.search("ntpd").is_empty());
+    }
+
+    #[test]
+    fn exact_match_is_ranked_before_fuzzy_match() {
+        let make = |id: &str, title: &str| SearchResult {
+            id: id.into(),
+            identity: id.into(),
+            title: title.into(),
+            category: ResultCategory::Application,
+            aliases: vec![],
+            location: "".into(),
+            launch_target: title.into(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: "test".into(),
+            sources: vec!["test".into()],
+            launch_entries: vec![],
+            actions: vec![],
+            icon: None,
+            ranking_bias: 0,
+        };
+        let core = SearchCore::new(vec![make("fuzzy", "Notepad"), make("exact", "ntpd")]);
+        assert_eq!(core.search("ntpd")[0].id, "exact");
     }
 
     #[test]

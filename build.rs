@@ -47,9 +47,24 @@ fn main() {
         })
         .collect::<Vec<_>>()
         .join(", ");
+    let open_website_translations = languages
+        .iter()
+        .map(|language| {
+            let path = std::path::Path::new("lang")
+                .join(language)
+                .join("LC_MESSAGES")
+                .join("wowie.po");
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            let value =
+                po_translation(&text, "Open website").unwrap_or_else(|| "Open website".into());
+            format!("({language:?}, {value:?})")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     let generated = format!(
         "pub const SUPPORTED_LANGUAGES: &[&str] = &[{language_list}];\n\
          pub const EXECUTE_COMMAND_TRANSLATIONS: &[(&str, &str)] = &[{shortcut_translations}];\n\
+         pub const OPEN_WEBSITE_TRANSLATIONS: &[(&str, &str)] = &[{open_website_translations}];\n\
          pub const EXIT_TRANSLATIONS: &[(&str, &str)] = &[{exit_translations}];\n"
     );
     std::fs::write(

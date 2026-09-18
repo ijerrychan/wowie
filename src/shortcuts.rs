@@ -1,11 +1,12 @@
 use crate::{
     config::ShortcutConfig,
     platform::SourceId,
-    result::{Action, ResultCategory, SearchResult},
+    result::{Action, IconSpec, ResultCategory, SearchResult},
 };
 use std::path::PathBuf;
 
 const COMMAND_PREFIX: &str = ">";
+const WEB_PREFIX: &str = "w";
 
 pub struct ShortcutProvider {
     configured: Vec<ShortcutConfig>,
@@ -37,14 +38,19 @@ impl ShortcutProvider {
 pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Vec<SearchResult> {
     let input = query;
     let query = input.trim();
-    if query.is_empty() && input.trim().is_empty() {
+    if query.is_empty() {
         return Vec::new();
     }
 
-    let mut definitions = Vec::with_capacity(configured.len() + 1);
+    let mut definitions = Vec::with_capacity(configured.len() + 2);
     definitions.push(ShortcutConfig {
         name: crate::i18n::execute_command_name(language).into(),
         prefix: COMMAND_PREFIX.into(),
+        template: String::new(),
+    });
+    definitions.push(ShortcutConfig {
+        name: crate::i18n::open_website_name(language).into(),
+        prefix: WEB_PREFIX.into(),
         template: String::new(),
     });
     definitions.extend(configured.iter().cloned());
@@ -60,7 +66,16 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
                 return None;
             }
             let preview = explicit && argument.is_empty();
-            let target = if shortcut.prefix == COMMAND_PREFIX {
+            let is_web = shortcut.prefix == WEB_PREFIX;
+            let web_target = is_web.then(|| web_url(argument)).flatten();
+            let web_target = web_target
+                .or_else(|| (is_web && explicit && !preview).then(|| fallback_web_url(argument)));
+            if is_web && !preview && !explicit && web_target.is_none() {
+                return None;
+            }
+            let target = if let Some(url) = &web_target {
+                PathBuf::from(url)
+            } else if shortcut.prefix == COMMAND_PREFIX {
                 command_shell()
             } else {
                 PathBuf::from(expand_template(&shortcut.template, argument))
@@ -70,7 +85,9 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
             } else {
                 String::new()
             };
-            let location = if shortcut.prefix == COMMAND_PREFIX {
+            let location = if is_web {
+                web_target.clone().unwrap_or_default()
+            } else if shortcut.prefix == COMMAND_PREFIX {
                 command_shell_label(&target)
             } else {
                 target.display().to_string()
@@ -78,11 +95,12 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
             let title = if preview {
                 shortcut.name.clone()
             } else {
-                format!("{} \"{}\"", shortcut.name, argument)
+                let display_argument = web_target.as_deref().unwrap_or(argument);
+                format!("{} \"{}\"", shortcut.name, display_argument)
             };
             let id = format!("shortcut:{}:{}", index, shortcut.prefix);
             let mut aliases = vec![format!("{} {}", shortcut.prefix, argument)];
-            if explicit {
+            if explicit || web_target.is_some() {
                 aliases.push(query.to_string());
             }
             Some(SearchResult {
@@ -92,7 +110,7 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
                 category: ResultCategory::Shortcut,
                 aliases,
                 location,
-                launch_target: target,
+                launch_target: target.clone(),
                 launch_arguments: launch_arguments.clone(),
                 launch_working_directory: None,
                 source: SourceId::Shortcut,
@@ -104,17 +122,19 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
                     vec![Action::Launch(crate::result::LaunchEntry {
                         source: SourceId::Shortcut,
                         path: PathBuf::new(),
-                        target: if shortcut.prefix == COMMAND_PREFIX {
-                            command_shell()
-                        } else {
-                            PathBuf::from(expand_template(&shortcut.template, argument))
-                        },
+                        target,
                         arguments: launch_arguments.clone(),
                         working_directory: None,
                     })]
                 },
-                icon: None,
-                ranking_bias: if explicit { 0 } else { -400 },
+                icon: if is_web {
+                    Some(IconSpec::DefaultOpen(PathBuf::from(
+                        web_target.as_deref().unwrap_or("https://example.com"),
+                    )))
+                } else {
+                    None
+                },
+                ranking_bias: 0,
             })
         })
         .collect()
@@ -131,6 +151,58 @@ fn expand_template(template: &str, query: &str) -> String {
         "{query}",
         &url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>(),
     )
+}
+
+fn web_url(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let candidate = if value.contains("://") {
+        value.to_owned()
+    } else {
+        format!("https://{value}")
+    };
+    let parsed = url::Url::parse(&candidate).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return None;
+    }
+    let host = parsed.host_str()?;
+    let obvious_host = host.eq_ignore_ascii_case("localhost") || is_valid_domain(host);
+    obvious_host.then(|| parsed.to_string())
+}
+
+fn is_valid_domain(host: &str) -> bool {
+    let labels = host.trim_end_matches('.').split('.').collect::<Vec<_>>();
+    if labels.len() < 2
+        || labels.iter().any(|label| {
+            label.is_empty()
+                || label.len() > 63
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        })
+    {
+        return false;
+    }
+    let top_level = labels.last().expect("domain has at least two labels");
+    top_level.len() >= 2
+        && top_level
+            .chars()
+            .any(|character| character.is_ascii_alphabetic())
+        && labels
+            .iter()
+            .any(|label| label.chars().any(|character| !character.is_ascii_digit()))
+}
+
+fn fallback_web_url(value: &str) -> String {
+    if value.starts_with("http://") || value.starts_with("https://") {
+        value.to_owned()
+    } else {
+        format!("https://{value}")
+    }
 }
 
 /// Resolve the user's likely command shell. The terminal application itself is
@@ -200,7 +272,7 @@ mod tests {
 
         let implicit = results("ipconfig", &[], "zh-CN");
         assert_eq!(implicit[0].title, "执行命令 \"ipconfig\"");
-        assert_eq!(implicit[0].ranking_bias, -400);
+        assert_eq!(implicit[0].ranking_bias, 0);
     }
 
     #[test]
@@ -210,6 +282,88 @@ mod tests {
         assert_eq!(preview[0].title, "执行命令");
         assert!(preview[0].actions.is_empty());
         assert_eq!(preview[0].ranking_bias, 0);
+    }
+
+    #[test]
+    fn web_shortcut_opens_explicit_and_implicit_urls() {
+        let explicit = results("w example.com/docs?q=rust", &[], "en");
+        let explicit = explicit
+            .into_iter()
+            .find(|item| item.title.starts_with("Open website"))
+            .expect("explicit web shortcut");
+        assert_eq!(
+            explicit.launch_target,
+            PathBuf::from("https://example.com/docs?q=rust")
+        );
+        assert_eq!(
+            explicit.title,
+            "Open website \"https://example.com/docs?q=rust\""
+        );
+        assert!(matches!(explicit.icon, Some(IconSpec::DefaultOpen(_))));
+
+        let implicit = results("https://example.com/docs", &[], "en");
+        let implicit = implicit
+            .into_iter()
+            .find(|item| item.title.starts_with("Open website"))
+            .expect("implicit web shortcut");
+        assert_eq!(
+            implicit.launch_target,
+            PathBuf::from("https://example.com/docs")
+        );
+        assert!(matches!(implicit.icon, Some(IconSpec::DefaultOpen(_))));
+        assert_eq!(implicit.ranking_bias, 0);
+    }
+
+    #[test]
+    fn web_shortcut_ignores_plain_text() {
+        for input in ["notepad", "123", "12345", "192.168", "999.999.999.999"] {
+            assert!(results(input, &[], "en")
+                .into_iter()
+                .all(|item| item.launch_target.to_string_lossy() != format!("https://{input}")));
+        }
+    }
+
+    #[test]
+    fn web_shortcut_requires_explicit_prefix_for_ip_addresses() {
+        let implicit_ipv4 = results("192.168.1.10", &[], "en")
+            .into_iter()
+            .any(|item| item.title.starts_with("Open website"));
+        assert!(!implicit_ipv4);
+
+        let implicit_ipv6 = results("[::1]", &[], "en")
+            .into_iter()
+            .any(|item| item.title.starts_with("Open website"));
+        assert!(!implicit_ipv6);
+
+        let explicit = results("w 192.168.1.10", &[], "en")
+            .into_iter()
+            .find(|item| item.title.starts_with("Open website"))
+            .expect("explicit IP web shortcut");
+        assert_eq!(
+            explicit.launch_target,
+            PathBuf::from("https://192.168.1.10")
+        );
+    }
+
+    #[test]
+    fn web_prefix_preview_uses_the_default_browser_icon() {
+        let preview = results("w ", &[], "en")
+            .into_iter()
+            .find(|item| item.title == "Open website")
+            .expect("web preview");
+        assert!(preview.actions.is_empty());
+        assert!(matches!(preview.icon, Some(IconSpec::DefaultOpen(_))));
+    }
+
+    #[test]
+    fn explicit_invalid_web_input_still_has_a_consistent_action() {
+        let result = results("w xxx", &[], "en")
+            .into_iter()
+            .find(|item| item.title.starts_with("Open website"))
+            .expect("explicit web action");
+        assert_eq!(result.launch_target, PathBuf::from("https://xxx"));
+        assert!(!result.actions.is_empty());
+        assert!(matches!(result.icon, Some(IconSpec::DefaultOpen(_))));
     }
 
     #[test]

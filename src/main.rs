@@ -66,6 +66,7 @@ fn main() -> Result<()> {
         config.shortcuts.clone(),
     );
     let engine = Arc::new(engine);
+    engine.replace_fuzzy_search(config.fuzzy_search);
     engine.replace_shortcut_language(config.language.clone());
     let icon_service = IconService::new();
     let results = Rc::new(VecModel::<ResultRow>::default());
@@ -447,6 +448,7 @@ fn main() -> Result<()> {
                     }
                     provider.apply_config(&updated.providers);
                     engine.replace_shortcuts(updated.shortcuts);
+                    engine.replace_fuzzy_search(updated.fuzzy_search);
                     engine.replace_shortcut_language(updated.language.clone());
                     engine.replace_plugin_language(updated.language.clone());
                     show_advanced_details.store(updated.show_advanced_details, Ordering::Release);
