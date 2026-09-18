@@ -8,7 +8,7 @@
 use crate::platform::source_ids;
 use crate::result::{Action, IconSpec, LaunchEntry, ResultCategory, SearchResult};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
 };
@@ -26,7 +26,7 @@ struct ProviderDefinition {
     discover: fn(&crate::config::ProviderConfig) -> Vec<SearchResult>,
 }
 
-const PROVIDER_DEFINITIONS: [ProviderDefinition; 7] = [
+const PROVIDER_DEFINITIONS: [ProviderDefinition; 6] = [
     ProviderDefinition {
         source: crate::platform::AppProviderSource::StoreApps,
         enabled: |config| config.store_apps,
@@ -46,11 +46,6 @@ const PROVIDER_DEFINITIONS: [ProviderDefinition; 7] = [
         source: crate::platform::AppProviderSource::ControlPanel,
         enabled: |config| config.control_panel,
         discover: crate::providers::control_panel::discover,
-    },
-    ProviderDefinition {
-        source: crate::platform::AppProviderSource::Settings,
-        enabled: |config| config.settings,
-        discover: crate::providers::settings::discover,
     },
     ProviderDefinition {
         source: crate::platform::AppProviderSource::Steam,
@@ -683,7 +678,7 @@ fn associate_file_entries(items: &mut Vec<SearchResult>) {
             }
             application.aliases.extend(item.aliases);
             application.sources.extend(item.sources);
-            application.launch_entries.extend(item.launch_entries);
+            merge_launch_entries(application, item.launch_entries);
         } else {
             unified.push(item);
         }
@@ -692,15 +687,8 @@ fn associate_file_entries(items: &mut Vec<SearchResult>) {
         item.sources
             .sort_by_key(|source| source.as_str().to_lowercase());
         item.sources.dedup();
-        item.launch_entries.sort_by(|left, right| {
-            left.source
-                .as_str()
-                .cmp(&right.source.as_str())
-                .then_with(|| left.path.cmp(&right.path))
-                .then_with(|| left.arguments.cmp(&right.arguments))
-        });
-        item.launch_entries.dedup();
         refresh_application_location(item);
+        refresh_display_location(item);
         refresh_launch_actions(item);
     }
     *items = unified;
@@ -845,33 +833,163 @@ fn refresh_launch_actions(item: &mut SearchResult) {
         .collect();
 }
 
+/// Merge launch provenance at the same point as application-record merging.
+/// The caller decides whether two records represent the same application;
+/// this helper then keeps only distinct launch behavior within that record.
+fn merge_launch_entries(existing: &mut SearchResult, incoming: Vec<LaunchEntry>) {
+    existing.launch_entries.extend(incoming);
+    dedup_launch_entries_by_behavior(&mut existing.launch_entries);
+}
+
+/// Keep one entry for each actual launch behavior. The discovered source and
+/// shortcut path are provenance metadata; they do not change what Windows
+/// launches. Arguments and working directory do change the behavior and must
+/// therefore remain part of the deduplication key.
+fn dedup_launch_entries_by_behavior(entries: &mut Vec<LaunchEntry>) {
+    entries.sort_by(|left, right| {
+        launch_behavior_key(left)
+            .cmp(&launch_behavior_key(right))
+            .then_with(|| source_priority(&left.source).cmp(&source_priority(&right.source)))
+            .then_with(|| left.source.as_str().cmp(&right.source.as_str()))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+
+    let mut seen = HashSet::new();
+    entries.retain(|entry| seen.insert(launch_behavior_key(entry)));
+}
+
+fn launch_behavior_key(entry: &LaunchEntry) -> (String, String, String) {
+    (
+        launch_behavior_target_key(&entry.target),
+        entry.arguments.clone(),
+        launch_behavior_working_directory_key(&entry.target, &entry.working_directory),
+    )
+}
+
+fn launch_behavior_target_key(target: &Path) -> String {
+    let value = target.to_string_lossy().trim().replace('/', "\\");
+    if let Ok(url) = Url::parse(&value) {
+        if matches!(url.scheme(), "http" | "https") {
+            return normalize_url(&value).unwrap_or(value);
+        }
+    }
+    normalize_path(Path::new(&value))
+}
+
+fn launch_behavior_working_directory_key(
+    target: &Path,
+    working_directory: &Option<PathBuf>,
+) -> String {
+    if let Some(path) = working_directory {
+        return normalize_path(path);
+    }
+
+    // When a shortcut omits its working directory, Windows commonly uses the
+    // executable's parent directory. Treat that implicit value as equivalent
+    // to an explicit shortcut working directory pointing at the same parent.
+    if !is_shell_namespace(target) && !looks_like_uri(target) {
+        if let Some(parent) = target.parent() {
+            return normalize_path(parent);
+        }
+    }
+    String::new()
+}
+
 fn refresh_application_location(item: &mut SearchResult) {
-    if !is_store_application(item) {
+    // Control Panel deliberately keeps its user-facing location hidden; its
+    // Shell parsing name is an implementation detail used only for launch.
+    if item.category == ResultCategory::ControlPanel {
         return;
     }
-    if let Some(entry) = item
+    let Some((target, arguments, working_directory, path)) =
+        preferred_launch_entry(item).map(|entry| {
+            (
+                entry.target.clone(),
+                entry.arguments.clone(),
+                entry.working_directory.clone(),
+                entry.path.clone(),
+            )
+        })
+    else {
+        return;
+    };
+    item.location = target.display().to_string();
+
+    // Keep the default launch tied to the selected entry. For a shortcut,
+    // launching the .lnk preserves ShellLink metadata; its resolved target
+    // and arguments are used for presentation only.
+    if is_store_application(item) || !is_shortcut_path(&path) {
+        item.launch_target = target;
+        item.launch_arguments = arguments;
+        item.launch_working_directory = working_directory;
+    } else {
+        item.launch_target = path;
+        item.launch_arguments.clear();
+        item.launch_working_directory = working_directory;
+    }
+}
+
+/// Prefer the same indexed entry for both the displayed location and the
+/// default icon/launch target. Source priority is applied after excluding
+/// Shell namespace targets, URLs, and updater launchers when a better target
+/// exists. This keeps presentation aligned with the provider merge policy.
+pub(crate) fn preferred_launch_entry(item: &SearchResult) -> Option<&LaunchEntry> {
+    let concrete = item
         .launch_entries
         .iter()
         .filter(|entry| !is_shell_namespace(&entry.target) && !looks_like_uri(&entry.target))
+        .collect::<Vec<_>>();
+    let candidates = if concrete
+        .iter()
+        .any(|entry| !crate::platform::windows_rules::is_updater_path(&entry.target))
+    {
+        concrete
+            .into_iter()
+            .filter(|entry| !crate::platform::windows_rules::is_updater_path(&entry.target))
+            .collect::<Vec<_>>()
+    } else {
+        concrete
+    };
+    candidates
+        .into_iter()
         .min_by_key(|entry| {
-            let is_update = crate::platform::windows_rules::is_updater_path(&entry.target);
             (
-                is_update,
-                entry.source != crate::platform::SourceId::AppsFolder,
+                entry.source.priority(),
                 entry.target.to_string_lossy().to_lowercase(),
+                entry.arguments.clone(),
+                entry.working_directory.clone(),
             )
         })
-    {
-        item.location = entry.target.display().to_string();
-        // Use the concrete app executable as the default launch target. Keep
-        // updater/alternate launchers in launch_entries/actions, but do not
-        // let an updater determine the default icon or primary launch.
-        item.launch_target = entry.target.clone();
-        item.launch_arguments = entry.arguments.clone();
-        item.launch_working_directory = entry.working_directory.clone();
-    } else {
-        item.location = item.launch_target.display().to_string();
+        .or_else(|| {
+            item.launch_entries.iter().min_by_key(|entry| {
+                (
+                    entry.source.priority(),
+                    entry.target.to_string_lossy().to_lowercase(),
+                    entry.arguments.clone(),
+                    entry.working_directory.clone(),
+                )
+            })
+        })
+}
+
+pub(crate) fn is_default_launch_entry(item: &SearchResult, entry: &LaunchEntry) -> bool {
+    preferred_launch_entry(item)
+        .is_some_and(|default| launch_behavior_key(default) == launch_behavior_key(entry))
+}
+
+fn refresh_display_location(item: &mut SearchResult) {
+    if item.category == ResultCategory::ControlPanel {
+        return;
     }
+    if let Some(target) = preferred_launch_entry(item).map(|entry| entry.target.clone()) {
+        item.location = target.display().to_string();
+    }
+}
+
+fn is_shortcut_path(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case(crate::platform::windows_rules::SHORTCUT_EXTENSION)
+    })
 }
 
 fn target_stem_alias(title: &str, target: &Path) -> Vec<String> {
@@ -986,6 +1104,10 @@ fn aumid_identity(aumid: &str) -> String {
 fn merge_by_identity(items: &mut Vec<SearchResult>) {
     let mut grouped = HashMap::<String, SearchResult>::new();
     for mut item in std::mem::take(items) {
+        // Establish the launch-entry invariant for records that arrive here
+        // without passing through file association (including provider tests
+        // and future providers with multiple entries per record).
+        dedup_launch_entries_by_behavior(&mut item.launch_entries);
         let mut aliases = std::mem::take(&mut item.aliases);
         aliases.push(item.title.clone());
         if item.identity.starts_with("exe:") {
@@ -1020,7 +1142,7 @@ fn merge_by_identity(items: &mut Vec<SearchResult>) {
                 }
                 existing.aliases.extend(aliases);
                 existing.sources.extend(item.sources);
-                existing.launch_entries.extend(item.launch_entries);
+                merge_launch_entries(existing, item.launch_entries);
                 if source_priority(&item.source) < source_priority(&existing.source) {
                     let preserved_aliases = std::mem::take(&mut existing.aliases);
                     let preserved_sources = std::mem::take(&mut existing.sources);
@@ -1048,14 +1170,6 @@ fn merge_by_identity(items: &mut Vec<SearchResult>) {
         item.sources
             .sort_by_key(|source| source.as_str().to_lowercase());
         item.sources.dedup();
-        item.launch_entries.sort_by(|left, right| {
-            left.source
-                .as_str()
-                .cmp(&right.source.as_str())
-                .then_with(|| left.path.cmp(&right.path))
-                .then_with(|| left.arguments.cmp(&right.arguments))
-        });
-        item.launch_entries.dedup();
         refresh_application_location(item);
         refresh_launch_actions(item);
     }
@@ -1428,6 +1542,31 @@ mod tests {
     }
 
     #[test]
+    fn display_location_prefers_executable_target_over_lnk_path() {
+        let mut application = item("exe:c:\\apps\\demo.exe", "Demo", "StartMenu");
+        application.location = r"C:\Start Menu\Demo.lnk".into();
+        application.launch_entries = vec![
+            LaunchEntry {
+                source: "StartMenu".into(),
+                path: PathBuf::from(r"C:\Start Menu\Demo.lnk"),
+                target: PathBuf::from(r"C:\Start Menu\Demo.lnk"),
+                arguments: String::new(),
+                working_directory: None,
+            },
+            LaunchEntry {
+                source: "AppsFolder".into(),
+                path: PathBuf::from(r"shell:AppsFolder\Vendor.Demo"),
+                target: PathBuf::from(r"C:\Apps\Demo.exe"),
+                arguments: String::new(),
+                working_directory: None,
+            },
+        ];
+        refresh_display_location(&mut application);
+        assert_eq!(application.location, r"C:\Apps\Demo.exe");
+        assert_eq!(application.launch_target, PathBuf::from("target.exe"));
+    }
+
+    #[test]
     fn virtual_apps_folder_shortcut_uses_shell_identity() {
         assert_eq!(
             apps_folder_identity(
@@ -1559,6 +1698,56 @@ mod tests {
             .iter()
             .any(|alias| alias == "desktop alias"));
         assert!(items[0].aliases.iter().any(|alias| alias == "start alias"));
+    }
+
+    #[test]
+    fn launch_entries_deduplicate_provenance_but_keep_distinct_behavior() {
+        let identity = "exe:c:\\apps\\demo.exe";
+        let mut application = item(identity, "Demo", "AppsFolder");
+        application.launch_entries = vec![
+            LaunchEntry {
+                source: "AppsFolder".into(),
+                path: PathBuf::from(r"shell:AppsFolder\Vendor.Demo"),
+                target: PathBuf::from(r"C:\Apps\demo.exe"),
+                arguments: String::new(),
+                working_directory: None,
+            },
+            LaunchEntry {
+                source: "StartMenu".into(),
+                path: PathBuf::from(r"C:\Start Menu\Demo.lnk"),
+                target: PathBuf::from(r"c:/apps/DEMO.exe"),
+                arguments: String::new(),
+                working_directory: None,
+            },
+            LaunchEntry {
+                source: "Desktop".into(),
+                path: PathBuf::from(r"C:\Users\User\Desktop\Demo.lnk"),
+                target: PathBuf::from(r"C:\Apps\demo.exe"),
+                arguments: "--profile work".into(),
+                working_directory: None,
+            },
+            LaunchEntry {
+                source: "CustomDirectories".into(),
+                path: PathBuf::from(r"C:\Tools\Demo.lnk"),
+                target: PathBuf::from(r"C:\Apps\demo.exe"),
+                arguments: String::new(),
+                working_directory: Some(PathBuf::from(r"C:\Other")),
+            },
+        ];
+
+        let mut items = vec![application];
+        merge_by_identity(&mut items);
+        application = items.pop().expect("merged item");
+
+        assert_eq!(application.launch_entries.len(), 3);
+        assert!(application
+            .launch_entries
+            .iter()
+            .any(|entry| entry.arguments == "--profile work"));
+        assert!(application
+            .launch_entries
+            .iter()
+            .any(|entry| entry.working_directory.as_deref() == Some(Path::new(r"C:\Other"))));
     }
 
     #[test]

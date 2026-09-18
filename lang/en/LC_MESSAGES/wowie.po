@@ -32,6 +32,14 @@ msgid "Website"
 msgstr "Website"
 
 msgctxt "Launcher"
+msgid "Shortcut"
+msgstr "Shortcut"
+
+msgctxt "Launcher"
+msgid "Store application"
+msgstr "Store application"
+
+msgctxt "Launcher"
 msgid "Control Panel"
 msgstr "Control Panel"
 
@@ -48,5 +56,25 @@ msgid "Other"
 msgstr "Other"
 
 msgctxt "Launcher"
+msgid "Execute Command"
+msgstr "Execute Command"
+
+msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  Navigate     Enter  Open     Esc  Hide"
+
+msgctxt "ContextMenu"
+msgid "Open containing folder"
+msgstr "Open containing folder"
+
+msgctxt "ContextMenu"
+msgid "Run as administrator"
+msgstr "Run as administrator"
+
+msgctxt "ContextMenu"
+msgid "Other launch entries"
+msgstr "Other launch entries"
+
+msgctxt "Tray"
+msgid "Exit"
+msgstr "Exit"

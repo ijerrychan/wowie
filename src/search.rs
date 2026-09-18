@@ -7,6 +7,7 @@ pub struct SearchCore {
     results: Mutex<Vec<SearchResult>>,
     plugins: PluginManager,
     dynamic_results: Mutex<Vec<SearchResult>>,
+    shortcuts: Option<Mutex<crate::shortcuts::ShortcutProvider>>,
 }
 
 impl SearchCore {
@@ -16,14 +17,38 @@ impl SearchCore {
             results: Mutex::new(results),
             plugins: PluginManager::discover_with_locale("en"),
             dynamic_results: Mutex::new(Vec::new()),
+            shortcuts: None,
         }
     }
 
-    pub fn with_plugins(results: Vec<SearchResult>, plugins: PluginManager) -> Self {
+    pub fn with_plugins_and_shortcuts(
+        results: Vec<SearchResult>,
+        plugins: PluginManager,
+        shortcuts: Vec<crate::config::ShortcutConfig>,
+    ) -> Self {
         Self {
             results: Mutex::new(results),
             plugins,
             dynamic_results: Mutex::new(Vec::new()),
+            shortcuts: Some(Mutex::new(crate::shortcuts::ShortcutProvider::new(
+                shortcuts,
+            ))),
+        }
+    }
+
+    pub fn replace_shortcuts(&self, shortcuts: Vec<crate::config::ShortcutConfig>) {
+        if let Some(provider) = &self.shortcuts {
+            if let Ok(mut provider) = provider.lock() {
+                provider.replace_config(shortcuts);
+            }
+        }
+    }
+
+    pub fn replace_shortcut_language(&self, language: String) {
+        if let Some(provider) = &self.shortcuts {
+            if let Ok(mut provider) = provider.lock() {
+                provider.set_language(language);
+            }
         }
     }
     pub fn by_id(&self, id: &str) -> Option<SearchResult> {
@@ -67,7 +92,8 @@ impl SearchCore {
     }
 
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
-        let query = query.trim().to_lowercase();
+        let raw_query = query.trim().to_owned();
+        let query = raw_query.to_lowercase();
         let debug = std::env::var_os("WOWIE_SEARCH_DEBUG").is_some_and(|value| value != "0");
         if debug {
             eprintln!(
@@ -85,10 +111,22 @@ impl SearchCore {
             .map(|results| results.clone())
             .unwrap_or_default();
         let dynamic = self.plugins.query(&query);
-        if let Ok(mut cached) = self.dynamic_results.lock() {
-            cached.extend(dynamic.iter().cloned());
+        all.extend(dynamic.iter().cloned());
+        let mut generated_shortcuts = Vec::new();
+        if let Some(provider) = &self.shortcuts {
+            if let Ok(provider) = provider.lock() {
+                generated_shortcuts = provider.results(&raw_query);
+            }
+            all.extend(generated_shortcuts.iter().cloned());
         }
-        all.extend(dynamic);
+        // Launch callbacks resolve rows by id after the search worker returns.
+        // Keep only the current query's dynamic records so a repeated shortcut
+        // id cannot resolve to an older command or URL.
+        if let Ok(mut cached) = self.dynamic_results.lock() {
+            cached.clear();
+            cached.extend(dynamic);
+            cached.extend(generated_shortcuts);
+        }
         let mut ranked: Vec<(i32, &SearchResult)> = all
             .iter()
             .filter_map(|item| {
@@ -358,5 +396,17 @@ mod tests {
             ..first.clone()
         };
         assert_eq!(SearchCore::new(vec![first, second]).search("calc").len(), 2);
+    }
+
+    #[test]
+    fn generated_shortcuts_can_be_resolved_for_launch() {
+        let core = SearchCore::with_plugins_and_shortcuts(
+            Vec::new(),
+            PluginManager::discover_with_locale("en"),
+            Vec::new(),
+        );
+        let found = core.search("> ipconfig");
+        let item = core.by_id(&found[0].id).expect("shortcut result by id");
+        assert!(item.title.ends_with("\"ipconfig\""));
     }
 }

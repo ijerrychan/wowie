@@ -44,16 +44,15 @@ fn resolve_uncached(item: &SearchResult) -> Option<IconData> {
         return Some(icon);
     }
 
-    let icon_target = item
-        .launch_entries
-        .iter()
-        .filter(|entry| {
-            !crate::platform::windows_rules::is_shell_namespace(&entry.target)
-                && !crate::platform::windows_rules::is_updater_path(&entry.target)
-        })
-        .min_by_key(|entry| entry.target.to_string_lossy().to_lowercase())
+    let icon_target = crate::providers::app::preferred_launch_entry(item)
         .map(|entry| &entry.target)
         .unwrap_or(&item.launch_target);
+
+    if matches!(item.source, crate::platform::SourceId::Shortcut) {
+        if let Some(icon) = fetch_favicon(&item.launch_target) {
+            return Some(icon);
+        }
+    }
 
     crate::platform::application_icon(icon_target).or_else(|| {
         item.launch_entries
@@ -61,6 +60,34 @@ fn resolve_uncached(item: &SearchResult) -> Option<IconData> {
             .map(|entry| &entry.path)
             .filter(|path| !crate::platform::windows_rules::is_shortcut_path(path))
             .find_map(|path| crate::platform::application_icon(path))
+    })
+}
+
+fn fetch_favicon(target: &Path) -> Option<IconData> {
+    let origin = favicon_origin(target)?;
+    let favicon = format!("{origin}/favicon.ico");
+    let output = std::process::Command::new("curl.exe")
+        .args([
+            "-fsSL",
+            "--max-time",
+            "2",
+            "--max-filesize",
+            "1048576",
+            &favicon,
+        ])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    decode_image(&output.stdout)
+}
+
+fn decode_image(bytes: &[u8]) -> Option<IconData> {
+    let image = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let (width, height) = image.dimensions();
+    Some(IconData {
+        width,
+        height,
+        rgba: image.into_raw(),
     })
 }
 
@@ -77,13 +104,7 @@ fn resolve_spec(spec: &IconSpec) -> Option<IconData> {
 
 fn load_png_icon(path: &Path) -> Option<IconData> {
     let bytes = std::fs::read(path).ok()?;
-    let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
-    let (width, height) = image.dimensions();
-    Some(IconData {
-        width,
-        height,
-        rgba: image.into_raw(),
-    })
+    decode_image(&bytes)
 }
 
 fn icon_source_key(item: &SearchResult) -> String {
@@ -111,12 +132,34 @@ fn icon_source_key(item: &SearchResult) -> String {
         };
     }
 
+    if matches!(item.source, crate::platform::SourceId::Shortcut) {
+        if let Some(origin) = favicon_origin(&item.launch_target) {
+            return format!("favicon:{origin}");
+        }
+    }
+
     let fallback = item
         .launch_entries
         .first()
         .map(|entry| entry.target.display().to_string())
         .unwrap_or_else(|| item.launch_target.display().to_string());
     format!("fallback:{fallback}")
+}
+
+fn favicon_origin(target: &Path) -> Option<String> {
+    let value = target.to_str()?;
+    let parsed = url::Url::parse(value).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_str()?;
+    let port = parsed.port_or_known_default().filter(|port| {
+        (*port != 80 || parsed.scheme() != "http") && (*port != 443 || parsed.scheme() != "https")
+    });
+    Some(match port {
+        Some(port) => format!("{}://{host}:{port}", parsed.scheme()),
+        None => format!("{}://{host}", parsed.scheme()),
+    })
 }
 
 #[cfg(test)]
@@ -163,6 +206,17 @@ mod tests {
         let mut second = test_result("two");
         first.icon = Some(IconSpec::DefaultOpen(PathBuf::from("one.txt")));
         second.icon = Some(IconSpec::DefaultOpen(PathBuf::from("two.TXT")));
+        assert_eq!(icon_source_key(&first), icon_source_key(&second));
+    }
+
+    #[test]
+    fn favicon_cache_key_ignores_query_parameters() {
+        let mut first = test_result("one");
+        let mut second = test_result("two");
+        first.source = "Shortcut".into();
+        second.source = "Shortcut".into();
+        first.launch_target = PathBuf::from("https://example.com/search?q=one");
+        second.launch_target = PathBuf::from("https://example.com/search?q=two");
         assert_eq!(icon_source_key(&first), icon_source_key(&second));
     }
 

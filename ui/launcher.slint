@@ -1,12 +1,13 @@
 import { VerticalBox, ListView } from "std-widgets.slint";
 
-export struct ResultRow { id: string, title: string, location: string, icon: image, category: string }
+export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, category: string }
+export struct ContextActionRow { id: string, title: string, subtitle: string, kind: string }
 
 export component Launcher inherits Window {
     title: "Wowie";
     no-frame: true;
     width: window-width * 1px;
-    height: search-field.text == "" ? 70px : results.length > 0 ? min(538px, 140px + results.length * root.result-row-height) : 224px;
+    height: search-field.text == "" ? 68px : results.length > 0 ? min(538px, 140px + results.length * root.result-row-height) : 224px;
     background: transparent;
 
     in-out property <int> window-width: 680;
@@ -19,14 +20,18 @@ export component Launcher inherits Window {
     in-out property <string> last-action-result: "";
     in-out property <string> last-action-subtitle: "";
     in property <[ResultRow]> results;
+    in property <bool> context-menu-open: false;
     in-out property <int> selected-index: -1;
     callback query-changed(string);
     callback visible-range-changed(int, int);
     callback launch-requested(int);
+    callback context-menu-requested(int);
+    callback context-menu-dismissed;
     callback dismiss-requested;
 
     private property <length> result-row-height: 56px;
     private property <int> first-visible-index: max(0, round(-results-list.content-y / root.result-row-height));
+    private property <bool> context-click-consumed: false;
     private property <int> last-visible-index: min(root.results.length, round((-results-list.content-y + results-list.visible-height) / root.result-row-height) + 1);
     private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
     private property <color> surface: root.dark-mode ? #292929 : #ffffff;
@@ -53,7 +58,7 @@ export component Launcher inherits Window {
     changed last-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
 
     Rectangle {
-        x: 4px; y: 3px; width: parent.width - 8px; height: parent.height - 8px;
+        x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px;
         background: root.canvas;
         border-color: root.border;
         border-width: 1px;
@@ -68,8 +73,7 @@ export component Launcher inherits Window {
                 height: 40px;
                 background: transparent;
 
-                Rectangle { x: 15px; y: 10px; width: 15px; height: 15px; background: transparent; border-color: root.text-secondary; border-width: 2px; border-radius: 8px; }
-                Rectangle { x: 28px; y: 23px; width: 7px; height: 2px; background: root.text-secondary; }
+                Text { x: 14px; y: 0px; width: 24px; height: parent.height; text: "🔍"; color: root.text-secondary; font-size: 17px; horizontal-alignment: center; vertical-alignment: center; }
                 Text { x: 48px; y: 0px; width: parent.width - 126px; height: parent.height; text: @tr("Search applications"); color: root.text-tertiary; font-size: 16px; vertical-alignment: center; visible: search-field.text == ""; }
                 search-field := TextInput {
                     x: 48px; y: 0px; width: parent.width - 126px; height: parent.height;
@@ -88,11 +92,6 @@ export component Launcher inherits Window {
                 Text { x: parent.width - 58px; y: 0px; width: 46px; height: parent.height; text: "Esc"; color: root.text-tertiary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
             }
 
-            if (root.launch-error != "") : Rectangle {
-                height: 34px; background: transparent;
-                Text { x: 6px; y: 0px; width: parent.width - 12px; height: parent.height; text: @tr("Could not open application") + ": " + root.launch-error; color: #d96c6c; font-size: 11px; vertical-alignment: center; overflow: elide; }
-            }
-
             if (search-field.text != "") : Rectangle {
                 height: 24px; background: transparent;
                 Text { x: 6px; y: 0px; width: parent.width - 12px; height: parent.height; text: @tr("{} results", root.result-count); color: root.text-tertiary; font-size: 11px; vertical-alignment: center; }
@@ -106,7 +105,28 @@ export component Launcher inherits Window {
                     border-radius: 10px;
                     animate background { duration: 100ms; }
                     Rectangle { x: 0px; y: 12px; width: index == root.selected-index ? 3px : 0px; height: 32px; background: root.accent; border-radius: 2px; animate width { duration: 100ms; } }
-                    item-area := TouchArea { clicked => { root.launch-requested(index); } }
+                    item-area := TouchArea {
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                root.context-menu-requested(index);
+                                EventResult.accept
+                            } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down && root.context-menu-open) {
+                                root.context-click-consumed = true;
+                                root.context-menu-dismissed();
+                                EventResult.accept
+                            } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                                if (root.context-click-consumed) {
+                                    root.context-click-consumed = false;
+                                    EventResult.accept
+                                } else {
+                                    root.launch-requested(index);
+                                    EventResult.accept
+                                }
+                            } else {
+                                EventResult.reject
+                            }
+                        }
+                    }
                     Rectangle {
                         x: 12px; y: 10px; width: 36px; height: 36px;
                         background: root.dark-mode ? #373737 : #ffffff;
@@ -117,11 +137,11 @@ export component Launcher inherits Window {
                     VerticalBox {
                         x: 60px; y: 5px; width: parent.width - 76px; height: 40px; spacing: 2px;
                         Text { text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: 14px; font-weight: 500; overflow: elide; }
-                        Text { width: parent.width - 78px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
+                        Text { width: parent.width - 78px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "store-application" ? @tr("Store application") : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
                     }
                     Text {
                         x: parent.width - 76px; y: 17px; width: 68px; height: 22px;
-                        text: row.category == "game" ? @tr("Game") : row.category == "website" ? @tr("Website") : row.category == "document" ? @tr("Document") : row.category == "other" ? @tr("Other") : row.category == "control-panel" ? @tr("Control Panel") : row.category == "settings" ? @tr("Settings") : @tr("Application");
+                        text: row.category == "game" ? @tr("Game") : row.category == "website" ? @tr("Website") : row.category == "shortcut" ? @tr("Shortcut") : row.category == "document" ? @tr("Document") : row.category == "other" ? @tr("Other") : row.category == "control-panel" ? @tr("Control Panel") : @tr("Application");
                         color: root.text-tertiary; font-size: 10px;
                         horizontal-alignment: center; vertical-alignment: center;
                     }
@@ -137,4 +157,62 @@ export component Launcher inherits Window {
             }
         }
     }
+    if (root.launch-error != "") : Rectangle {
+        x: 18px; y: parent.height - 38px; width: parent.width - 36px; height: 26px;
+        background: root.dark-mode ? #3b2525 : #fff0f0;
+        border-color: #b85c5c; border-width: 1px; border-radius: 6px;
+        Text { x: 8px; y: 0px; width: parent.width - 16px; height: parent.height; text: @tr("Could not open application") + ": " + root.launch-error; color: #d96c6c; font-size: 11px; vertical-alignment: center; overflow: elide; }
+    }
+}
+
+export component ContextMenu inherits Window {
+    title: "Wowie Context Menu";
+    no-frame: true;
+    width: 292px;
+    height: max(48px, 16px + root.actions.length * 32px);
+    background: transparent;
+
+    in property <bool> dark-mode: true;
+    in property <color> accent-color: #0067c0;
+    in property <[ContextActionRow]> actions;
+    callback action-requested(string);
+    callback dismissed;
+
+    private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
+    private property <color> surface: root.dark-mode ? #292929 : #ffffff;
+    private property <color> hover: root.dark-mode ? #383838 : #eef1f5;
+    private property <color> border: root.dark-mode ? #484848 : #d9dde5;
+    private property <color> text-primary: root.dark-mode ? #f5f5f5 : #1b1b1f;
+    private property <color> text-secondary: root.dark-mode ? #b6b6b6 : #5d5f66;
+
+    Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        background: root.canvas;
+        border-color: root.border;
+        border-width: 1px;
+        border-radius: 8px;
+        clip: true;
+
+        for action[index] in root.actions : Rectangle {
+            x: 1px; y: 8px + index * 32px; width: parent.width - 2px; height: 32px;
+            background: action.kind == "section" ? root.canvas : action-area.has-hover ? root.hover : root.canvas;
+            action-area := TouchArea {
+                enabled: action.kind != "section";
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                        root.action-requested(action.id);
+                        EventResult.accept
+                    } else {
+                        EventResult.reject
+                    }
+                }
+            }
+            VerticalBox {
+                x: 14px; y: 1px; width: parent.width - 28px; height: 30px; spacing: 0px;
+                Text { text: action.kind == "section" ? @tr("Other launch entries") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.title; color: action.kind == "section" ? root.text-secondary : root.text-primary; font-size: action.kind == "section" ? 11px : 13px; vertical-alignment: center; overflow: elide; }
+                Text { text: action.subtitle; color: root.text-secondary; font-size: 10px; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
+            }
+        }
+    }
+
 }

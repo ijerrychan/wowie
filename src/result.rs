@@ -16,8 +16,8 @@ pub enum ResultCategory {
     Application,
     Game,
     Website,
+    Shortcut,
     ControlPanel,
-    Settings,
     Document,
     Other,
 }

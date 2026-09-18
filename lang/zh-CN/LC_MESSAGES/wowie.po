@@ -32,6 +32,14 @@ msgid "Website"
 msgstr "网址"
 
 msgctxt "Launcher"
+msgid "Shortcut"
+msgstr "快捷指令"
+
+msgctxt "Launcher"
+msgid "Store application"
+msgstr "商店应用"
+
+msgctxt "Launcher"
 msgid "Control Panel"
 msgstr "控制面板"
 
@@ -48,5 +56,25 @@ msgid "Other"
 msgstr "其他"
 
 msgctxt "Launcher"
+msgid "Execute Command"
+msgstr "执行命令"
+
+msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  导航     Enter  打开     Esc  隐藏"
+
+msgctxt "ContextMenu"
+msgid "Open containing folder"
+msgstr "打开所在目录"
+
+msgctxt "ContextMenu"
+msgid "Run as administrator"
+msgstr "以管理员身份运行"
+
+msgctxt "ContextMenu"
+msgid "Other launch entries"
+msgstr "其他启动入口"
+
+msgctxt "Tray"
+msgid "Exit"
+msgstr "退出"

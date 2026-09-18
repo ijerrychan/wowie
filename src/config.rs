@@ -20,7 +20,16 @@ pub struct Config {
     pub language: String,
     pub show_on_startup: bool,
     pub hide_on_focus_loss: bool,
+    pub show_advanced_details: bool,
+    pub shortcuts: Vec<ShortcutConfig>,
     pub providers: ProviderConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShortcutConfig {
+    pub name: String,
+    pub prefix: String,
+    pub template: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,7 +39,6 @@ pub struct ProviderConfig {
     pub start_menu: bool,
     pub desktop: bool,
     pub control_panel: bool,
-    pub settings: bool,
     pub steam: bool,
     pub steam_excluded_app_ids: Vec<String>,
     pub steam_excluded_name_markers: Vec<String>,
@@ -45,7 +53,6 @@ impl Default for ProviderConfig {
             start_menu: true,
             desktop: true,
             control_panel: true,
-            settings: true,
             steam: true,
             steam_excluded_app_ids: vec!["228980".into()],
             steam_excluded_name_markers: vec!["redistributable".into()],
@@ -65,6 +72,12 @@ impl Default for Config {
             language: DEFAULT_LANGUAGE.into(),
             show_on_startup: true,
             hide_on_focus_loss: true,
+            show_advanced_details: false,
+            shortcuts: vec![ShortcutConfig {
+                name: "Search with Google".into(),
+                prefix: "g".into(),
+                template: "https://www.google.com/search?q={query}".into(),
+            }],
             providers: ProviderConfig::default(),
         }
     }
@@ -105,6 +118,16 @@ impl Config {
         if self.language != "system" && !crate::i18n::is_supported_language(&self.language) {
             self.language = DEFAULT_LANGUAGE.into();
         }
+        for shortcut in &mut self.shortcuts {
+            shortcut.name = shortcut.name.trim().to_string();
+            shortcut.prefix = shortcut.prefix.trim().to_string();
+            shortcut.template = shortcut.template.trim().to_string();
+        }
+        self.shortcuts.retain(|shortcut| {
+            !shortcut.name.is_empty()
+                && !shortcut.prefix.is_empty()
+                && shortcut.template.contains("{query}")
+        });
         self.providers
             .steam_excluded_app_ids
             .retain(|value| !value.trim().is_empty());
@@ -182,6 +205,11 @@ mod tests {
         assert_eq!(config.hotkey, "Alt+Space");
         assert!(config.show_on_startup);
         assert!(config.hide_on_focus_loss);
+        assert!(!config.show_advanced_details);
+        assert!(config
+            .shortcuts
+            .iter()
+            .any(|shortcut| { shortcut.prefix == "g" && shortcut.name == "Search with Google" }));
         assert!(config.providers.steam);
         assert!(config.providers.desktop);
         assert!(config.providers.indexed_directories.is_empty());

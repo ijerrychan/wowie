@@ -12,6 +12,7 @@ mod windows;
 pub enum PlatformEvent {
     TogglePalette,
     SystemThemeChanged,
+    Quit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,7 +21,6 @@ pub enum AppProviderSource {
     StartMenu,
     Desktop,
     ControlPanel,
-    Settings,
     Steam,
     CustomDirectories,
 }
@@ -32,9 +32,9 @@ pub enum SourceId {
     StartMenu,
     Desktop,
     ControlPanel,
-    Settings,
     Steam,
     ExecutionAlias,
+    Shortcut,
     CustomDirectories,
     Custom(String),
 }
@@ -47,9 +47,9 @@ impl SourceId {
             Self::StartMenu => Cow::Borrowed("StartMenu"),
             Self::Desktop => Cow::Borrowed("Desktop"),
             Self::ControlPanel => Cow::Borrowed("ControlPanel"),
-            Self::Settings => Cow::Borrowed("Settings"),
             Self::Steam => Cow::Borrowed("Steam"),
             Self::ExecutionAlias => Cow::Borrowed("ExecutionAlias"),
+            Self::Shortcut => Cow::Borrowed("Shortcut"),
             Self::CustomDirectories => Cow::Borrowed("CustomDirectories"),
             Self::Custom(value) => Cow::Borrowed(value),
         }
@@ -62,9 +62,9 @@ impl SourceId {
             Self::StartMenu => 2,
             Self::Desktop => 3,
             Self::ExecutionAlias
+            | Self::Shortcut
             | Self::Steam
             | Self::ControlPanel
-            | Self::Settings
             | Self::CustomDirectories
             | Self::Custom(_) => 4,
         }
@@ -93,9 +93,9 @@ impl From<&str> for SourceId {
             "StartMenu" => Self::StartMenu,
             "Desktop" => Self::Desktop,
             "ControlPanel" => Self::ControlPanel,
-            "Settings" => Self::Settings,
             "Steam" => Self::Steam,
             "ExecutionAlias" => Self::ExecutionAlias,
+            "Shortcut" => Self::Shortcut,
             "CustomDirectories" => Self::CustomDirectories,
             value => Self::Custom(value.to_owned()),
         }
@@ -125,7 +125,6 @@ pub mod source_ids {
     pub const START_MENU: &str = "StartMenu";
     pub const DESKTOP: &str = "Desktop";
     pub const CONTROL_PANEL: &str = "ControlPanel";
-    pub const SETTINGS: &str = "Settings";
     pub const STEAM: &str = "Steam";
     pub const CUSTOM_DIRECTORIES: &str = "CustomDirectories";
 }
@@ -218,12 +217,44 @@ pub trait PlatformIntegration: Send + Sync {
         hotkey: &str,
         watch_system_theme: bool,
     ) -> Result<std::sync::mpsc::Receiver<PlatformEvent>>;
+    fn start_tray(&self, exit_label: String) -> std::sync::mpsc::Receiver<PlatformEvent>;
     fn system_prefers_dark_theme(&self) -> bool;
     fn system_accent_color(&self) -> u32;
     fn position_palette(&self, window: &slint::Window);
+    fn position_context_menu(&self, window: &slint::Window);
+    fn activate_context_menu(&self, window: &slint::Window);
+    fn is_window_focused(&self, window: &slint::Window) -> bool;
     fn activate_palette(&self, window: &slint::Window);
     fn install_focus_listener(&self, window: &slint::Window, on_lost_focus: Box<dyn Fn()>);
     fn disable_window_transitions(&self, window: &slint::Window);
+}
+
+#[cfg(not(debug_assertions))]
+pub struct SingleInstanceGuard {
+    #[cfg(windows)]
+    handle: isize,
+}
+
+#[cfg(not(debug_assertions))]
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        unsafe {
+            let _ = windows_sys::Win32::Foundation::CloseHandle(self.handle as _);
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+pub fn try_acquire_single_instance() -> Result<Option<SingleInstanceGuard>> {
+    #[cfg(windows)]
+    {
+        windows::try_acquire_single_instance()
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(Some(SingleInstanceGuard {}))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -253,14 +284,6 @@ pub struct ControlPanelItem {
     pub title: String,
     /// Language-independent Control Panel canonical name, kept searchable
     /// alongside the localized title.
-    pub aliases: Vec<String>,
-    pub launch_target: std::path::PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct SettingsItem {
-    pub identity: String,
-    pub title: String,
     pub aliases: Vec<String>,
     pub launch_target: std::path::PathBuf,
 }
@@ -338,28 +361,6 @@ pub fn discover_control_panel_items() -> Vec<ControlPanelItem> {
     #[cfg(not(windows))]
     {
         Vec::new()
-    }
-}
-
-pub fn discover_settings_items() -> Vec<SettingsItem> {
-    #[cfg(windows)]
-    {
-        windows::discover_settings_items()
-    }
-    #[cfg(not(windows))]
-    {
-        Vec::new()
-    }
-}
-
-pub fn settings_icon_target() -> std::path::PathBuf {
-    #[cfg(windows)]
-    {
-        windows::settings_icon_target()
-    }
-    #[cfg(not(windows))]
-    {
-        std::path::PathBuf::from("SystemSettings.exe")
     }
 }
 

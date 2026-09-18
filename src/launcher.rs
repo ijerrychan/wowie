@@ -62,6 +62,107 @@ pub fn launch(item: &SearchResult) -> Result<()> {
     anyhow::bail!("launch is not supported on this platform")
 }
 
+pub fn launch_entry(entry: &crate::result::LaunchEntry, as_admin: bool) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::{
+            Foundation::GetLastError,
+            UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW},
+        };
+        let file = wide_null_os(&entry.target);
+        let args = wide_null_str(&entry.arguments);
+        let verb = as_admin.then(|| wide_null_str("runas"));
+        let directory = entry
+            .working_directory
+            .as_ref()
+            .map(|path| wide_null_os(path.as_path()));
+        let mut execute = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: SEE_MASK_NOASYNC,
+            lpVerb: verb
+                .as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            lpFile: file.as_ptr(),
+            lpParameters: if entry.arguments.is_empty() {
+                std::ptr::null()
+            } else {
+                args.as_ptr()
+            },
+            lpDirectory: directory
+                .as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            nShow: 1,
+            ..Default::default()
+        };
+        if unsafe { ShellExecuteExW(&mut execute) } == 0 {
+            anyhow::bail!("ShellExecuteExW failed with Windows error {}", unsafe {
+                GetLastError()
+            });
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (entry, as_admin);
+        anyhow::bail!("administrator launch is only supported on Windows")
+    }
+}
+
+pub fn open_containing_directory(item: &SearchResult) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        if !item.launch_target.is_absolute() || !item.launch_target.exists() {
+            anyhow::bail!("the selected item has no supported filesystem location");
+        }
+        use windows::{
+            core::PCWSTR,
+            Win32::{
+                System::Com::CoTaskMemFree,
+                UI::Shell::{SHOpenFolderAndSelectItems, SHParseDisplayName},
+            },
+        };
+        #[link(name = "ole32")]
+        unsafe extern "system" {
+            fn CoInitializeEx(reserved: *const std::ffi::c_void, co_init: u32) -> i32;
+            fn CoUninitialize();
+        }
+        const COINIT_APARTMENTTHREADED: u32 = 0x2;
+        let com_result = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED) };
+        if com_result < 0 && com_result as u32 != 0x80010106 {
+            anyhow::bail!("could not initialize COM for Explorer: HRESULT 0x{com_result:08x}");
+        }
+        let uninitialize = com_result >= 0;
+        let wide_target = wide_null_os(&item.launch_target);
+        let mut pidl = std::ptr::null_mut();
+        let parse_result =
+            unsafe { SHParseDisplayName(PCWSTR(wide_target.as_ptr()), None, &mut pidl, 0, None) };
+        if let Err(error) = parse_result {
+            if uninitialize {
+                unsafe { CoUninitialize() };
+            }
+            return Err(anyhow::anyhow!("could not resolve target: {error}"));
+        }
+        if pidl.is_null() {
+            if uninitialize {
+                unsafe { CoUninitialize() };
+            }
+            anyhow::bail!("could not resolve target for Explorer");
+        }
+        let result = unsafe { SHOpenFolderAndSelectItems(pidl, None, 0) };
+        unsafe { CoTaskMemFree(Some(pidl.cast())) };
+        if uninitialize {
+            unsafe { CoUninitialize() };
+        }
+        result.map_err(|error| anyhow::anyhow!("could not open containing directory: {error}"))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = item;
+        anyhow::bail!("opening a containing directory is only supported on Windows")
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn wide_null_os(value: &std::path::Path) -> Vec<u16> {
     value

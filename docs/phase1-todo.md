@@ -10,21 +10,29 @@
 - [x] 实现 Windows Start Menu 的 `.lnk` / `.exe` 应用发现
 - [x] 实现跨平台启动动作适配层
 - [x] 接入 Windows 全局 Hotkey：默认 `Alt+Space`
-- [x] 增加 JSON 持久化配置：快捷键、窗口宽度、主题、语言、启动显示和失焦隐藏
+- [x] 增加 JSON 持久化配置：快捷键、窗口宽度、主题、语言、启动显示、失焦隐藏和高级字段显示
+- [x] 实现 ShortcutProvider：`>` 执行命令和配置型 URL 模板快捷指令
+- [x] 快捷指令支持无前缀低优先级匹配，并使用独立 `Shortcut` 分类
 - [x] 应用配置中的窗口宽度；搜索结果不设数量上限，由列表滚动展示
 - [x] 为应用记录增加稳定 Identity、别名、来源和独立启动目标字段
 - [x] 搜索同时匹配应用标题与别名，并按 Identity 合并重复记录
 - [x] 解析 `.lnk` 的真实 target、arguments 和 working directory
 - [x] 按来源优先级合并记录，并对重复标题进行去重
+- [x] 在应用记录关联和 Identity 合并时同步维护启动入口，并按实际启动行为去重
+- [x] 仅将不同目标、参数或工作目录保留为独立启动入口；入口来源路径不单独制造重复项
 - [ ] 接入 Windows Execution Alias（WindowsApps）数据源（当前明确不启用）
 - [x] 扫描用户桌面和公共桌面的 `.lnk` / `.url` / `.exe`
 - [x] 接入 Windows AppsFolder 数据源
 - [x] 接入 Windows Package Catalog 数据源
+- [ ] 接入 Windows 设置 Provider（暂缓：等待 PowerToys 清单同步方案）
 - [x] 使用 AppsFolder 本地化名称作为 Package 主标题，并保留包名 Alias
 - [x] 在应用入口关联和 identity 合并完成后再执行兜底分类
 - [x] 对本地 HTML 与远程 HTTP/HTTPS 结果采用不同的关联策略
 - [x] 增加 Docker、Git Bash、Git CMD、Git Release Notes 等重复入口回归测试
 - [x] 增加 provider 调试筛选：`WOWIE_PROVIDER_DEBUG_FILTER`
+- [x] 执行命令优先使用 PowerShell 7，回退到 Windows PowerShell，并显示 Shell 名称
+- [x] 通过 `.po` 和系统 locale 支持快捷指令动态文案 i18n
+- [x] 为 URL 快捷指令按网站基础地址获取并缓存 favicon
 
 ## 索引稳定性 TODO
 
@@ -50,9 +58,15 @@
 - [x] 增加应用图标
   - [x] 已接入 Windows `SHGetFileInfoW`，对 `shell:AppsFolder\...` 使用 PIDL 解析；请求 32×32 并转换为 RGBA 后在 Slint 中显示，不放大低分辨率图标。
   - [x] 将图标提取迁移到后台线程，并通过 `IconService` 缓存。
-  - [x] 结果文本与图标解析解耦；仅加载首屏及滚动后可见区域的图标。
+- [x] 结果文本与图标解析解耦；仅加载首屏及滚动后可见区域的图标。
+- [x] URL favicon 使用 IconService 缓存；同一网站不同查询参数共享缓存
+- [x] 为商店应用和控制面板隐藏技术路径，支持 `show_advanced_details` 配置显示高级字段
+- [x] 普通模式显示最终执行文件名和默认入口参数，高级模式显示完整目标路径和参数
+- [x] 上下文菜单移除默认启动入口，并以本地化分组显示其他启动入口
+- [x] 对虚拟 AppsFolder 入口采用保守关联策略，避免误合并不同 Shell 与 exe 启动行为
 - [x] 为 Result / Action 增加启动错误状态与用户可见反馈
 - [x] 补充 App Provider、Search Core、Launcher 的测试覆盖
+- [x] 移除旧的硬编码 Windows 设置索引，避免发布过时或不可用的 `ms-settings:` 页面
 - [x] 评估全局热键依赖与 Windows 原生窗口生命周期方案（见开发文档）
 
 ## Phase 1 验收标准
@@ -62,3 +76,6 @@
 3. 点击结果能启动对应应用。
 4. 核心搜索逻辑有自动化测试。
 5. Provider、Search Core、Result、Action、UI 之间边界清晰，后续可接入文件 Provider。
+6. 输入 `> command` 可以通过默认 Shell 执行命令；配置型 URL 快捷指令可以打开网页。
+7. 快捷指令、应用、网页和控制面板结果具有独立且可读的展示分类与位置文本。
+8. 配置文件变更可以热加载，且高级字段显示开关不影响真实启动目标。

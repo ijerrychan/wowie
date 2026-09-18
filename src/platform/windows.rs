@@ -2,6 +2,8 @@ use super::{PlatformEvent, PlatformIntegration};
 use anyhow::Result;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
+#[cfg(not(debug_assertions))]
+use std::ffi::c_void;
 use std::{
     ffi::OsStr,
     fs,
@@ -28,13 +30,43 @@ use windows_sys::Win32::{
             RegisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
         },
         WindowsAndMessaging::{
-            DispatchMessageW, GetMessageW, GetSystemMetrics, SetForegroundWindow, ShowWindow,
-            TranslateMessage, MSG, SW_SHOW, WM_HOTKEY,
+            DispatchMessageW, GetForegroundWindow, GetMessageW, GetSystemMetrics,
+            SetForegroundWindow, ShowWindow, TranslateMessage, MSG, SW_SHOW, WM_HOTKEY,
         },
     },
 };
 
+mod tray;
+
 pub struct WindowsPlatform;
+
+#[cfg(not(debug_assertions))]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateMutexW(attributes: *const c_void, initial_owner: i32, name: *const u16)
+        -> *mut c_void;
+}
+
+#[cfg(not(debug_assertions))]
+pub(crate) fn try_acquire_single_instance() -> Result<Option<super::SingleInstanceGuard>> {
+    const ERROR_ALREADY_EXISTS: u32 = 183;
+    let name = wide_path(Path::new("Global\\Wowie.SingleInstance"));
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 1, name.as_ptr()) };
+    if handle.is_null() {
+        return Err(anyhow::anyhow!(
+            "Windows could not create the single-instance mutex"
+        ));
+    }
+    if unsafe { windows_sys::Win32::Foundation::GetLastError() } == ERROR_ALREADY_EXISTS {
+        unsafe {
+            let _ = windows_sys::Win32::Foundation::CloseHandle(handle);
+        }
+        return Ok(None);
+    }
+    Ok(Some(super::SingleInstanceGuard {
+        handle: handle as isize,
+    }))
+}
 
 /// Watch each indexed source with the Win32 directory notification API.
 ///
@@ -322,432 +354,6 @@ pub(crate) fn discover_control_panel_items() -> Vec<super::ControlPanelItem> {
     .unwrap_or_default();
     unsafe { CoTaskMemFree(Some(root_pidl.cast())) };
     result
-}
-
-/// Windows does not expose a Shell enumeration API for the pages in the
-/// Settings app. Keep a curated list of stable `ms-settings:` deep links so
-/// they can be searched and launched like other indexed items.
-pub(crate) fn discover_settings_items() -> Vec<super::SettingsItem> {
-    const ITEMS: &[(&str, &str, &str, &[&str])] = &[
-        ("System", "系统", "system", &[]),
-        (
-            "Bluetooth & devices",
-            "蓝牙和设备",
-            "bluetooth",
-            &["蓝牙", "设备"],
-        ),
-        (
-            "Network & internet",
-            "网络和 Internet",
-            "network",
-            &["网络", "互联网"],
-        ),
-        ("Personalization", "个性化", "personalization", &[]),
-        ("Apps", "应用", "appsfeatures", &[]),
-        ("Accounts", "账户", "accounts", &["帐户"]),
-        (
-            "Time & language",
-            "时间和语言",
-            "dateandtime",
-            &["时间", "语言"],
-        ),
-        ("Gaming", "游戏", "gaming", &[]),
-        ("Accessibility", "辅助功能", "easeofaccess", &[]),
-        (
-            "Privacy & security",
-            "隐私和安全",
-            "privacy",
-            &["隐私", "安全"],
-        ),
-        ("Windows Update", "Windows 更新", "windowsupdate", &["更新"]),
-        (
-            "Windows Security",
-            "Windows 安全中心",
-            "windowsdefender",
-            &["安全中心"],
-        ),
-        ("Display", "显示", "display", &[]),
-        ("Sound", "声音", "sound", &[]),
-        ("Notifications", "通知", "notifications", &[]),
-        (
-            "Power & battery",
-            "电源和电池",
-            "batterysaver",
-            &["电源", "电池"],
-        ),
-        ("Storage", "存储", "storagesense", &[]),
-        ("About", "系统信息", "about", &["关于"]),
-        ("Troubleshoot", "疑难解答", "troubleshoot", &[]),
-        ("Recovery", "恢复", "recovery", &[]),
-        ("Activation", "激活", "activation", &[]),
-        ("For developers", "开发者选项", "developers", &["开发者"]),
-        ("Optional features", "可选功能", "optionalfeatures", &[]),
-        ("Default apps", "默认应用", "defaultapps", &[]),
-        // Accounts
-        ("Your info", "你的信息", "yourinfo", &[]),
-        ("Sign-in options", "登录选项", "signinoptions", &["登录"]),
-        (
-            "Access work or school",
-            "访问工作或学校",
-            "workplace",
-            &["工作", "学校"],
-        ),
-        (
-            "Email & app accounts",
-            "电子邮件和帐户",
-            "emailandaccounts",
-            &["邮箱"],
-        ),
-        (
-            "Family & other users",
-            "家庭和其他用户",
-            "otherusers",
-            &["家庭", "用户"],
-        ),
-        ("Set up a kiosk", "设置展台", "assignedaccess", &["展台"]),
-        ("Sync your settings", "同步设置", "sync", &["同步"]),
-        // Apps
-        ("Apps for websites", "网站的应用", "appsforwebsites", &[]),
-        ("Startup apps", "启动应用", "startupapps", &["启动"]),
-        ("Video playback", "视频播放", "videoplayback", &["视频"]),
-        ("Offline maps", "离线地图", "maps", &["地图"]),
-        // Devices
-        ("AutoPlay", "自动播放", "autoplay", &[]),
-        (
-            "Connected devices",
-            "已连接设备",
-            "connecteddevices",
-            &["连接"],
-        ),
-        (
-            "Printers & scanners",
-            "打印机和扫描仪",
-            "printers",
-            &["打印机", "扫描仪"],
-        ),
-        (
-            "Mouse & touchpad",
-            "鼠标和触摸板",
-            "mousetouchpad",
-            &["触摸板"],
-        ),
-        ("Pen & Windows Ink", "笔和 Windows Ink", "pen", &["手写笔"]),
-        ("Touch", "触摸", "devices-touch", &[]),
-        ("Touchpad", "触摸板", "devices-touchpad", &[]),
-        ("Typing", "输入", "typing", &["键盘"]),
-        ("USB", "USB", "usb", &[]),
-        ("Mobile devices", "移动设备", "mobile-devices", &["手机"]),
-        // Ease of access
-        (
-            "Ease of access display",
-            "辅助功能显示",
-            "easeofaccess-display",
-            &["显示辅助"],
-        ),
-        ("Narrator", "讲述人", "easeofaccess-narrator", &["屏幕阅读"]),
-        ("Magnifier", "放大镜", "easeofaccess-magnifier", &["放大"]),
-        (
-            "Color filters",
-            "颜色滤镜",
-            "easeofaccess-colorfilter",
-            &["滤镜"],
-        ),
-        (
-            "High contrast",
-            "高对比度",
-            "easeofaccess-highcontrast",
-            &["对比度"],
-        ),
-        (
-            "Keyboard accessibility",
-            "键盘辅助功能",
-            "easeofaccess-keyboard",
-            &[],
-        ),
-        (
-            "Mouse accessibility",
-            "鼠标辅助功能",
-            "easeofaccess-mouse",
-            &[],
-        ),
-        ("Text cursor", "文本光标", "easeofaccess-cursor", &["光标"]),
-        (
-            "Closed captions",
-            "隐藏式字幕",
-            "easeofaccess-closedcaptioning",
-            &["字幕"],
-        ),
-        (
-            "Speech recognition",
-            "语音识别",
-            "easeofaccess-speechrecognition",
-            &["语音"],
-        ),
-        // Network and internet
-        ("Network status", "网络状态", "network-status", &["网络"]),
-        ("Ethernet", "以太网", "network-ethernet", &[]),
-        ("Wi-Fi", "Wi-Fi", "network-wifi", &["无线", "无线网络"]),
-        (
-            "Manage known networks",
-            "管理已知网络",
-            "network-wifisettings",
-            &["已知网络"],
-        ),
-        (
-            "Mobile hotspot",
-            "移动热点",
-            "network-mobilehotspot",
-            &["热点"],
-        ),
-        (
-            "Airplane mode",
-            "飞行模式",
-            "network-airplanemode",
-            &["飞行"],
-        ),
-        ("VPN", "VPN", "network-vpn", &[]),
-        ("Proxy", "代理", "network-proxy", &["代理服务器"]),
-        ("Dial-up", "拨号", "network-dialup", &[]),
-        (
-            "Advanced network settings",
-            "高级网络设置",
-            "network-advancedsettings",
-            &[],
-        ),
-        // Personalization
-        (
-            "Background",
-            "背景",
-            "personalization-background",
-            &["壁纸"],
-        ),
-        ("Colors", "颜色", "personalization-colors", &["色彩"]),
-        ("Lock screen", "锁屏", "lockscreen", &["锁定屏幕"]),
-        ("Themes", "主题", "themes", &[]),
-        ("Fonts", "字体", "fonts", &[]),
-        ("Start", "开始", "personalization-start", &["开始菜单"]),
-        ("Taskbar", "任务栏", "taskbar", &[]),
-        (
-            "Touch keyboard",
-            "触摸键盘",
-            "personalization-touchkeyboard",
-            &[],
-        ),
-        ("Text input", "文本输入", "personalization-textinput", &[]),
-        (
-            "Dynamic lighting",
-            "动态照明",
-            "personalization-lighting",
-            &["灯光"],
-        ),
-        // Privacy
-        ("Camera privacy", "相机隐私", "privacy-webcam", &["相机"]),
-        (
-            "Microphone privacy",
-            "麦克风隐私",
-            "privacy-microphone",
-            &["麦克风"],
-        ),
-        (
-            "Location privacy",
-            "位置隐私",
-            "privacy-location",
-            &["位置"],
-        ),
-        (
-            "Notifications privacy",
-            "通知隐私",
-            "privacy-notifications",
-            &["通知"],
-        ),
-        ("App diagnostics", "应用诊断", "privacy-appdiagnostics", &[]),
-        (
-            "File system privacy",
-            "文件系统隐私",
-            "privacy-broadfilesystemaccess",
-            &["文件系统"],
-        ),
-        (
-            "Documents privacy",
-            "文档隐私",
-            "privacy-documents",
-            &["文档"],
-        ),
-        (
-            "Downloads folder privacy",
-            "下载文件夹隐私",
-            "privacy-downloadsfolder",
-            &["下载"],
-        ),
-        (
-            "Pictures privacy",
-            "图片隐私",
-            "privacy-pictures",
-            &["图片"],
-        ),
-        ("Videos privacy", "视频隐私", "privacy-videos", &[]),
-        ("Speech privacy", "语音隐私", "privacy-speech", &[]),
-        (
-            "Graphics privacy",
-            "图形隐私",
-            "privacy-graphicscaptureprogrammatic",
-            &["图形"],
-        ),
-        // System
-        ("Advanced display", "高级显示", "display-advanced", &[]),
-        ("Night light", "夜间模式", "nightlight", &["夜灯"]),
-        (
-            "Graphics settings",
-            "图形设置",
-            "display-advancedgraphics",
-            &[],
-        ),
-        ("Power & sleep", "电源和睡眠", "powersleep", &["睡眠"]),
-        (
-            "Storage Sense",
-            "存储感知",
-            "storagepolicies",
-            &["自动清理"],
-        ),
-        (
-            "Storage recommendations",
-            "存储建议",
-            "storagerecommendations",
-            &[],
-        ),
-        (
-            "Disks & volumes",
-            "磁盘和卷",
-            "disksandvolumes",
-            &["磁盘", "分区"],
-        ),
-        ("Clipboard", "剪贴板", "clipboard", &[]),
-        ("Multitasking", "多任务处理", "multitasking", &["多任务"]),
-        ("Remote Desktop", "远程桌面", "remotedesktop", &["远程"]),
-        (
-            "Projecting to this PC",
-            "投影到此电脑",
-            "project",
-            &["投影"],
-        ),
-        ("Focus assist", "专注助手", "quiethours", &["专注"]),
-        ("Shared experiences", "共享体验", "crossdevice", &[]),
-        (
-            "Energy recommendations",
-            "能源建议",
-            "energyrecommendations",
-            &["能源"],
-        ),
-        // Gaming and search
-        ("Game Bar", "游戏栏", "gaming-gamebar", &["游戏栏"]),
-        ("Game DVR", "游戏录制", "gaming-gamedvr", &["录制"]),
-        ("Game Mode", "游戏模式", "gaming-gamemode", &[]),
-        (
-            "Search permissions",
-            "搜索权限",
-            "search-permissions",
-            &["搜索"],
-        ),
-        ("Search details", "搜索详细信息", "search-moredetails", &[]),
-        // Sound and time
-        ("Volume mixer", "音量混合器", "apps-volume", &["音量"]),
-        ("Sound devices", "声音设备", "sound-devices", &["音频设备"]),
-        (
-            "Default microphone",
-            "默认麦克风",
-            "sound-defaultinputproperties",
-            &[],
-        ),
-        (
-            "Default audio output",
-            "默认音频输出",
-            "sound-defaultoutputproperties",
-            &[],
-        ),
-        ("Region", "区域", "regionformatting", &[]),
-        ("Language options", "语言选项", "keyboard", &["语言"]),
-        ("Speech", "语音", "speech", &[]),
-        // Update and security
-        (
-            "Delivery Optimization",
-            "传递优化",
-            "delivery-optimization",
-            &["更新优化"],
-        ),
-        (
-            "Find my device",
-            "查找我的设备",
-            "findmydevice",
-            &["查找设备"],
-        ),
-        (
-            "Windows Update options",
-            "Windows 更新选项",
-            "windowsupdate-options",
-            &["更新选项"],
-        ),
-        (
-            "Windows Update history",
-            "Windows 更新历史",
-            "windowsupdate-history",
-            &["更新历史"],
-        ),
-        (
-            "Windows Update optional updates",
-            "Windows 可选更新",
-            "windowsupdate-optionalupdates",
-            &[],
-        ),
-        (
-            "Windows Update active hours",
-            "Windows 更新活动时间",
-            "windowsupdate-activehours",
-            &[],
-        ),
-    ];
-    let chinese = user_locale_name().is_some_and(|locale| locale.starts_with("zh-"));
-
-    ITEMS
-        .iter()
-        .map(
-            |(english, chinese_title, page, aliases)| super::SettingsItem {
-                identity: format!("settings:{page}"),
-                title: if chinese {
-                    (*chinese_title).to_owned()
-                } else {
-                    (*english).to_owned()
-                },
-                aliases: [*english, *chinese_title, *page]
-                    .into_iter()
-                    .map(str::to_owned)
-                    .chain(aliases.iter().map(|alias| (*alias).to_owned()))
-                    .collect(),
-                launch_target: PathBuf::from(format!("ms-settings:{page}")),
-            },
-        )
-        .collect()
-}
-
-pub(crate) fn settings_icon_target() -> PathBuf {
-    // Resolve the packaged Settings app through the Shell AppsFolder instead
-    // of extracting the legacy SystemSettings.exe icon. Windows 11 exposes
-    // the current Fluent Settings icon on this AUMID.
-    PathBuf::from(
-        r"shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel",
-    )
-}
-
-fn user_locale_name() -> Option<String> {
-    let mut buffer = [0_u16; LOCALE_NAME_MAX_LENGTH as usize];
-    let length = unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), buffer.len() as i32) };
-    (length > 1).then(|| String::from_utf16_lossy(&buffer[..(length - 1) as usize]))
-}
-
-const LOCALE_NAME_MAX_LENGTH: u32 = 85;
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetUserDefaultLocaleName(locale_name: *mut u16, cch_locale_name: i32) -> i32;
 }
 
 /// Find Steam's installation root without assuming the default drive. Steam
@@ -1708,6 +1314,10 @@ impl PlatformIntegration for WindowsPlatform {
         Ok(receiver)
     }
 
+    fn start_tray(&self, exit_label: String) -> Receiver<PlatformEvent> {
+        tray::start(exit_label)
+    }
+
     fn position_palette(&self, window: &slint::Window) {
         let size = window.size();
         let scale = window.scale_factor();
@@ -1747,6 +1357,44 @@ impl PlatformIntegration for WindowsPlatform {
         ));
     }
 
+    fn position_context_menu(&self, window: &slint::Window) {
+        use windows_sys::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        let mut cursor = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut cursor) } == 0 {
+            return;
+        }
+        let monitor = unsafe { MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST) };
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            rcMonitor: Default::default(),
+            rcWork: Default::default(),
+            dwFlags: 0,
+        };
+        let (left, top, right, bottom) =
+            if !monitor.is_null() && unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
+                (
+                    info.rcWork.left,
+                    info.rcWork.top,
+                    info.rcWork.right,
+                    info.rcWork.bottom,
+                )
+            } else {
+                (0, 0, unsafe { GetSystemMetrics(0) }, unsafe {
+                    GetSystemMetrics(1)
+                })
+            };
+        let scale = window.scale_factor();
+        let size = window.size();
+        let width = (size.width as f32 * scale).round() as i32;
+        let height = (size.height as f32 * scale).round() as i32;
+        let x = (cursor.x + 8).min(right - width).max(left);
+        let y = (cursor.y + 8).min(bottom - height).max(top);
+        window.set_position(slint::PhysicalPosition::new(x, y));
+    }
+
     fn activate_palette(&self, window: &slint::Window) {
         let Some(hwnd) = hwnd_from_window(window) else {
             return;
@@ -1757,6 +1405,14 @@ impl PlatformIntegration for WindowsPlatform {
                 eprintln!("could not bring launcher window to foreground");
             }
         }
+    }
+
+    fn activate_context_menu(&self, window: &slint::Window) {
+        self.activate_palette(window);
+    }
+
+    fn is_window_focused(&self, window: &slint::Window) -> bool {
+        hwnd_from_window(window).is_some_and(|hwnd| unsafe { GetForegroundWindow() == hwnd })
     }
 
     fn install_focus_listener(&self, window: &slint::Window, on_lost_focus: Box<dyn Fn()>) {
@@ -1928,16 +1584,6 @@ fn parse_hotkey(value: &str) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn settings_icon_uses_windows_11_apps_folder_entry() {
-        assert_eq!(
-            settings_icon_target(),
-            PathBuf::from(
-                r"shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel",
-            )
-        );
-    }
 
     #[test]
     fn apps_folder_aumid_uses_localized_shell_entry() {
