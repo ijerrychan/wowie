@@ -11,15 +11,20 @@ pub enum Action {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultCategory {
+    /// Provider has not supplied a semantic category yet.
+    Unclassified,
     Application,
     Game,
     Website,
     ControlPanel,
+    Settings,
+    Document,
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchEntry {
-    pub source: String,
+    pub source: crate::platform::SourceId,
     pub path: std::path::PathBuf,
     pub target: std::path::PathBuf,
     pub arguments: String,
@@ -38,12 +43,14 @@ pub struct SearchResult {
     pub launch_target: std::path::PathBuf,
     pub launch_arguments: String,
     pub launch_working_directory: Option<std::path::PathBuf>,
-    pub source: String,
+    pub source: crate::platform::SourceId,
     /// All discovery sources that contributed this application entry.
-    pub sources: Vec<String>,
+    pub sources: Vec<crate::platform::SourceId>,
     pub launch_entries: Vec<LaunchEntry>,
     pub actions: Vec<Action>,
     pub icon: Option<IconSpec>,
+    /// Provider-supplied ranking adjustment consumed generically by SearchCore.
+    pub ranking_bias: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +59,10 @@ pub enum IconSpec {
     Resource(std::path::PathBuf),
     /// A path or shell target whose icon is provided by the operating system.
     System(std::path::PathBuf),
+    SystemIndexed {
+        path: std::path::PathBuf,
+        index: i32,
+    },
     /// The icon associated with opening this file type in the system default
     /// application. The cache can safely share it across files with the same
     /// extension.

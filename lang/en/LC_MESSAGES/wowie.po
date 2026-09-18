@@ -36,5 +36,17 @@ msgid "Control Panel"
 msgstr "Control Panel"
 
 msgctxt "Launcher"
+msgid "Settings"
+msgstr "Settings"
+
+msgctxt "Launcher"
+msgid "Document"
+msgstr "Document"
+
+msgctxt "Launcher"
+msgid "Other"
+msgstr "Other"
+
+msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  Navigate     Enter  Open     Esc  Hide"

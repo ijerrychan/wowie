@@ -5,6 +5,7 @@
 //! applications. Shortcuts are launched as shortcuts, but are de-duplicated
 //! by their resolved target.
 
+use crate::platform::source_ids;
 use crate::result::{Action, IconSpec, LaunchEntry, ResultCategory, SearchResult};
 use std::{
     collections::HashMap,
@@ -16,33 +17,71 @@ use url::Url;
 pub struct AppProvider {
     items: Vec<SearchResult>,
     sources: HashMap<crate::platform::AppProviderSource, Vec<SearchResult>>,
+    config: crate::config::ProviderConfig,
 }
 
+struct ProviderDefinition {
+    source: crate::platform::AppProviderSource,
+    enabled: fn(&crate::config::ProviderConfig) -> bool,
+    discover: fn(&crate::config::ProviderConfig) -> Vec<SearchResult>,
+}
+
+const PROVIDER_DEFINITIONS: [ProviderDefinition; 7] = [
+    ProviderDefinition {
+        source: crate::platform::AppProviderSource::StoreApps,
+        enabled: |config| config.store_apps,
+        discover: discover_store_source,
+    },
+    ProviderDefinition {
+        source: crate::platform::AppProviderSource::StartMenu,
+        enabled: |config| config.start_menu,
+        discover: discover_start_menu_source,
+    },
+    ProviderDefinition {
+        source: crate::platform::AppProviderSource::Desktop,
+        enabled: |config| config.desktop,
+        discover: discover_desktop_source,
+    },
+    ProviderDefinition {
+        source: crate::platform::AppProviderSource::ControlPanel,
+        enabled: |config| config.control_panel,
+        discover: crate::providers::control_panel::discover,
+    },
+    ProviderDefinition {
+        source: crate::platform::AppProviderSource::Settings,
+        enabled: |config| config.settings,
+        discover: crate::providers::settings::discover,
+    },
+    ProviderDefinition {
+        source: crate::platform::AppProviderSource::Steam,
+        enabled: |config| config.steam,
+        discover: crate::providers::steam::discover_with_config,
+    },
+    ProviderDefinition {
+        source: crate::platform::AppProviderSource::CustomDirectories,
+        enabled: |config| !config.indexed_directories.is_empty(),
+        discover: discover_custom_directories,
+    },
+];
+
 impl AppProvider {
+    #[allow(dead_code)]
     pub fn discover() -> Self {
-        let mut sources = HashMap::new();
-        sources.insert(
-            crate::platform::AppProviderSource::StoreApps,
-            discover_store_source(),
-        );
-        sources.insert(
-            crate::platform::AppProviderSource::StartMenu,
-            discover_file_source(false, "StartMenu"),
-        );
-        sources.insert(
-            crate::platform::AppProviderSource::Desktop,
-            discover_file_source(true, "Desktop"),
-        );
-        sources.insert(
-            crate::platform::AppProviderSource::ControlPanel,
-            crate::providers::control_panel::discover(),
-        );
-        sources.insert(
-            crate::platform::AppProviderSource::Steam,
-            crate::providers::steam::discover(),
-        );
+        Self::discover_with_config(&crate::config::ProviderConfig::default())
+    }
+
+    pub fn discover_with_config(config: &crate::config::ProviderConfig) -> Self {
+        let sources = PROVIDER_DEFINITIONS
+            .into_iter()
+            .filter(|provider| (provider.enabled)(config))
+            .map(|provider| (provider.source, (provider.discover)(config)))
+            .collect();
         let items = merge_sources(&sources);
-        Self { items, sources }
+        Self {
+            items,
+            sources,
+            config: config.clone(),
+        }
     }
 
     /// Re-enumerate only the source reported by the platform watcher.
@@ -52,17 +91,13 @@ impl AppProvider {
     /// record, so the source is re-enumerated and the normal merge rules are
     /// applied again.
     pub fn refresh_source(&mut self, source: crate::platform::AppProviderSource) -> bool {
-        let refreshed = match source {
-            crate::platform::AppProviderSource::StoreApps => discover_store_source(),
-            crate::platform::AppProviderSource::StartMenu => {
-                discover_file_source(false, "StartMenu")
-            }
-            crate::platform::AppProviderSource::Desktop => discover_file_source(true, "Desktop"),
-            crate::platform::AppProviderSource::ControlPanel => {
-                crate::providers::control_panel::discover()
-            }
-            crate::platform::AppProviderSource::Steam => crate::providers::steam::discover(),
+        let Some(provider) = PROVIDER_DEFINITIONS
+            .iter()
+            .find(|provider| provider.source == source && (provider.enabled)(&self.config))
+        else {
+            return false;
         };
+        let refreshed = (provider.discover)(&self.config);
         if self.sources.get(&source) == Some(&refreshed) {
             return false;
         }
@@ -71,30 +106,76 @@ impl AppProvider {
         true
     }
 
+    pub fn apply_config(&mut self, config: &crate::config::ProviderConfig) -> bool {
+        if self.config == *config {
+            return false;
+        }
+        let sources = PROVIDER_DEFINITIONS
+            .into_iter()
+            .filter(|provider| (provider.enabled)(config))
+            .map(|provider| (provider.source, (provider.discover)(config)))
+            .collect();
+        self.config = config.clone();
+        self.sources = sources;
+        self.items = merge_sources(&self.sources);
+        true
+    }
+
     pub fn snapshot(&self) -> Vec<SearchResult> {
         self.items.clone()
     }
 
-    pub fn watch_sources() -> std::sync::mpsc::Receiver<crate::platform::AppProviderSource> {
-        crate::platform::watch_app_provider_sources()
+    pub fn watch_sources(
+        custom_directories: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
+    ) -> std::sync::mpsc::Receiver<crate::platform::AppProviderSource> {
+        crate::platform::watch_app_provider_sources(custom_directories)
     }
 }
 
-fn discover_store_source() -> Vec<SearchResult> {
+fn discover_store_source(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
     let mut items = Vec::new();
     collect_store_apps(&mut items);
     items
 }
 
+fn discover_start_menu_source(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
+    discover_file_source(false, source_ids::START_MENU)
+}
+
+fn discover_desktop_source(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
+    discover_file_source(true, source_ids::DESKTOP)
+}
+
+fn discover_custom_directories(config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
+    let mut items = Vec::new();
+    for root in &config.indexed_directories {
+        if !root.is_dir() {
+            eprintln!(
+                "custom index directory is not accessible: {}",
+                root.display()
+            );
+            continue;
+        }
+        collect_tree(
+            root,
+            &mut items,
+            true,
+            source_ids::CUSTOM_DIRECTORIES,
+            &config.indexed_extensions,
+        );
+    }
+    items
+}
+
 fn discover_file_source(include_executables: bool, source: &str) -> Vec<SearchResult> {
     let mut items = Vec::new();
-    let roots = if source == "StartMenu" {
+    let roots = if source == source_ids::START_MENU {
         start_menu_roots()
     } else {
         desktop_roots()
     };
     for root in roots {
-        collect_tree(&root, &mut items, include_executables, source);
+        collect_tree(&root, &mut items, include_executables, source, &[]);
     }
     items
 }
@@ -103,18 +184,14 @@ fn merge_sources(
     sources: &HashMap<crate::platform::AppProviderSource, Vec<SearchResult>>,
 ) -> Vec<SearchResult> {
     let mut items = Vec::new();
-    for source in [
-        crate::platform::AppProviderSource::StoreApps,
-        crate::platform::AppProviderSource::StartMenu,
-        crate::platform::AppProviderSource::Desktop,
-        crate::platform::AppProviderSource::ControlPanel,
-        crate::platform::AppProviderSource::Steam,
-    ] {
-        if let Some(records) = sources.get(&source) {
+    for provider in PROVIDER_DEFINITIONS {
+        if let Some(records) = sources.get(&provider.source) {
             items.extend(records.iter().cloned());
         }
     }
+    debug_records("before file association", &items);
     associate_file_entries(&mut items);
+    debug_records("after file association", &items);
     items.sort_by(|left, right| {
         source_priority(&left.source)
             .cmp(&source_priority(&right.source))
@@ -123,12 +200,79 @@ fn merge_sources(
             .then_with(|| left.location.cmp(&right.location))
     });
     merge_by_identity(&mut items);
+    classify_unclassified_items(&mut items);
     debug_records("final merged records", &items);
     items
 }
 
+fn classify_unclassified_items(items: &mut [SearchResult]) {
+    for item in items {
+        if item.category != ResultCategory::Unclassified {
+            continue;
+        }
+        let target = item
+            .launch_entries
+            .iter()
+            .find_map(|entry| {
+                (!entry.target.as_os_str().is_empty()
+                    && !is_shell_namespace(&entry.target)
+                    && !looks_like_uri(&entry.target))
+                .then_some(&entry.target)
+            })
+            .or_else(|| {
+                item.launch_entries.iter().find_map(|entry| {
+                    (!entry.target.as_os_str().is_empty()).then_some(&entry.target)
+                })
+            })
+            .unwrap_or(&item.launch_target);
+        item.category = crate::classifier::classify_target(target);
+        if item.category == ResultCategory::Website && item.icon.is_none() {
+            item.icon = Some(IconSpec::DefaultOpen(target.clone()));
+        }
+    }
+}
+
 fn debug_enabled() -> bool {
-    env::var_os("WOWIE_PROVIDER_DEBUG").is_some_and(|value| value != "0")
+    // Control Panel diagnostics use WOWIE_PROVIDER_DEBUG. Keep the verbose
+    // application-provider trace behind a separate opt-in switch.
+    env::var_os("WOWIE_ALL_PROVIDER_DEBUG").is_some_and(|value| value != "0")
+}
+
+fn debug_filter_matches(value: &str) -> bool {
+    let Some(filter) = env::var_os("WOWIE_PROVIDER_DEBUG_FILTER") else {
+        return true;
+    };
+    let value = value.to_ascii_lowercase();
+    let terms: Vec<_> = filter
+        .to_string_lossy()
+        .split(',')
+        .map(|term| term.trim().to_ascii_lowercase())
+        .filter(|term| !term.is_empty())
+        .collect();
+    terms.is_empty() || terms.iter().any(|term| value.contains(term))
+}
+
+fn debug_record_matches(record: &SearchResult) -> bool {
+    let mut haystack = format!(
+        "{} {} {} {}",
+        record.title,
+        record.identity,
+        record.location,
+        record.launch_target.display()
+    );
+    for alias in &record.aliases {
+        haystack.push(' ');
+        haystack.push_str(alias);
+    }
+    for entry in &record.launch_entries {
+        haystack.push(' ');
+        haystack.push_str(&entry.path.to_string_lossy());
+        haystack.push(' ');
+        haystack.push_str(&entry.target.to_string_lossy());
+        haystack.push(' ');
+        haystack.push_str(&entry.arguments);
+    }
+    debug_filter_matches(&haystack)
 }
 
 fn debug_records(stage: &str, records: &[SearchResult]) {
@@ -137,9 +281,12 @@ fn debug_records(stage: &str, records: &[SearchResult]) {
     }
     let relevant: Vec<_> = records
         .iter()
-        .filter(|record| record.sources.len() > 1)
+        .filter(|record| debug_record_matches(record))
         .collect();
-    eprintln!("[provider] {stage}: {} merged records", relevant.len());
+    eprintln!(
+        "[provider] {stage}: {} records matching WOWIE_PROVIDER_DEBUG_FILTER",
+        relevant.len()
+    );
     for record in relevant {
         eprintln!(
             "[provider] record title={:?} source={} identity={:?} launch_target={:?} sources={:?}",
@@ -160,23 +307,23 @@ fn debug_records(stage: &str, records: &[SearchResult]) {
 
 fn collect_store_apps(output: &mut Vec<SearchResult>) {
     for app in crate::platform::discover_store_applications() {
-        if debug_enabled() {
+        if debug_enabled()
+            && debug_filter_matches(&format!(
+                "{} {:?} {:?} {:?}",
+                app.title, app.aliases, app.identity, app.launch_target
+            ))
+        {
             eprintln!(
-                "[provider] store app title={:?} identity={:?} launch_target={:?} executable={:?}",
-                app.title, app.identity, app.launch_target, app.executable
+                "[provider] store app title={:?} aliases={:?} identity={:?} launch_target={:?} executable={:?}",
+                app.title, app.aliases, app.identity, app.launch_target, app.executable
             );
         }
         let launch_target = app.launch_target.clone();
-        let category = if is_website_target(&launch_target) {
-            ResultCategory::Website
-        } else {
-            ResultCategory::Application
-        };
         output.push(SearchResult {
             id: app.identity.clone(),
             identity: app.identity,
             title: app.title,
-            category,
+            category: ResultCategory::Unclassified,
             aliases: app.aliases,
             location: launch_target.display().to_string(),
             launch_target: launch_target.clone(),
@@ -195,8 +342,8 @@ fn collect_store_apps(output: &mut Vec<SearchResult>) {
                 working_directory: None,
             }],
             actions: Vec::new(),
-            icon: (category == ResultCategory::Website)
-                .then(|| IconSpec::DefaultOpen(launch_target.clone())),
+            icon: None,
+            ranking_bias: 0,
         });
     }
 }
@@ -228,8 +375,12 @@ fn collect_tree(
     output: &mut Vec<SearchResult>,
     include_executables: bool,
     source: &str,
+    indexed_extensions: &[String],
 ) {
     let Ok(entries) = fs::read_dir(root) else {
+        if source == source_ids::CUSTOM_DIRECTORIES {
+            eprintln!("could not read custom index directory: {}", root.display());
+        }
         return;
     };
 
@@ -239,16 +390,27 @@ fn collect_tree(
         let path = entry.path();
         // This mirrors WalkDir::follow_links(false) used by the legacy index.
         if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
-            collect_tree(&path, output, include_executables, source);
+            collect_tree(
+                &path,
+                output,
+                include_executables,
+                source,
+                indexed_extensions,
+            );
             continue;
         }
 
         let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
             continue;
         };
-        let is_shortcut = extension.eq_ignore_ascii_case("lnk");
-        let is_url = extension.eq_ignore_ascii_case("url");
-        let is_executable = include_executables && extension.eq_ignore_ascii_case("exe");
+        let is_shortcut =
+            extension.eq_ignore_ascii_case(crate::platform::windows_rules::SHORTCUT_EXTENSION);
+        let is_url = extension.eq_ignore_ascii_case(crate::platform::windows_rules::URL_EXTENSION);
+        let is_executable = include_executables
+            && extension.eq_ignore_ascii_case(crate::platform::windows_rules::EXECUTABLE_EXTENSION);
+        let is_custom_file = indexed_extensions
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(extension));
         if is_executable {
             let Some(title) = path.file_stem().and_then(|value| value.to_str()) else {
                 continue;
@@ -258,7 +420,7 @@ fn collect_tree(
                 id: identity.clone(),
                 identity,
                 title: title.to_owned(),
-                category: ResultCategory::Application,
+                category: ResultCategory::Unclassified,
                 aliases: Vec::new(),
                 location: path.display().to_string(),
                 launch_target: path.clone(),
@@ -275,7 +437,15 @@ fn collect_tree(
                 }],
                 actions: Vec::new(),
                 icon: None,
+                ranking_bias: 0,
             });
+            continue;
+        }
+        if is_custom_file && !is_shortcut && !is_url {
+            let Some(title) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            output.push(generic_file_result(&path, title, source));
             continue;
         }
         if !is_shortcut && !is_url {
@@ -296,7 +466,7 @@ fn collect_tree(
                 id: format!("url:{normalized_url}"),
                 identity: format!("url:{normalized_url}"),
                 title: title.to_owned(),
-                category: ResultCategory::Website,
+                category: ResultCategory::Unclassified,
                 aliases: Vec::new(),
                 location: url.clone(),
                 launch_target: PathBuf::from(&url),
@@ -313,6 +483,7 @@ fn collect_tree(
                 }],
                 actions: Vec::new(),
                 icon: Some(IconSpec::DefaultOpen(PathBuf::from(&url))),
+                ranking_bias: 0,
             });
             continue;
         }
@@ -320,7 +491,12 @@ fn collect_tree(
         let Some(resolved_target) = shortcut.target.map(expand_windows_variables) else {
             continue;
         };
-        if debug_enabled() {
+        if debug_enabled()
+            && debug_filter_matches(&format!(
+                "{title} {path:?} {resolved_target:?} {:?}",
+                shortcut.arguments
+            ))
+        {
             eprintln!(
                 "[provider] shortcut source={source} title={title:?} path={path:?} target={resolved_target:?} args={:?}",
                 shortcut.arguments
@@ -341,11 +517,7 @@ fn collect_tree(
             id: identity.clone(),
             identity,
             title: title.to_owned(),
-            category: if website_url.is_some() {
-                ResultCategory::Website
-            } else {
-                ResultCategory::Application
-            },
+            category: ResultCategory::Unclassified,
             aliases,
             location: path.display().to_string(),
             // Launch the shortcut itself so Windows preserves ShellLink metadata.
@@ -362,8 +534,53 @@ fn collect_tree(
                 working_directory: shortcut.working_directory.clone(),
             }],
             actions: Vec::new(),
-            icon: website_url.map(PathBuf::from).map(IconSpec::DefaultOpen),
+            icon: website_url
+                .map(PathBuf::from)
+                .map(IconSpec::DefaultOpen)
+                .or_else(|| {
+                    Some(match (shortcut.icon_path.as_deref(), shortcut.icon_index) {
+                        (Some(icon_path), Some(index)) => IconSpec::SystemIndexed {
+                            path: shortcut_icon_target(&path, Some(icon_path), &resolved_target),
+                            index,
+                        },
+                        _ => IconSpec::System(shortcut_icon_target(
+                            &path,
+                            shortcut.icon_path.as_deref(),
+                            &resolved_target,
+                        )),
+                    })
+                }),
+            ranking_bias: 0,
         });
+    }
+}
+
+fn generic_file_result(path: &Path, title: &str, source: &str) -> SearchResult {
+    let target = path.to_owned();
+    let identity = format!("file:{}", normalize_path(path));
+    let source_id: crate::platform::SourceId = source.into();
+    SearchResult {
+        id: identity.clone(),
+        identity,
+        title: title.to_owned(),
+        category: ResultCategory::Unclassified,
+        aliases: Vec::new(),
+        location: path.display().to_string(),
+        launch_target: target.clone(),
+        launch_arguments: String::new(),
+        launch_working_directory: None,
+        source: source_id.clone(),
+        sources: vec![source_id.clone()],
+        launch_entries: vec![LaunchEntry {
+            source: source_id,
+            path: target.clone(),
+            target,
+            arguments: String::new(),
+            working_directory: None,
+        }],
+        actions: Vec::new(),
+        icon: Some(IconSpec::DefaultOpen(path.to_owned())),
+        ranking_bias: 0,
     }
 }
 
@@ -379,6 +596,7 @@ fn is_website_target(value: &Path) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 fn is_website_shortcut(target: &Path, arguments: Option<&str>) -> bool {
     website_url(target, arguments).is_some()
 }
@@ -438,7 +656,7 @@ fn associate_file_entries(items: &mut Vec<SearchResult>) {
     let mut unified = Vec::with_capacity(items.len());
     for item in std::mem::take(items) {
         let is_file_entry = is_file_source(&item.source);
-        let match_index = if is_file_entry && item.category != ResultCategory::Website {
+        let match_index = if is_file_entry && !is_remote_website(&item) {
             item.launch_entries.first().and_then(|entry| {
                 let candidates: Vec<_> = unified
                     .iter()
@@ -460,6 +678,9 @@ fn associate_file_entries(items: &mut Vec<SearchResult>) {
 
         if let Some(index) = match_index {
             let application = &mut unified[index];
+            if application.icon.is_none() {
+                application.icon = item.icon.clone();
+            }
             application.aliases.extend(item.aliases);
             application.sources.extend(item.sources);
             application.launch_entries.extend(item.launch_entries);
@@ -468,12 +689,13 @@ fn associate_file_entries(items: &mut Vec<SearchResult>) {
         }
     }
     for item in &mut unified {
-        item.sources.sort_by_key(|source| source.to_lowercase());
         item.sources
-            .dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+            .sort_by_key(|source| source.as_str().to_lowercase());
+        item.sources.dedup();
         item.launch_entries.sort_by(|left, right| {
             left.source
-                .cmp(&right.source)
+                .as_str()
+                .cmp(&right.source.as_str())
                 .then_with(|| left.path.cmp(&right.path))
                 .then_with(|| left.arguments.cmp(&right.arguments))
         });
@@ -485,11 +707,25 @@ fn associate_file_entries(items: &mut Vec<SearchResult>) {
 }
 
 fn is_store_application(item: &SearchResult) -> bool {
-    item.source == "AppsFolder" || item.source == "Package"
+    item.source.is_store_application()
 }
 
-fn is_file_source(source: &str) -> bool {
-    matches!(source, "StartMenu" | "Desktop")
+fn is_remote_website(item: &SearchResult) -> bool {
+    if looks_like_uri(&item.launch_target) {
+        return true;
+    }
+    item.launch_entries.iter().any(|entry| {
+        looks_like_uri(&entry.target)
+            || website_url(&entry.target, Some(&entry.arguments)).is_some()
+    })
+}
+
+fn is_file_source(source: &crate::platform::SourceId) -> bool {
+    source.is_file_source()
+}
+
+fn is_legacy_tools_shortcut(path: &Path) -> bool {
+    crate::platform::windows_rules::is_legacy_tools_path(path)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -519,6 +755,17 @@ fn shortcut_match_strength(
             .then_some(MatchStrength::Strong);
     }
     if application.identity.starts_with("shell:") {
+        // The legacy Administrative Tools and System Tools folders contain
+        // classic .msc/.exe shortcuts. AppsFolder exposes those entries as
+        // virtual shell items, so their filesystem targets cannot be compared
+        // directly. Restrict the title fallback to these known folders and
+        // still let select_association_candidate reject ambiguous matches.
+        if is_legacy_tools_shortcut(&entry.path)
+            && !application.title.is_empty()
+            && shortcut.title.eq_ignore_ascii_case(&application.title)
+        {
+            return Some(MatchStrength::TitleFallback);
+        }
         // Virtual AppsFolder entries (for example Squirrel apps) do not
         // expose a filesystem executable. Their Start Menu shortcuts may
         // legitimately point to different launchers (Update.exe vs the
@@ -532,10 +779,32 @@ fn shortcut_match_strength(
                 .collect::<String>()
         };
         let title = compact(&application.title);
-        let shell_identity = compact(application.identity.trim_start_matches("shell:"));
+        let shell_identity_path = application.identity.trim_start_matches("shell:");
+        let shell_identity = compact(shell_identity_path);
+        let shell_identity_matches_title = shell_identity_path
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .filter(|part| !part.is_empty())
+            .map(compact)
+            .any(|part| part == title);
+        let is_auto_generated = shell_identity.starts_with("microsoftautogenerated");
+        let target_stem = entry
+            .target
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(compact);
+        let target_matches_title = target_stem.as_ref().is_some_and(|stem| stem == &title);
+        let shell_path_stem = shell_identity_path
+            .rsplit(['\\', '/'])
+            .next()
+            .and_then(|name| name.rsplit_once('.').map(|(stem, _)| compact(stem)));
+        let shell_path_matches_target = shell_path_stem
+            .zip(target_stem.as_ref())
+            .is_some_and(|(shell_stem, target_stem)| shell_stem == *target_stem);
         if !title.is_empty()
             && shortcut.title.eq_ignore_ascii_case(&application.title)
-            && shell_identity.contains(&title)
+            && (shell_identity_matches_title
+                || (is_auto_generated && target_matches_title)
+                || shell_path_matches_target)
         {
             return Some(MatchStrength::TitleFallback);
         }
@@ -585,14 +854,10 @@ fn refresh_application_location(item: &mut SearchResult) {
         .iter()
         .filter(|entry| !is_shell_namespace(&entry.target) && !looks_like_uri(&entry.target))
         .min_by_key(|entry| {
-            let is_update = entry
-                .target
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .is_some_and(|stem| stem.eq_ignore_ascii_case("update"));
+            let is_update = crate::platform::windows_rules::is_updater_path(&entry.target);
             (
                 is_update,
-                entry.source != "AppsFolder",
+                entry.source != crate::platform::SourceId::AppsFolder,
                 entry.target.to_string_lossy().to_lowercase(),
             )
         })
@@ -647,10 +912,7 @@ fn shell_apps_folder_value(value: &str) -> Option<&str> {
 }
 
 fn is_shell_namespace(path: &Path) -> bool {
-    path.to_string_lossy()
-        .trim()
-        .get(.."shell:".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("shell:"))
+    crate::platform::windows_rules::is_shell_namespace(path)
 }
 
 fn same_filesystem_target(left: &Path, right: &Path) -> bool {
@@ -696,6 +958,25 @@ fn target_identity(path: &Path) -> String {
         .map(|_| "exe")
         .unwrap_or("target");
     format!("{prefix}:{}", normalize_path(path))
+}
+
+fn shortcut_icon_target(
+    shortcut_path: &Path,
+    icon_path: Option<&Path>,
+    resolved_target: &Path,
+) -> PathBuf {
+    let Some(icon_path) = icon_path else {
+        return resolved_target.to_owned();
+    };
+    let expanded = expand_windows_variables(icon_path.to_owned());
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        shortcut_path
+            .parent()
+            .map(|parent| parent.join(&expanded))
+            .unwrap_or(expanded)
+    }
 }
 
 fn aumid_identity(aumid: &str) -> String {
@@ -744,6 +1025,9 @@ fn merge_by_identity(items: &mut Vec<SearchResult>) {
                     let preserved_aliases = std::mem::take(&mut existing.aliases);
                     let preserved_sources = std::mem::take(&mut existing.sources);
                     let preserved_launch_entries = std::mem::take(&mut existing.launch_entries);
+                    if item.icon.is_none() {
+                        item.icon = existing.icon.take();
+                    }
                     item.aliases = preserved_aliases;
                     item.sources = preserved_sources;
                     item.launch_entries = preserved_launch_entries;
@@ -761,12 +1045,13 @@ fn merge_by_identity(items: &mut Vec<SearchResult>) {
         item.aliases.sort_by_key(|alias| alias.to_lowercase());
         item.aliases
             .dedup_by(|left, right| left.eq_ignore_ascii_case(right));
-        item.sources.sort_by_key(|source| source.to_lowercase());
         item.sources
-            .dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+            .sort_by_key(|source| source.as_str().to_lowercase());
+        item.sources.dedup();
         item.launch_entries.sort_by(|left, right| {
             left.source
-                .cmp(&right.source)
+                .as_str()
+                .cmp(&right.source.as_str())
                 .then_with(|| left.path.cmp(&right.path))
                 .then_with(|| left.arguments.cmp(&right.arguments))
         });
@@ -778,16 +1063,8 @@ fn merge_by_identity(items: &mut Vec<SearchResult>) {
     *items = merged;
 }
 
-fn source_priority(source: &str) -> u8 {
-    match source {
-        "AppsFolder" => 0,
-        "Package" => 1,
-        "StartMenu" => 2,
-        "Desktop" => 3,
-        "ExecutionAlias" => 4,
-        "Steam" => 4,
-        _ => 4,
-    }
+fn source_priority(source: &crate::platform::SourceId) -> u8 {
+    source.priority()
 }
 
 #[cfg(test)]
@@ -811,6 +1088,7 @@ mod tests {
             launch_entries: vec![],
             actions: Vec::new(),
             icon: None,
+            ranking_bias: 0,
         }
     }
 
@@ -830,6 +1108,18 @@ mod tests {
     }
 
     #[test]
+    fn identity_replacement_preserves_existing_icon() {
+        let mut start_menu = item("exe:c:\\apps\\demo.exe", "Demo", "StartMenu");
+        start_menu.icon = Some(IconSpec::System(PathBuf::from(r"C:\Apps\demo.exe")));
+        let apps_folder = item("exe:c:\\apps\\demo.exe", "Demo", "AppsFolder");
+        let mut items = vec![start_menu, apps_folder];
+
+        merge_by_identity(&mut items);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].icon.is_some());
+    }
+
+    #[test]
     fn same_title_with_distinct_targets_is_not_deduplicated() {
         let mut items = vec![
             item("shortcut:c:\\one.exe", "Settings", "StartMenu"),
@@ -843,7 +1133,20 @@ mod tests {
     fn target_stem_is_searchable() {
         let mut item = item("exe:c:\\windows\\notepad.exe", "记事本", "StartMenu");
         item.aliases = target_stem_alias(&item.title, Path::new(r"C:\Windows\notepad.exe"));
-        assert_eq!(SearchCore::new(vec![item]).search("notepad", 1).len(), 1);
+        assert_eq!(SearchCore::new(vec![item]).search("notepad").len(), 1);
+    }
+
+    #[test]
+    fn custom_file_result_uses_default_open_action() {
+        let result = generic_file_result(
+            Path::new(r"C:\Tools\Readme.md"),
+            "Readme",
+            source_ids::CUSTOM_DIRECTORIES,
+        );
+        assert_eq!(result.title, "Readme");
+        assert_eq!(result.category, ResultCategory::Unclassified);
+        assert_eq!(result.source, crate::platform::SourceId::CustomDirectories);
+        assert!(matches!(result.icon, Some(IconSpec::DefaultOpen(_))));
     }
 
     #[test]
@@ -894,9 +1197,12 @@ mod tests {
         let mut items = vec![app, shortcut];
         associate_file_entries(&mut items);
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].source, "AppsFolder");
+        assert_eq!(items[0].source, crate::platform::SourceId::AppsFolder);
         assert_eq!(items[0].launch_entries.len(), 2);
-        assert!(items[0].sources.iter().any(|source| source == "StartMenu"));
+        assert!(items[0]
+            .sources
+            .iter()
+            .any(|source| *source == crate::platform::SourceId::StartMenu));
     }
 
     #[test]
@@ -928,9 +1234,13 @@ mod tests {
         }];
         let mut items = vec![app, shortcut];
         associate_file_entries(&mut items);
+        merge_by_identity(&mut items);
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].source, "AppsFolder");
-        assert!(items[0].sources.iter().any(|source| source == "StartMenu"));
+        assert_eq!(items[0].source, crate::platform::SourceId::AppsFolder);
+        assert!(items[0]
+            .sources
+            .iter()
+            .any(|source| *source == crate::platform::SourceId::StartMenu));
     }
 
     #[test]
@@ -966,8 +1276,86 @@ mod tests {
         let mut items = vec![app, update, versioned];
         associate_file_entries(&mut items);
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].source, "AppsFolder");
+        assert_eq!(items[0].source, crate::platform::SourceId::AppsFolder);
         assert_eq!(items[0].launch_entries.len(), 3);
+    }
+
+    #[test]
+    fn auto_generated_git_apps_folder_entry_matches_shortcut_by_target_stem() {
+        let mut app = item(
+            "shell:microsoft.autogenerated.{0fdd9c6b-656b-0f1f-ab08-b1cdbb7067b3}",
+            "Git Bash",
+            "AppsFolder",
+        );
+        app.launch_entries = vec![LaunchEntry {
+            source: "AppsFolder".into(),
+            path: PathBuf::from(
+                r"shell:AppsFolder\Microsoft.AutoGenerated.{0FDD9C6B-656B-0F1F-AB08-B1CDBB7067B3}",
+            ),
+            target: PathBuf::from(
+                r"shell:AppsFolder\Microsoft.AutoGenerated.{0FDD9C6B-656B-0F1F-AB08-B1CDBB7067B3}",
+            ),
+            arguments: String::new(),
+            working_directory: None,
+        }];
+        let mut shortcut = item(
+            "exe:c:\\program files\\git\\git-bash.exe",
+            "Git Bash",
+            "StartMenu",
+        );
+        shortcut.launch_entries = vec![LaunchEntry {
+            source: "StartMenu".into(),
+            path: PathBuf::from(r"C:\Start Menu\Git Bash.lnk"),
+            target: PathBuf::from(r"C:\Program Files\Git\git-bash.exe"),
+            arguments: "--cd-to-home".into(),
+            working_directory: None,
+        }];
+
+        let mut items = vec![app, shortcut];
+        associate_file_entries(&mut items);
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].identity,
+            "shell:microsoft.autogenerated.{0fdd9c6b-656b-0f1f-ab08-b1cdbb7067b3}"
+        );
+        assert_eq!(items[0].launch_entries.len(), 2);
+    }
+
+    #[test]
+    fn local_html_shell_entry_matches_shortcut_before_classification() {
+        let mut app = item(
+            r"shell:{6d809377-6af0-444b-8957-a3773f02200e}\git\releasenotes.html",
+            "Git Release Notes",
+            "AppsFolder",
+        );
+        app.launch_entries = vec![LaunchEntry {
+            source: "AppsFolder".into(),
+            path: PathBuf::from(
+                r"shell:AppsFolder\{6D809377-6AF0-444B-8957-A3773F02200E}\Git\ReleaseNotes.html",
+            ),
+            target: PathBuf::from(
+                r"shell:AppsFolder\{6D809377-6AF0-444B-8957-A3773F02200E}\Git\ReleaseNotes.html",
+            ),
+            arguments: String::new(),
+            working_directory: None,
+        }];
+        let mut shortcut = item(
+            r"target:c:\program files\git\releasenotes.html",
+            "Git Release Notes",
+            "StartMenu",
+        );
+        shortcut.launch_entries = vec![LaunchEntry {
+            source: "StartMenu".into(),
+            path: PathBuf::from(r"C:\Start Menu\Git Release Notes.lnk"),
+            target: PathBuf::from(r"C:\Program Files\Git\ReleaseNotes.html"),
+            arguments: String::new(),
+            working_directory: None,
+        }];
+
+        let mut items = vec![app, shortcut];
+        associate_file_entries(&mut items);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].launch_entries.len(), 2);
     }
 
     #[test]
@@ -977,6 +1365,30 @@ mod tests {
         assert!(is_shell_namespace(shell));
         assert!(!is_shell_namespace(file));
         assert!(!same_filesystem_target(shell, file));
+    }
+
+    #[test]
+    fn classification_prefers_concrete_target_over_shell_entry() {
+        let mut result = item("shell:git-release-notes", "Git Release Notes", "AppsFolder");
+        result.category = ResultCategory::Unclassified;
+        result.launch_entries = vec![
+            LaunchEntry {
+                source: "AppsFolder".into(),
+                path: PathBuf::from(r"shell:AppsFolder\Git.ReleaseNotes"),
+                target: PathBuf::from(r"shell:AppsFolder\Git.ReleaseNotes"),
+                arguments: String::new(),
+                working_directory: None,
+            },
+            LaunchEntry {
+                source: "StartMenu".into(),
+                path: PathBuf::from(r"C:\Start Menu\Git Release Notes.lnk"),
+                target: PathBuf::from(r"C:\Program Files\Git\ReleaseNotes.html"),
+                arguments: String::new(),
+                working_directory: None,
+            },
+        ];
+        classify_unclassified_items(std::slice::from_mut(&mut result));
+        assert_eq!(result.category, ResultCategory::Website);
     }
 
     #[test]
@@ -1024,6 +1436,58 @@ mod tests {
             ),
             Some("shell:com.squirrel.discord.discord".into())
         );
+    }
+
+    #[test]
+    fn administrative_tools_shortcut_matches_virtual_apps_folder_by_title() {
+        let mut application = item("shell:legacy.taskmanager", "Task Manager", "AppsFolder");
+        application.launch_entries = vec![LaunchEntry {
+            source: "AppsFolder".into(),
+            path: PathBuf::from(r"shell:AppsFolder\legacy.taskmanager"),
+            target: PathBuf::from(r"shell:AppsFolder\legacy.taskmanager"),
+            arguments: String::new(),
+            working_directory: None,
+        }];
+        let mut shortcut = item("exe:taskmgr", "Task Manager", "StartMenu");
+        shortcut.icon = Some(IconSpec::System(PathBuf::from(
+            r"C:\Windows\System32\Taskmgr.exe",
+        )));
+        shortcut.launch_entries = vec![LaunchEntry {
+            source: "StartMenu".into(),
+            path: PathBuf::from(
+                r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\System Tools\Task Manager.lnk",
+            ),
+            target: PathBuf::from(r"C:\Windows\System32\Taskmgr.exe"),
+            arguments: "/7".into(),
+            working_directory: None,
+        }];
+
+        let mut items = vec![application, shortcut];
+        associate_file_entries(&mut items);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].source, crate::platform::SourceId::AppsFolder);
+        assert!(items[0]
+            .sources
+            .iter()
+            .any(|source| *source == crate::platform::SourceId::StartMenu));
+        assert_eq!(items[0].launch_entries.len(), 2);
+        assert_eq!(
+            items[0].icon,
+            Some(IconSpec::System(PathBuf::from(
+                r"C:\Windows\System32\Taskmgr.exe",
+            )))
+        );
+    }
+
+    #[test]
+    fn shortcut_icon_path_expands_variables_and_relative_paths() {
+        let target = shortcut_icon_target(
+            Path::new(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Admin.lnk"),
+            Some(Path::new(r"%windir%\System32\Mycomput.dll")),
+            Path::new(r"C:\Windows\System32\Mycomput.exe"),
+        );
+        assert!(target.ends_with(r"System32\Mycomput.dll"));
     }
 
     #[test]
@@ -1082,7 +1546,13 @@ mod tests {
         merge_by_identity(&mut items);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].title, "Demo Start");
-        assert_eq!(items[0].sources, vec!["Desktop", "StartMenu"]);
+        assert_eq!(
+            items[0].sources,
+            vec![
+                crate::platform::SourceId::Desktop,
+                crate::platform::SourceId::StartMenu
+            ]
+        );
         assert_eq!(items[0].launch_entries.len(), 2);
         assert!(items[0]
             .aliases
@@ -1098,8 +1568,8 @@ mod tests {
         let mut entries = vec![item];
         merge_by_identity(&mut entries);
         let search = SearchCore::new(entries);
-        assert_eq!(search.search("计算器", 1).len(), 1);
-        assert_eq!(search.search("calculator", 1).len(), 1);
+        assert_eq!(search.search("计算器").len(), 1);
+        assert_eq!(search.search("calculator").len(), 1);
     }
 
     #[test]

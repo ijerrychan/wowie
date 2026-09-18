@@ -1,5 +1,5 @@
 use crate::plugin::PluginManager;
-use crate::result::{ResultCategory, SearchResult};
+use crate::result::SearchResult;
 use anyhow::{Context, Result};
 use std::sync::Mutex;
 
@@ -10,10 +10,11 @@ pub struct SearchCore {
 }
 
 impl SearchCore {
+    #[cfg(test)]
     pub fn new(results: Vec<SearchResult>) -> Self {
         Self {
             results: Mutex::new(results),
-            plugins: PluginManager::discover(),
+            plugins: PluginManager::discover_with_locale("en"),
             dynamic_results: Mutex::new(Vec::new()),
         }
     }
@@ -65,14 +66,13 @@ impl SearchCore {
         serde_json::from_str(&output).context("decode plugin execute response")
     }
 
-    pub fn search(&self, query: &str, limit: usize) -> Vec<SearchResult> {
+    pub fn search(&self, query: &str) -> Vec<SearchResult> {
         let query = query.trim().to_lowercase();
         let debug = std::env::var_os("WOWIE_SEARCH_DEBUG").is_some_and(|value| value != "0");
         if debug {
             eprintln!(
-                "[search] query={:?} limit={} indexed_records={}",
+                "[search] query={:?} indexed_records={}",
                 query,
-                limit,
                 self.results
                     .lock()
                     .map(|results| results.len())
@@ -98,14 +98,7 @@ impl SearchCore {
                     .iter()
                     .filter_map(|alias| {
                         let score = match_score(&query, alias)?;
-                        if item.source == "Steam" && alias.eq_ignore_ascii_case("steam") {
-                            // Keep Steam games discoverable through the source
-                            // keyword, but let the actual Steam application
-                            // (whose title is an exact match) rank first.
-                            Some(score.min(400))
-                        } else {
-                            Some(score)
-                        }
+                        Some(score)
                     })
                     .max();
                 let score = [title_score, alias_score]
@@ -127,15 +120,11 @@ impl SearchCore {
                         item.launch_arguments
                     );
                 }
-                score.map(|score| (score, item))
+                score.map(|score| (score + item.ranking_bias, item))
             })
             .collect();
         ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.title.cmp(&b.1.title)));
-        let found: Vec<SearchResult> = ranked
-            .into_iter()
-            .take(limit)
-            .map(|(_, item)| item.clone())
-            .collect();
+        let found: Vec<SearchResult> = ranked.into_iter().map(|(_, item)| item.clone()).collect();
         if debug {
             eprintln!("[search] final_results={}", found.len());
             for (index, item) in found.iter().enumerate() {
@@ -177,6 +166,7 @@ fn match_score(query: &str, title: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::result::ResultCategory;
     #[test]
     fn ranks_prefix_first() {
         let make = |id: &str, title: &str| SearchResult {
@@ -194,9 +184,10 @@ mod tests {
             launch_entries: vec![],
             actions: vec![],
             icon: None,
+            ranking_bias: 0,
         };
         let core = SearchCore::new(vec![make("1", "Calculator"), make("2", "Calendar")]);
-        assert_eq!(core.search("calc", 2)[0].title, "Calculator");
+        assert_eq!(core.search("calc")[0].title, "Calculator");
     }
     #[test]
     fn does_not_support_fuzzy_typo() {
@@ -215,8 +206,9 @@ mod tests {
             launch_entries: vec![],
             actions: vec![],
             icon: None,
+            ranking_bias: 0,
         };
-        assert!(SearchCore::new(vec![item]).search("ntpd", 1).is_empty());
+        assert!(SearchCore::new(vec![item]).search("ntpd").is_empty());
     }
 
     #[test]
@@ -236,8 +228,9 @@ mod tests {
             launch_entries: vec![],
             actions: vec![],
             icon: None,
+            ranking_bias: 0,
         };
-        assert_eq!(SearchCore::new(vec![item]).search("calc", 1).len(), 1);
+        assert_eq!(SearchCore::new(vec![item]).search("calc").len(), 1);
     }
 
     #[test]
@@ -258,13 +251,13 @@ mod tests {
                 launch_entries: vec![],
                 actions: vec![],
                 icon: None,
+                ranking_bias: 0,
             }
         };
-        let core = SearchCore::new(vec![
-            make("game", "Portal 2", "Steam", vec!["steam"]),
-            make("steam", "Steam", "AppsFolder", vec![]),
-        ]);
-        let results = core.search("steam", 2);
+        let mut game = make("game", "Portal 2", "Steam", vec!["steam"]);
+        game.ranking_bias = -600;
+        let core = SearchCore::new(vec![game, make("steam", "Steam", "AppsFolder", vec![])]);
+        let results = core.search("steam");
         assert_eq!(results[0].title, "Steam");
         assert_eq!(results[1].title, "Portal 2");
     }
@@ -286,8 +279,9 @@ mod tests {
             launch_entries: vec![],
             actions: vec![],
             icon: None,
+            ranking_bias: 0,
         };
-        assert_eq!(SearchCore::new(vec![item]).search("calc", 1).len(), 1);
+        assert_eq!(SearchCore::new(vec![item]).search("calc").len(), 1);
     }
 
     #[test]
@@ -307,8 +301,9 @@ mod tests {
             launch_entries: vec![],
             actions: vec![],
             icon: None,
+            ranking_bias: 0,
         };
-        assert!(SearchCore::new(vec![item]).search("weixin", 12).is_empty());
+        assert!(SearchCore::new(vec![item]).search("weixin").is_empty());
     }
 
     #[test]
@@ -328,17 +323,18 @@ mod tests {
             launch_entries: vec![],
             actions: vec![],
             icon: None,
+            ranking_bias: 0,
         };
         let core = SearchCore::new(vec![
             make("long", "My Calculator Tool"),
             make("short", "Calculator"),
         ]);
-        assert_eq!(core.search("calc", 2)[0].id, "short");
+        assert_eq!(core.search("calc")[0].id, "short");
     }
 
     #[test]
-    fn search_respects_zero_limit() {
-        let item = SearchResult {
+    fn search_returns_all_matches_without_a_limit() {
+        let first = SearchResult {
             id: "1".into(),
             identity: "1".into(),
             title: "Calculator".into(),
@@ -353,7 +349,14 @@ mod tests {
             launch_entries: vec![],
             actions: vec![],
             icon: None,
+            ranking_bias: 0,
         };
-        assert!(SearchCore::new(vec![item]).search("calc", 0).is_empty());
+        let second = SearchResult {
+            id: "2".into(),
+            identity: "2".into(),
+            title: "Calculator Settings".into(),
+            ..first.clone()
+        };
+        assert_eq!(SearchCore::new(vec![first, second]).search("calc").len(), 2);
     }
 }

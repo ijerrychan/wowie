@@ -1,6 +1,14 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{collections::HashSet, fs, path::PathBuf};
+
+const DEFAULT_HOTKEY: &str = "Alt+Space";
+const DEFAULT_RENDERER: &str = "skia";
+const DEFAULT_WINDOW_WIDTH: u32 = 680;
+const MIN_WINDOW_WIDTH: u32 = 420;
+const MAX_WINDOW_WIDTH: u32 = 1200;
+const DEFAULT_THEME: &str = "system";
+const DEFAULT_LANGUAGE: &str = "system";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -8,24 +16,56 @@ pub struct Config {
     pub hotkey: String,
     pub renderer: String,
     pub window_width: u32,
-    pub max_results: usize,
     pub theme: String,
     pub language: String,
     pub show_on_startup: bool,
     pub hide_on_focus_loss: bool,
+    pub providers: ProviderConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderConfig {
+    pub store_apps: bool,
+    pub start_menu: bool,
+    pub desktop: bool,
+    pub control_panel: bool,
+    pub settings: bool,
+    pub steam: bool,
+    pub steam_excluded_app_ids: Vec<String>,
+    pub steam_excluded_name_markers: Vec<String>,
+    pub indexed_directories: Vec<PathBuf>,
+    pub indexed_extensions: Vec<String>,
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            store_apps: true,
+            start_menu: true,
+            desktop: true,
+            control_panel: true,
+            settings: true,
+            steam: true,
+            steam_excluded_app_ids: vec!["228980".into()],
+            steam_excluded_name_markers: vec!["redistributable".into()],
+            indexed_directories: Vec::new(),
+            indexed_extensions: vec!["lnk".into(), "url".into(), "exe".into()],
+        }
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            hotkey: "Alt+Space".into(),
-            renderer: "skia".into(),
-            window_width: 680,
-            max_results: 12,
-            theme: "system".into(),
-            language: "system".into(),
+            hotkey: DEFAULT_HOTKEY.into(),
+            renderer: DEFAULT_RENDERER.into(),
+            window_width: DEFAULT_WINDOW_WIDTH,
+            theme: DEFAULT_THEME.into(),
+            language: DEFAULT_LANGUAGE.into(),
             show_on_startup: true,
             hide_on_focus_loss: true,
+            providers: ProviderConfig::default(),
         }
     }
 }
@@ -53,19 +93,46 @@ impl Config {
     fn normalize(&mut self) {
         self.hotkey = self.hotkey.trim().to_string();
         if self.hotkey.is_empty() {
-            self.hotkey = Self::default().hotkey;
+            self.hotkey = DEFAULT_HOTKEY.into();
         }
         if self.renderer != "skia" && self.renderer != "software" {
-            self.renderer = "skia".into();
+            self.renderer = DEFAULT_RENDERER.into();
         }
-        self.window_width = self.window_width.clamp(420, 1200);
-        self.max_results = self.max_results.clamp(1, 50);
+        self.window_width = self.window_width.clamp(MIN_WINDOW_WIDTH, MAX_WINDOW_WIDTH);
         if self.theme != "system" && self.theme != "light" && self.theme != "dark" {
-            self.theme = "system".into();
+            self.theme = DEFAULT_THEME.into();
         }
         if self.language != "system" && !crate::i18n::is_supported_language(&self.language) {
-            self.language = "system".into();
+            self.language = DEFAULT_LANGUAGE.into();
         }
+        self.providers
+            .steam_excluded_app_ids
+            .retain(|value| !value.trim().is_empty());
+        self.providers
+            .steam_excluded_name_markers
+            .retain(|value| !value.trim().is_empty());
+        let mut seen_directories = HashSet::new();
+        self.providers.indexed_directories.retain(|path| {
+            if path.as_os_str().is_empty() || !path.is_dir() {
+                eprintln!(
+                    "ignoring custom index directory that is not accessible: {}",
+                    path.display()
+                );
+                return false;
+            }
+            seen_directories.insert(path.to_string_lossy().to_lowercase())
+        });
+        for extension in &mut self.providers.indexed_extensions {
+            *extension = extension
+                .trim()
+                .trim_start_matches('.')
+                .to_ascii_lowercase();
+        }
+        self.providers
+            .indexed_extensions
+            .retain(|value| !value.is_empty());
+        self.providers.indexed_extensions.sort();
+        self.providers.indexed_extensions.dedup();
     }
 
     pub fn save(&self) -> Result<()> {
@@ -85,6 +152,27 @@ pub fn config_path() -> PathBuf {
         .join("config.json")
 }
 
+pub fn watch_changes() -> std::sync::mpsc::Receiver<()> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let path = config_path();
+    std::thread::spawn(move || {
+        let mut last_modified = None;
+        loop {
+            let modified = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .ok();
+            if modified.is_some() && modified != last_modified {
+                if last_modified.is_some() && sender.send(()).is_err() {
+                    break;
+                }
+                last_modified = modified;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    });
+    receiver
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,8 +180,15 @@ mod tests {
     fn defaults_are_stable() {
         let config = Config::default();
         assert_eq!(config.hotkey, "Alt+Space");
-        assert_eq!(config.max_results, 12);
         assert!(config.show_on_startup);
         assert!(config.hide_on_focus_loss);
+        assert!(config.providers.steam);
+        assert!(config.providers.desktop);
+        assert!(config.providers.indexed_directories.is_empty());
+        assert!(config
+            .providers
+            .indexed_extensions
+            .iter()
+            .any(|extension| extension == "exe"));
     }
 }

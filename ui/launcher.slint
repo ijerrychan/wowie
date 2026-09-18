@@ -10,7 +10,6 @@ export component Launcher inherits Window {
     background: transparent;
 
     in-out property <int> window-width: 680;
-    in-out property <int> max-results: 12;
     in property <bool> dark-mode: true;
     in property <color> accent-color: #0067c0;
     in property <color> accent-background: #280067c0;
@@ -22,10 +21,13 @@ export component Launcher inherits Window {
     in property <[ResultRow]> results;
     in-out property <int> selected-index: -1;
     callback query-changed(string);
+    callback visible-range-changed(int, int);
     callback launch-requested(int);
     callback dismiss-requested;
 
     private property <length> result-row-height: 56px;
+    private property <int> first-visible-index: max(0, round(-results-list.content-y / root.result-row-height));
+    private property <int> last-visible-index: min(root.results.length, round((-results-list.content-y + results-list.visible-height) / root.result-row-height) + 1);
     private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
     private property <color> surface: root.dark-mode ? #292929 : #ffffff;
     private property <color> surface-hover: root.dark-mode ? #323232 : #f1f3f6;
@@ -47,6 +49,8 @@ export component Launcher inherits Window {
     }
 
     changed selected-index => { root.ensure-selected-visible(); }
+    changed first-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
+    changed last-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
 
     Rectangle {
         x: 4px; y: 3px; width: parent.width - 8px; height: parent.height - 8px;
@@ -117,7 +121,7 @@ export component Launcher inherits Window {
                     }
                     Text {
                         x: parent.width - 76px; y: 17px; width: 68px; height: 22px;
-                        text: row.category == "Game" ? @tr("Game") : row.category == "Website" ? @tr("Website") : row.category == "Control Panel" ? @tr("Control Panel") : @tr("Application");
+                        text: row.category == "game" ? @tr("Game") : row.category == "website" ? @tr("Website") : row.category == "document" ? @tr("Document") : row.category == "other" ? @tr("Other") : row.category == "control-panel" ? @tr("Control Panel") : row.category == "settings" ? @tr("Settings") : @tr("Application");
                         color: root.text-tertiary; font-size: 10px;
                         horizontal-alignment: center; vertical-alignment: center;
                     }

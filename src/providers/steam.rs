@@ -1,5 +1,6 @@
 //! Steam library discovery based on Steam's own library and app manifests.
 
+use crate::platform::source_ids;
 use crate::result::{IconSpec, LaunchEntry, ResultCategory, SearchResult};
 use std::{
     collections::HashMap,
@@ -7,7 +8,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const NON_LAUNCHER_EXECUTABLE_MARKERS: [&str; 6] =
+    ["unins", "uninstall", "setup", "install", "crash", "redist"];
+
+#[allow(dead_code)]
 pub fn discover() -> Vec<SearchResult> {
+    discover_with_config(&crate::config::ProviderConfig::default())
+}
+
+pub fn discover_with_config(config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
     let mut roots = crate::platform::steam_install_roots();
     roots.extend(default_roots());
     roots.sort();
@@ -58,7 +67,9 @@ pub fn discover() -> Vec<SearchResult> {
             else {
                 continue;
             };
-            let Some(category) = classify_app(appid, fields.get("name"), &app_types) else {
+            let Some(category) =
+                classify_app_with_config(appid, fields.get("name"), &app_types, config)
+            else {
                 continue;
             };
             let location = steamapps.join("common").join(install_dir);
@@ -90,10 +101,10 @@ fn game_result(
         launch_target: target.clone(),
         launch_arguments: String::new(),
         launch_working_directory: Some(location.clone()),
-        source: "Steam".into(),
-        sources: vec!["Steam".into()],
+        source: source_ids::STEAM.into(),
+        sources: vec![source_ids::STEAM.into()],
         launch_entries: vec![LaunchEntry {
-            source: "Steam".into(),
+            source: source_ids::STEAM.into(),
             path: target.clone(),
             target,
             arguments: String::new(),
@@ -101,6 +112,7 @@ fn game_result(
         }],
         actions: Vec::new(),
         icon,
+        ranking_bias: -600,
     }
 }
 
@@ -157,14 +169,38 @@ fn parse_app_kind(value: &str) -> Option<SteamAppKind> {
     }
 }
 
+#[cfg(test)]
 fn classify_app(
     appid: &str,
     name: Option<&String>,
     app_types: &HashMap<String, SteamAppKind>,
 ) -> Option<ResultCategory> {
-    if appid == "228980"
-        || name.is_some_and(|value| value.to_ascii_lowercase().contains("redistributable"))
-    {
+    classify_app_with_config(
+        appid,
+        name,
+        app_types,
+        &crate::config::ProviderConfig::default(),
+    )
+}
+
+fn classify_app_with_config(
+    appid: &str,
+    name: Option<&String>,
+    app_types: &HashMap<String, SteamAppKind>,
+    config: &crate::config::ProviderConfig,
+) -> Option<ResultCategory> {
+    let excluded_by_id = config
+        .steam_excluded_app_ids
+        .iter()
+        .any(|excluded| excluded == appid);
+    let excluded_by_name = name.is_some_and(|value| {
+        let normalized = value.to_ascii_lowercase();
+        config
+            .steam_excluded_name_markers
+            .iter()
+            .any(|marker| normalized.contains(&marker.to_ascii_lowercase()))
+    });
+    if excluded_by_id || excluded_by_name {
         return None;
     }
     match app_types.get(appid) {
@@ -297,7 +333,7 @@ fn collect_executables(root: &Path, depth: usize, output: &mut Vec<(PathBuf, u64
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_lowercase();
-        if ["unins", "uninstall", "setup", "install", "crash", "redist"]
+        if NON_LAUNCHER_EXECUTABLE_MARKERS
             .iter()
             .any(|part| name.contains(part))
         {

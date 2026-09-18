@@ -6,7 +6,7 @@ use crate::{
 };
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -48,12 +48,8 @@ fn resolve_uncached(item: &SearchResult) -> Option<IconData> {
         .launch_entries
         .iter()
         .filter(|entry| {
-            !entry.target.to_string_lossy().starts_with("shell:")
-                && !entry
-                    .target
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .contains("\\update.exe")
+            !crate::platform::windows_rules::is_shell_namespace(&entry.target)
+                && !crate::platform::windows_rules::is_updater_path(&entry.target)
         })
         .min_by_key(|entry| entry.target.to_string_lossy().to_lowercase())
         .map(|entry| &entry.target)
@@ -63,6 +59,7 @@ fn resolve_uncached(item: &SearchResult) -> Option<IconData> {
         item.launch_entries
             .iter()
             .map(|entry| &entry.path)
+            .filter(|path| !crate::platform::windows_rules::is_shortcut_path(path))
             .find_map(|path| crate::platform::application_icon(path))
     })
 }
@@ -70,6 +67,9 @@ fn resolve_uncached(item: &SearchResult) -> Option<IconData> {
 fn resolve_spec(spec: &IconSpec) -> Option<IconData> {
     match spec {
         IconSpec::System(target) => crate::platform::application_icon(target),
+        IconSpec::SystemIndexed { path, index } => {
+            crate::platform::indexed_application_icon(path, *index)
+        }
         IconSpec::DefaultOpen(target) => crate::platform::default_open_icon(target),
         IconSpec::Resource(path) => load_png_icon(path),
     }
@@ -91,6 +91,9 @@ fn icon_source_key(item: &SearchResult) -> String {
         return match icon {
             IconSpec::System(path) | IconSpec::Resource(path) => {
                 format!("explicit:{}", path.display())
+            }
+            IconSpec::SystemIndexed { path, index } => {
+                format!("explicit:{}#{}", path.display(), index)
             }
             IconSpec::DefaultOpen(path) => {
                 let value = path.to_string_lossy();
@@ -120,6 +123,7 @@ fn icon_source_key(item: &SearchResult) -> String {
 mod tests {
     use super::*;
     use crate::result::{ResultCategory, SearchResult};
+    use std::path::PathBuf;
 
     #[test]
     fn source_key_is_stable_for_same_result() {
@@ -138,6 +142,7 @@ mod tests {
             launch_entries: vec![],
             actions: vec![],
             icon: None,
+            ranking_bias: 0,
         };
         assert_eq!(icon_source_key(&item), icon_source_key(&item));
     }
@@ -177,6 +182,7 @@ mod tests {
             launch_entries: vec![],
             actions: vec![],
             icon: None,
+            ranking_bias: 0,
         }
     }
 }

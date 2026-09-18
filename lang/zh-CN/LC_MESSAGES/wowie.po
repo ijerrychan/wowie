@@ -36,5 +36,17 @@ msgid "Control Panel"
 msgstr "控制面板"
 
 msgctxt "Launcher"
+msgid "Settings"
+msgstr "设置"
+
+msgctxt "Launcher"
+msgid "Document"
+msgstr "文档"
+
+msgctxt "Launcher"
+msgid "Other"
+msgstr "其他"
+
+msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  导航     Enter  打开     Esc  隐藏"

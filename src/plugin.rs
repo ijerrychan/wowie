@@ -17,8 +17,10 @@ use std::{
 #[derive(Debug, Clone, Deserialize)]
 pub struct PluginManifest {
     pub id: String,
+    #[allow(dead_code)]
     pub name: String,
     #[serde(default = "default_version")]
+    #[allow(dead_code)]
     pub version: String,
     #[serde(default = "default_api_version")]
     pub api_version: u32,
@@ -27,6 +29,7 @@ pub struct PluginManifest {
     #[serde(default)]
     pub keywords: Vec<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub permissions: Vec<String>,
     #[serde(default = "default_locale")]
     pub default_locale: String,
@@ -106,10 +109,6 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
-    pub fn discover() -> Self {
-        Self::discover_with_locale("en")
-    }
-
     pub fn discover_with_locale(locale: &str) -> Self {
         let mut roots = vec![PathBuf::from("plugins")];
         if let Some(data) = dirs::data_local_dir() {
@@ -255,14 +254,15 @@ fn to_result(plugin: &InstalledPlugin, item: PluginItem) -> SearchResult {
         launch_target: target,
         launch_arguments: String::new(),
         launch_working_directory: None,
-        source: format!("plugin:{}", plugin.manifest.id),
-        sources: vec![format!("plugin:{}", plugin.manifest.id)],
+        source: format!("plugin:{}", plugin.manifest.id).into(),
+        sources: vec![format!("plugin:{}", plugin.manifest.id).into()],
         launch_entries: Vec::<LaunchEntry>::new(),
         actions,
         icon: item.icon.map(|icon| match icon {
             PluginIcon::Resource { path } => IconSpec::Resource(plugin.root.join(path)),
             PluginIcon::System { target } => IconSpec::System(target.into()),
         }),
+        ranking_bias: 0,
     }
 }
 

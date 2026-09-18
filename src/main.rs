@@ -1,3 +1,4 @@
+mod classifier;
 mod config;
 mod i18n;
 mod icon_service;
@@ -14,6 +15,7 @@ use providers::app::AppProvider;
 use result::{ResultCategory, SearchResult};
 use slint::{ComponentHandle, Model, ModelRc, Timer, VecModel};
 use std::{
+    collections::HashSet,
     rc::Rc,
     sync::{
         atomic::AtomicU64,
@@ -43,8 +45,10 @@ fn main() -> Result<()> {
             eprintln!("could not persist configuration: {error:#}");
         }
     }
-    let mut provider = AppProvider::discover();
-    let app_source_events = AppProvider::watch_sources();
+    let mut provider = AppProvider::discover_with_config(&config.providers);
+    let custom_directories = Arc::new(Mutex::new(config.providers.indexed_directories.clone()));
+    let app_source_events = AppProvider::watch_sources(Arc::clone(&custom_directories));
+    let config_events = config::watch_changes();
     let engine = search::SearchCore::with_plugins(
         provider.snapshot(),
         plugin::PluginManager::discover_with_locale(&config.language),
@@ -56,10 +60,11 @@ fn main() -> Result<()> {
     let follow_system_theme = config.theme == "system";
     let query_generation = Arc::new(AtomicU64::new(0));
     let current_query = Arc::new(Mutex::new(String::new()));
+    let icon_items = Arc::new(Mutex::new((0_u64, Vec::<SearchResult>::new())));
+    let icon_requests = Arc::new(Mutex::new((0_u64, HashSet::<usize>::new())));
 
     window.set_results(ModelRc::from(results.clone()));
     window.set_window_width(config.window_width as i32);
-    window.set_max_results(config.max_results as i32);
     window.set_dark_mode(dark_mode);
     let accent = platform.system_accent_color();
     window.set_accent_color(slint::Color::from_rgb_u8(
@@ -77,10 +82,30 @@ fn main() -> Result<()> {
     window.set_launch_error(String::new().into());
 
     {
-        let engine = engine.clone();
+        let icon_items = Arc::clone(&icon_items);
+        let icon_requests = Arc::clone(&icon_requests);
         let icon_service = icon_service.clone();
         let weak = window.as_weak();
-        let max_results = config.max_results;
+        let query_generation = Arc::clone(&query_generation);
+        window.on_visible_range_changed(move |start, end| {
+            request_icons(
+                start,
+                end,
+                &icon_items,
+                &icon_requests,
+                &icon_service,
+                &weak,
+                &query_generation,
+            );
+        });
+    }
+
+    {
+        let engine = engine.clone();
+        let icon_service = icon_service.clone();
+        let icon_items = Arc::clone(&icon_items);
+        let icon_requests = Arc::clone(&icon_requests);
+        let weak = window.as_weak();
         let query_generation = Arc::clone(&query_generation);
         let current_query = Arc::clone(&current_query);
         window.on_query_changed(move |query| {
@@ -95,26 +120,29 @@ fn main() -> Result<()> {
             let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
             let engine = Arc::clone(&engine);
             let icon_service = icon_service.clone();
+            let icon_items = Arc::clone(&icon_items);
+            let icon_requests = Arc::clone(&icon_requests);
             let weak = weak.clone();
             let query_generation = Arc::clone(&query_generation);
             std::thread::spawn(move || {
                 let found = if query.trim().is_empty() {
                     Vec::new()
                 } else {
-                    engine.search(query.as_str(), max_results)
+                    engine.search(query.as_str())
                 };
-                // Icon extraction can call into the Windows shell and is much
-                // slower than the in-memory search. Build rows off the UI
-                // thread so typing stays responsive.
-                let rows = found
-                    .iter()
-                    .map(|item| ResultRowPayload::from(item, &icon_service))
-                    .collect::<Vec<_>>();
+                let rows = found.iter().map(ResultRowPayload::from).collect::<Vec<_>>();
+                let found_for_icons = found;
                 let _ = slint::invoke_from_event_loop(move || {
                     if query_generation.load(Ordering::Acquire) != query_id {
                         return;
                     }
                     if let Some(window) = weak.upgrade() {
+                        if let Ok(mut state) = icon_items.lock() {
+                            *state = (query_id, found_for_icons);
+                        }
+                        if let Ok(mut state) = icon_requests.lock() {
+                            *state = (query_id, HashSet::new());
+                        }
                         let model = Rc::new(VecModel::from(
                             rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
                         ));
@@ -122,6 +150,15 @@ fn main() -> Result<()> {
                         window.set_results(ModelRc::from(model));
                         window.set_result_count(count as i32);
                         window.set_selected_index(if count > 0 { 0 } else { -1 });
+                        request_icons(
+                            0,
+                            count.min(8) as i32,
+                            &icon_items,
+                            &icon_requests,
+                            &icon_service,
+                            &window.as_weak(),
+                            &query_generation,
+                        );
                     }
                 });
             });
@@ -199,45 +236,76 @@ fn main() -> Result<()> {
     {
         let engine = Arc::clone(&engine);
         let icon_service = icon_service.clone();
+        let icon_items = Arc::clone(&icon_items);
+        let icon_requests = Arc::clone(&icon_requests);
         let weak = window.as_weak();
         let query_generation = Arc::clone(&query_generation);
         let current_query = Arc::clone(&current_query);
-        std::thread::spawn(move || {
-            for source in app_source_events {
-                if provider.refresh_source(source) {
-                    let indexed = provider.snapshot();
-                    engine.replace_results(indexed);
-                    let query = current_query
-                        .lock()
-                        .map(|value| value.clone())
-                        .unwrap_or_default();
-                    let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
-                    let found = if query.trim().is_empty() {
-                        Vec::new()
-                    } else {
-                        engine.search(&query, config.max_results)
-                    };
-                    let rows = found
-                        .iter()
-                        .map(|item| ResultRowPayload::from(item, &icon_service))
-                        .collect::<Vec<_>>();
-                    let query_generation_for_ui = Arc::clone(&query_generation);
-                    let weak_for_ui = weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if query_generation_for_ui.load(Ordering::Acquire) != query_id {
-                            return;
-                        }
-                        if let Some(window) = weak_for_ui.upgrade() {
-                            let model = Rc::new(VecModel::from(
-                                rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
-                            ));
-                            let count = model.row_count();
-                            window.set_results(ModelRc::from(model));
-                            window.set_result_count(count as i32);
-                            window.set_selected_index(if count > 0 { 0 } else { -1 });
-                        }
-                    });
+        std::thread::spawn(move || loop {
+            let mut changed = match app_source_events.recv_timeout(Duration::from_millis(200)) {
+                Ok(source) => provider.refresh_source(source),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+            if config_events.try_recv().is_ok() {
+                let (updated, valid) = config::Config::load();
+                if valid {
+                    if let Ok(mut directories) = custom_directories.lock() {
+                        *directories = updated.providers.indexed_directories.clone();
+                    }
+                    changed |= provider.apply_config(&updated.providers);
                 }
+            }
+            if changed {
+                let indexed = provider.snapshot();
+                engine.replace_results(indexed);
+                let query = current_query
+                    .lock()
+                    .map(|value| value.clone())
+                    .unwrap_or_default();
+                let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
+                let found = if query.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    engine.search(&query)
+                };
+                let rows = found.iter().map(ResultRowPayload::from).collect::<Vec<_>>();
+                let found_for_icons = found;
+                let query_generation_for_ui = Arc::clone(&query_generation);
+                let weak_for_ui = weak.clone();
+                let icon_items_for_ui = Arc::clone(&icon_items);
+                let icon_requests_for_ui = Arc::clone(&icon_requests);
+                let icon_service_for_ui = icon_service.clone();
+                let query_generation_for_icons = Arc::clone(&query_generation);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if query_generation_for_ui.load(Ordering::Acquire) != query_id {
+                        return;
+                    }
+                    if let Some(window) = weak_for_ui.upgrade() {
+                        if let Ok(mut state) = icon_items_for_ui.lock() {
+                            *state = (query_id, found_for_icons);
+                        }
+                        if let Ok(mut state) = icon_requests_for_ui.lock() {
+                            *state = (query_id, HashSet::new());
+                        }
+                        let model = Rc::new(VecModel::from(
+                            rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
+                        ));
+                        let count = model.row_count();
+                        window.set_results(ModelRc::from(model));
+                        window.set_result_count(count as i32);
+                        window.set_selected_index(if count > 0 { 0 } else { -1 });
+                        request_icons(
+                            0,
+                            count.min(8) as i32,
+                            &icon_items_for_ui,
+                            &icon_requests_for_ui,
+                            &icon_service_for_ui,
+                            &window.as_weak(),
+                            &query_generation_for_icons,
+                        );
+                    }
+                });
             }
         });
     }
@@ -344,37 +412,105 @@ struct ResultRowPayload {
 }
 
 impl ResultRowPayload {
-    fn from(item: &SearchResult, icon_service: &IconService) -> Self {
-        let icon = icon_service.resolve(item);
+    fn from(item: &SearchResult) -> Self {
         Self {
             id: item.id.clone().into(),
             title: item.title.clone().into(),
             location: item.location.clone().into(),
-            icon,
+            icon: None,
             category: match item.category {
-                ResultCategory::Game => "Game",
-                ResultCategory::Application => "Application",
-                ResultCategory::Website => "Website",
-                ResultCategory::ControlPanel => "Control Panel",
+                ResultCategory::Game => "game",
+                ResultCategory::Application => "application",
+                ResultCategory::Website => "website",
+                ResultCategory::ControlPanel => "control-panel",
+                ResultCategory::Settings => "settings",
+                ResultCategory::Document => "document",
+                ResultCategory::Other => "other",
+                ResultCategory::Unclassified => "application",
             }
             .into(),
         }
     }
 }
 
+fn request_icons(
+    start: i32,
+    end: i32,
+    icon_items: &Arc<Mutex<(u64, Vec<SearchResult>)>>,
+    icon_requests: &Arc<Mutex<(u64, HashSet<usize>)>>,
+    icon_service: &IconService,
+    weak: &slint::Weak<Launcher>,
+    query_generation: &Arc<AtomicU64>,
+) {
+    let (query_id, items) = icon_items
+        .lock()
+        .map(|state| (state.0, state.1.clone()))
+        .unwrap_or_default();
+    if query_id == 0 || query_generation.load(Ordering::Acquire) != query_id {
+        return;
+    }
+    let start = start.max(0) as usize;
+    let end = (end.max(start as i32) as usize).min(items.len());
+    if start >= end {
+        return;
+    }
+    let mut pending = Vec::new();
+    if let Ok(mut state) = icon_requests.lock() {
+        if state.0 != query_id {
+            *state = (query_id, HashSet::new());
+        }
+        for index in start..end {
+            if state.1.insert(index) {
+                pending.push((index, items[index].clone()));
+            }
+        }
+    }
+    if pending.is_empty() {
+        return;
+    }
+    let icon_service = icon_service.clone();
+    let weak = weak.clone();
+    let query_generation = Arc::clone(query_generation);
+    std::thread::spawn(move || {
+        for (index, item) in pending {
+            if query_generation.load(Ordering::Acquire) != query_id {
+                return;
+            }
+            let Some(icon) = icon_service.resolve(&item) else {
+                continue;
+            };
+            let weak_for_callback = weak.clone();
+            let query_generation_for_callback = Arc::clone(&query_generation);
+            let _ = slint::invoke_from_event_loop(move || {
+                if query_generation_for_callback.load(Ordering::Acquire) != query_id {
+                    return;
+                }
+                let Some(window) = weak_for_callback.upgrade() else {
+                    return;
+                };
+                let model = window.get_results();
+                let Some(mut row) = model.row_data(index) else {
+                    return;
+                };
+                row.icon = icon_to_image(&icon);
+                model.set_row_data(index, row);
+            });
+        }
+    });
+}
+
+fn icon_to_image(data: &crate::platform::IconData) -> slint::Image {
+    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+        &data.rgba,
+        data.width,
+        data.height,
+    );
+    slint::Image::from_rgba8(buffer)
+}
+
 impl From<ResultRowPayload> for ResultRow {
     fn from(payload: ResultRowPayload) -> Self {
-        let icon = payload
-            .icon
-            .map(|data| {
-                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &data.rgba,
-                    data.width,
-                    data.height,
-                );
-                slint::Image::from_rgba8(buffer)
-            })
-            .unwrap_or_default();
+        let icon = payload.icon.as_ref().map(icon_to_image).unwrap_or_default();
         Self {
             id: payload.id.into(),
             title: payload.title.into(),

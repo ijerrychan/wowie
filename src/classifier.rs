@@ -1,0 +1,97 @@
+//! Shared fallback classification for results without a provider category.
+
+use crate::result::ResultCategory;
+use std::path::Path;
+
+const WEBSITE_EXTENSIONS: &[&str] = &["htm", "html", "mht", "mhtml", "url", "website"];
+const APPLICATION_EXTENSIONS: &[&str] = &[
+    "bat", "cmd", "com", "cpl", "dll", "exe", "msi", "msc", "scr",
+];
+const DOCUMENT_EXTENSIONS: &[&str] = &[
+    "abw", "csv", "doc", "docm", "docx", "dot", "dotm", "dotx", "epub", "fodp", "fods", "fodt",
+    "key", "md", "mobi", "numbers", "odp", "ods", "odt", "pages", "pdf", "pps", "ppsm", "ppsx",
+    "ppt", "pptm", "pptx", "rtf", "tex", "txt", "wpd", "xls", "xlsb", "xlsm", "xlsx", "xlt",
+    "xltm", "xltx",
+];
+
+/// Classify an item from the target Windows will ultimately open.
+///
+/// Providers should keep their explicit categories. This function is only a
+/// fallback for ordinary indexed files and shortcuts whose target is known.
+pub fn classify_target(target: &Path) -> ResultCategory {
+    let value = target.to_string_lossy().trim().to_owned();
+    if value.is_empty() {
+        return ResultCategory::Other;
+    }
+    if is_shell_target(&value) {
+        return ResultCategory::Application;
+    }
+    if url_scheme(&value).is_some() {
+        return ResultCategory::Website;
+    }
+    let extension = target
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some(extension) if WEBSITE_EXTENSIONS.contains(&extension) => ResultCategory::Website,
+        Some(extension) if DOCUMENT_EXTENSIONS.contains(&extension) => ResultCategory::Document,
+        Some(extension) if APPLICATION_EXTENSIONS.contains(&extension) => {
+            ResultCategory::Application
+        }
+        _ => ResultCategory::Other,
+    }
+}
+
+fn is_shell_target(value: &str) -> bool {
+    value
+        .get(.."shell:".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("shell:"))
+        || value.starts_with("::")
+}
+
+fn url_scheme(value: &str) -> Option<&str> {
+    let (scheme, _) = value.split_once("://")?;
+    matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https").then_some(scheme)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_final_targets_by_extension() {
+        assert_eq!(
+            classify_target(Path::new("https://example.com")),
+            ResultCategory::Website
+        );
+        assert_eq!(
+            classify_target(Path::new(r"C:\Users\User\Desktop\manual.pdf")),
+            ResultCategory::Document
+        );
+        assert_eq!(
+            classify_target(Path::new(r"C:\Apps\launcher.exe")),
+            ResultCategory::Application
+        );
+    }
+
+    #[test]
+    fn unknown_extensions_fall_back_to_other() {
+        assert_eq!(
+            classify_target(Path::new(r"C:\Apps\tool.custom")),
+            ResultCategory::Other
+        );
+    }
+
+    #[test]
+    fn classifies_shell_namespace_apps_as_applications() {
+        assert_eq!(
+            classify_target(Path::new(r"shell:AppsFolder\Vendor.App!Main")),
+            ResultCategory::Application
+        );
+        assert_eq!(
+            classify_target(Path::new(r"::{26EE0668-A00A-44D7-9371-BEB064C98683}")),
+            ResultCategory::Application
+        );
+    }
+}
