@@ -154,7 +154,7 @@ export component Launcher inherits Window {
                     }
                     Text {
                         x: parent.width - 76px; y: 17px; width: 68px; height: 22px;
-                        text: row.category == "game" ? @tr("Game") : row.category == "website" ? @tr("Website") : row.category == "shortcut" ? @tr("Shortcut") : row.category == "document" ? @tr("Document") : row.category == "other" ? @tr("Other") : row.category == "control-panel" ? @tr("Control Panel") : @tr("Application");
+                        text: row.category == "game" ? @tr("Game") : row.category == "website" ? @tr("Website") : row.category == "shortcut" ? @tr("Shortcut") : row.category == "calculator" ? @tr("Calculator") : row.category == "document" ? @tr("Document") : row.category == "other" ? @tr("Other") : row.category == "control-panel" ? @tr("Control Panel") : @tr("Application");
                         color: root.text-tertiary; font-size: 10px;
                         horizontal-alignment: center; vertical-alignment: center;
                         visible: !root.detail-visible;

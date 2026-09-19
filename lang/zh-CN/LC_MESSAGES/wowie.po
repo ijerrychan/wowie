@@ -36,6 +36,10 @@ msgid "Shortcut"
 msgstr "快捷指令"
 
 msgctxt "Launcher"
+msgid "Calculator"
+msgstr "计算器"
+
+msgctxt "Launcher"
 msgid "Store application"
 msgstr "商店应用"
 

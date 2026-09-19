@@ -36,6 +36,10 @@ msgid "Shortcut"
 msgstr "Shortcut"
 
 msgctxt "Launcher"
+msgid "Calculator"
+msgstr "Calculator"
+
+msgctxt "Launcher"
 msgid "Store application"
 msgstr "Store application"
 

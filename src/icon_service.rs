@@ -162,6 +162,7 @@ fn decode_image(bytes: &[u8]) -> Option<IconData> {
 fn resolve_spec(spec: &IconSpec) -> Option<IconData> {
     match spec {
         IconSpec::Weather => Some(weather_icon()),
+        IconSpec::Calculator => Some(calculator_icon()),
         IconSpec::System(target) => crate::platform::application_icon(target),
         IconSpec::SystemIndexed { path, index } => {
             crate::platform::indexed_application_icon(path, *index)
@@ -199,6 +200,7 @@ fn icon_source_key(item: &SearchResult) -> String {
                 format!("default-open:{extension}")
             }
             IconSpec::Weather => "weather".into(),
+            IconSpec::Calculator => "calculator".into(),
         };
     }
 
@@ -243,6 +245,46 @@ fn weather_icon() -> IconData {
             let right = (x as i32 - 49).pow(2) + (y as i32 - 43).pow(2) <= 10 * 10;
             if left || middle || right || (y >= 42 && x >= 24 && x <= 53) {
                 pixel(x, y, cloud);
+            }
+        }
+    }
+    IconData {
+        width: size,
+        height: size,
+        rgba,
+    }
+}
+
+fn calculator_icon() -> IconData {
+    let size = 64_u32;
+    let mut rgba = vec![0_u8; (size * size * 4) as usize];
+    let mut pixel = |x: u32, y: u32, color: [u8; 4]| {
+        if x < size && y < size {
+            let index = ((y * size + x) * 4) as usize;
+            rgba[index..index + 4].copy_from_slice(&color);
+        }
+    };
+    let body = [86, 98, 116, 255];
+    let screen = [220, 239, 224, 255];
+    let key = [244, 180, 76, 255];
+    for y in 5..59 {
+        for x in 10..54 {
+            pixel(x, y, body);
+        }
+    }
+    for y in 12..24 {
+        for x in 16..48 {
+            pixel(x, y, screen);
+        }
+    }
+    for row in 0..3 {
+        for column in 0..4 {
+            let left = 16 + column * 8;
+            let top = 30 + row * 8;
+            for y in top..top + 5 {
+                for x in left..left + 5 {
+                    pixel(x, y, key);
+                }
             }
         }
     }

@@ -17,6 +17,7 @@ pub enum ResultCategory {
     Game,
     Website,
     Shortcut,
+    Calculator,
     ControlPanel,
     Document,
     Other,
@@ -95,6 +96,8 @@ pub enum DetailBlock {
 pub enum IconSpec {
     /// A built-in colored weather glyph used by the weather shortcut.
     Weather,
+    /// A built-in calculator glyph.
+    Calculator,
     /// A plugin-owned PNG/ICO resource resolved to an absolute path.
     Resource(std::path::PathBuf),
     /// A path or shell target whose icon is provided by the operating system.

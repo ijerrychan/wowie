@@ -1234,6 +1234,7 @@ impl ResultRowPayload {
                 ResultCategory::Application => "application",
                 ResultCategory::Website => "website",
                 ResultCategory::Shortcut => "shortcut",
+                ResultCategory::Calculator => "calculator",
                 ResultCategory::ControlPanel => "control-panel",
                 ResultCategory::Document => "document",
                 ResultCategory::Other => "other",

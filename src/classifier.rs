@@ -20,14 +20,6 @@ pub struct TargetClassification {
     pub is_http_url: bool,
 }
 
-/// Classify an item from the target Windows will ultimately open.
-///
-/// Providers should keep their explicit categories. This function is only a
-/// fallback for ordinary indexed files and shortcuts whose target is known.
-pub fn classify_target(target: &Path) -> ResultCategory {
-    classify_target_info(target).category
-}
-
 pub fn classify_target_info(target: &Path) -> TargetClassification {
     let value = target.to_string_lossy().trim().to_owned();
     if value.is_empty() {
@@ -86,15 +78,15 @@ mod tests {
     #[test]
     fn classifies_final_targets_by_extension() {
         assert_eq!(
-            classify_target(Path::new("https://example.com")),
+            classify_target_info(Path::new("https://example.com")).category,
             ResultCategory::Website
         );
         assert_eq!(
-            classify_target(Path::new(r"C:\Users\User\Desktop\manual.pdf")),
+            classify_target_info(Path::new(r"C:\Users\User\Desktop\manual.pdf")).category,
             ResultCategory::Document
         );
         assert_eq!(
-            classify_target(Path::new(r"C:\Apps\launcher.exe")),
+            classify_target_info(Path::new(r"C:\Apps\launcher.exe")).category,
             ResultCategory::Application
         );
     }
@@ -102,7 +94,7 @@ mod tests {
     #[test]
     fn unknown_extensions_fall_back_to_other() {
         assert_eq!(
-            classify_target(Path::new(r"C:\Apps\tool.custom")),
+            classify_target_info(Path::new(r"C:\Apps\tool.custom")).category,
             ResultCategory::Other
         );
     }
@@ -110,11 +102,11 @@ mod tests {
     #[test]
     fn classifies_shell_namespace_apps_as_applications() {
         assert_eq!(
-            classify_target(Path::new(r"shell:AppsFolder\Vendor.App!Main")),
+            classify_target_info(Path::new(r"shell:AppsFolder\Vendor.App!Main")).category,
             ResultCategory::Application
         );
         assert_eq!(
-            classify_target(Path::new(r"::{26EE0668-A00A-44D7-9371-BEB064C98683}")),
+            classify_target_info(Path::new(r"::{26EE0668-A00A-44D7-9371-BEB064C98683}")).category,
             ResultCategory::Application
         );
     }
