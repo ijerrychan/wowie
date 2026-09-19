@@ -31,7 +31,7 @@ struct IconCache {
 }
 
 struct CachedIcon {
-    icon: Option<Arc<IconData>>,
+    icon: Arc<IconData>,
     bytes: usize,
 }
 
@@ -44,41 +44,45 @@ impl IconService {
     /// lookups are not retained because they carry no pixel data and would
     /// otherwise bypass the byte-based cache bound.
     pub fn resolve(&self, item: &SearchResult) -> Option<Arc<IconData>> {
-        let source_key = icon_source_key(item);
-        if let Ok(mut cache) = self.cache.lock() {
-            if let Some(icon) = cache.get(&source_key) {
-                return icon;
-            }
-        }
-
-        let icon = resolve_uncached(item).map(Arc::new);
-        if let Some(icon) = icon.as_ref() {
-            if let Ok(mut cache) = self.cache.lock() {
-                cache.insert(source_key, Some(Arc::clone(icon)));
-            }
-        }
-        icon
+        self.resolve_cached(icon_source_key(item), || resolve_uncached(item))
     }
 
     pub fn resolve_spec(&self, spec: &IconSpec) -> Option<Arc<IconData>> {
-        resolve_spec(spec).map(Arc::new)
+        self.resolve_cached(icon_spec_key(spec), || resolve_spec(spec))
+    }
+
+    fn resolve_cached<F>(&self, key: String, resolve: F) -> Option<Arc<IconData>>
+    where
+        F: FnOnce() -> Option<IconData>,
+    {
+        if let Ok(mut cache) = self.cache.lock() {
+            if let Some(icon) = cache.get(&key) {
+                return Some(icon);
+            }
+        }
+
+        let icon = resolve().map(Arc::new)?;
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(key, Arc::clone(&icon));
+        }
+        Some(icon)
     }
 }
 
 impl IconCache {
-    fn get(&mut self, key: &str) -> Option<Option<Arc<IconData>>> {
-        let icon = self.entries.get(key).map(|entry| entry.icon.clone())?;
+    fn get(&mut self, key: &str) -> Option<Arc<IconData>> {
+        let icon = self.entries.get(key).map(|entry| Arc::clone(&entry.icon))?;
         self.touch(key);
         Some(icon)
     }
 
-    fn insert(&mut self, key: String, icon: Option<Arc<IconData>>) {
+    fn insert(&mut self, key: String, icon: Arc<IconData>) {
         if let Some(previous) = self.entries.remove(&key) {
             self.bytes = self.bytes.saturating_sub(previous.bytes);
             self.lru.retain(|existing| existing != &key);
         }
 
-        let bytes = icon.as_ref().map_or(0, |icon| icon_bytes(icon));
+        let bytes = icon_bytes(&icon);
         self.bytes += bytes;
         self.lru.push_back(key.clone());
         self.entries.insert(key, CachedIcon { icon, bytes });
@@ -148,7 +152,7 @@ fn application_icon_with_path_lookup(target: &Path) -> Option<IconData> {
 fn fetch_favicon(target: &Path) -> Option<IconData> {
     let origin = favicon_origin(target)?;
     let favicon = format!("{origin}/favicon.ico");
-    let bytes = crate::http::get_bytes(&favicon, 1_048_576).ok()?;
+    let bytes = crate::utils::http::get_bytes(&favicon, 1_048_576).ok()?;
     decode_image(&bytes)
 }
 
@@ -167,14 +171,15 @@ fn decode_image(bytes: &[u8]) -> Option<IconData> {
 
 fn resolve_spec(spec: &IconSpec) -> Option<IconData> {
     match spec {
-        IconSpec::Weather => load_svg_bytes(include_bytes!("../assets/icons/cloud-sun.svg")),
-        IconSpec::Calculator => load_svg_bytes(include_bytes!("../assets/icons/calculator.svg")),
+        IconSpec::Weather => load_svg_bytes(include_bytes!("../../assets/icons/weather.svg")),
+        IconSpec::Calculator => load_svg_bytes(include_bytes!("../../assets/icons/calculator.svg")),
         IconSpec::System(target) => crate::platform::application_icon(target),
         IconSpec::SystemIndexed { path, index } => {
             crate::platform::indexed_application_icon(path, *index)
         }
         IconSpec::DefaultOpen(target) => crate::platform::default_open_icon(target),
-        IconSpec::Resource(path) => match path.extension().and_then(|extension| extension.to_str()) {
+        IconSpec::Resource(path) => match path.extension().and_then(|extension| extension.to_str())
+        {
             Some(extension) if extension.eq_ignore_ascii_case("svg") => load_svg_icon(path),
             _ => load_png_icon(path),
         },
@@ -184,28 +189,27 @@ fn resolve_spec(spec: &IconSpec) -> Option<IconData> {
 
 fn named_icon(name: &str) -> Option<IconData> {
     match name {
-        "weather" => load_svg_bytes(include_bytes!("../assets/icons/cloud-sun.svg")),
-        "calculator" => load_svg_bytes(include_bytes!("../assets/icons/calculator.svg")),
-        "book" | "wowie" => load_svg_bytes(include_bytes!("../assets/icons/book-open.svg")),
-        "checklist" => load_svg_bytes(include_bytes!("../assets/icons/list-checks.svg")),
+        "weather" => load_svg_bytes(include_bytes!("../../assets/icons/weather.svg")),
+        "calculator" => load_svg_bytes(include_bytes!("../../assets/icons/calculator.svg")),
+        "book" | "wowie" => load_svg_bytes(include_bytes!("../../assets/icons/book-open.svg")),
+        "checklist" => load_svg_bytes(include_bytes!("../../assets/icons/list-checks.svg")),
         _ => None,
     }
 }
 
 fn load_png_icon(path: &Path) -> Option<IconData> {
-    if std::fs::metadata(path).ok()?.len() > MAX_ICON_FILE_BYTES {
-        return None;
-    }
-    let bytes = std::fs::read(path).ok()?;
-    decode_image(&bytes)
+    decode_image(&read_icon_bytes(path)?)
 }
 
 fn load_svg_icon(path: &Path) -> Option<IconData> {
+    load_svg_bytes(&read_icon_bytes(path)?)
+}
+
+fn read_icon_bytes(path: &Path) -> Option<Vec<u8>> {
     if std::fs::metadata(path).ok()?.len() > MAX_ICON_FILE_BYTES {
         return None;
     }
-    let bytes = std::fs::read(path).ok()?;
-    load_svg_bytes(&bytes)
+    std::fs::read(path).ok()
 }
 
 fn load_svg_bytes(bytes: &[u8]) -> Option<IconData> {
@@ -219,8 +223,7 @@ fn load_svg_bytes(bytes: &[u8]) -> Option<IconData> {
     let offset_y = (ICON_SIZE - height) as f32 / 2.0;
     resvg::render(
         &tree,
-        tiny_skia::Transform::from_scale(scale, scale)
-            .post_translate(offset_x, offset_y),
+        tiny_skia::Transform::from_scale(scale, scale).post_translate(offset_x, offset_y),
         &mut pixmap.as_mut(),
     );
     Some(IconData {
@@ -232,30 +235,7 @@ fn load_svg_bytes(bytes: &[u8]) -> Option<IconData> {
 
 fn icon_source_key(item: &SearchResult) -> String {
     if let Some(icon) = item.icon.as_ref() {
-        return match icon {
-            IconSpec::System(path) | IconSpec::Resource(path) => {
-                format!("explicit:{}", path.display())
-            }
-            IconSpec::SystemIndexed { path, index } => {
-                format!("explicit:{}#{}", path.display(), index)
-            }
-            IconSpec::DefaultOpen(path) => {
-                let value = path.to_string_lossy();
-                let extension = if value.starts_with("http://") || value.starts_with("https://") {
-                    "web".to_owned()
-                } else {
-                    path.extension()
-                        .and_then(|value| value.to_str())
-                        .map(|value| value.to_lowercase())
-                        .filter(|value| !value.is_empty())
-                        .unwrap_or_else(|| value.to_lowercase())
-                };
-                format!("default-open:{extension}")
-            }
-            IconSpec::Weather => "weather".into(),
-            IconSpec::Calculator => "calculator".into(),
-            IconSpec::Named(name) => format!("named:{name}"),
-        };
+        return icon_spec_key(icon);
     }
 
     if matches!(item.source, crate::platform::SourceId::Shortcut) {
@@ -270,6 +250,33 @@ fn icon_source_key(item: &SearchResult) -> String {
         .map(|entry| entry.target.display().to_string())
         .unwrap_or_else(|| item.launch_target.display().to_string());
     format!("fallback:{fallback}")
+}
+
+fn icon_spec_key(icon: &IconSpec) -> String {
+    match icon {
+        IconSpec::System(path) | IconSpec::Resource(path) => {
+            format!("explicit:{}", path.display())
+        }
+        IconSpec::SystemIndexed { path, index } => {
+            format!("explicit:{}#{}", path.display(), index)
+        }
+        IconSpec::DefaultOpen(path) => {
+            let value = path.to_string_lossy();
+            let extension = if value.starts_with("http://") || value.starts_with("https://") {
+                "web".to_owned()
+            } else {
+                path.extension()
+                    .and_then(|value| value.to_str())
+                    .map(|value| value.to_lowercase())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| value.to_lowercase())
+            };
+            format!("default-open:{extension}")
+        }
+        IconSpec::Weather => "weather".into(),
+        IconSpec::Calculator => "calculator".into(),
+        IconSpec::Named(name) => format!("named:{name}"),
+    }
 }
 
 fn favicon_origin(target: &Path) -> Option<String> {
@@ -336,9 +343,23 @@ mod tests {
 
     #[test]
     fn bundled_svg_icons_render_to_icon_data() {
-        let icon = resolve_spec(&IconSpec::Named("calculator".into())).unwrap();
-        assert_eq!((icon.width, icon.height), (64, 64));
-        assert!(icon.rgba.iter().any(|channel| *channel != 0));
+        for spec in [IconSpec::Calculator, IconSpec::Weather] {
+            let icon = resolve_spec(&spec).unwrap();
+            assert_eq!((icon.width, icon.height), (64, 64));
+            assert!(icon.rgba.iter().any(|channel| *channel != 0));
+        }
+    }
+
+    #[test]
+    fn service_reuses_explicit_icon_results() {
+        let service = IconService::new();
+        let first = service
+            .resolve_spec(&IconSpec::Calculator)
+            .expect("first icon");
+        let second = service
+            .resolve_spec(&IconSpec::Calculator)
+            .expect("cached icon");
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]

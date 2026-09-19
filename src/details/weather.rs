@@ -125,13 +125,13 @@ pub fn fetch(language: &str) -> Result<WeatherData> {
         coordinates.latitude, coordinates.longitude
     );
     let forecast: ForecastResponse =
-        crate::http::get_json(&url).context("request Open-Meteo weather")?;
+        crate::utils::http::get_json(&url).context("request Open-Meteo weather")?;
     let current = forecast.current;
     Ok(WeatherData {
         location: coordinates.location,
         temperature: format!("{:.0}°", current.temperature_2m),
         weather_code: current.weather_code,
-        condition: crate::i18n::tr(language, weather_condition(current.weather_code)).into(),
+        condition: crate::utils::i18n::tr(language, weather_condition(current.weather_code)).into(),
         humidity: format!("{:.0}%", current.relative_humidity_2m),
         wind: format!(
             "{:.0} km/h {}",
@@ -144,11 +144,11 @@ pub fn fetch(language: &str) -> Result<WeatherData> {
 
 pub fn detail_view(data: &WeatherData, language: &str) -> crate::result::DetailView {
     crate::result::DetailView {
-        title: crate::i18n::tr(language, "Weather").into(),
+        title: crate::utils::i18n::tr(language, "Weather").into(),
         subtitle: data.location.clone(),
         source: format!(
             "{}: Open-Meteo · {}",
-            crate::i18n::tr(language, "Source"),
+            crate::utils::i18n::tr(language, "Source"),
             data.source
         ),
         actions: Vec::new(),
@@ -162,36 +162,38 @@ pub fn detail_view(data: &WeatherData, language: &str) -> crate::result::DetailV
             },
             crate::result::DetailBlock::Separator,
             crate::result::DetailBlock::Metric {
-                label: crate::i18n::tr(language, "Humidity").into(),
+                label: crate::utils::i18n::tr(language, "Humidity").into(),
                 value: data.humidity.clone(),
                 color: "secondary".into(),
             },
             crate::result::DetailBlock::Metric {
-                label: crate::i18n::tr(language, "Wind").into(),
+                label: crate::utils::i18n::tr(language, "Wind").into(),
                 value: data.wind.clone(),
                 color: "secondary".into(),
             },
         ],
         preferred_width: None,
+        minimum_height: Some(340),
         scrollable: false,
     }
 }
 
 pub fn error_detail_view(language: &str) -> crate::result::DetailView {
     crate::result::DetailView {
-        title: crate::i18n::tr(language, "Weather").into(),
-        subtitle: crate::i18n::tr(language, "Current location").into(),
+        title: crate::utils::i18n::tr(language, "Weather").into(),
+        subtitle: crate::utils::i18n::tr(language, "Current location").into(),
         source: format!(
             "{}: {}",
-            crate::i18n::tr(language, "Source"),
-            crate::i18n::tr(language, "Unavailable")
+            crate::utils::i18n::tr(language, "Source"),
+            crate::utils::i18n::tr(language, "Unavailable")
         ),
         actions: Vec::new(),
         blocks: vec![crate::result::DetailBlock::Text {
-            text: crate::i18n::tr(language, "Weather unavailable").into(),
+            text: crate::utils::i18n::tr(language, "Weather unavailable").into(),
             color: "secondary".into(),
         }],
         preferred_width: None,
+        minimum_height: None,
         scrollable: false,
     }
 }
@@ -207,8 +209,8 @@ fn visual_kind(code: i32) -> &'static str {
 }
 
 fn ip_location(language: &str) -> Result<Coordinates> {
-    let value: IpLocation = crate::http::get_json("https://ipapi.co/json/")
-        .or_else(|_| crate::http::get_json("https://ipwho.is/"))
+    let value: IpLocation = crate::utils::http::get_json("https://ipapi.co/json/")
+        .or_else(|_| crate::utils::http::get_json("https://ipwho.is/"))
         .context("all IP location services failed")?;
     let city = value.city.unwrap_or_else(|| "Approximate location".into());
     let country = value.country_name.unwrap_or_default();
@@ -223,7 +225,7 @@ fn ip_location(language: &str) -> Result<Coordinates> {
             .longitude
             .context("IP location returned no longitude")?,
         location: label,
-        source: crate::i18n::tr(language, "IP location").into(),
+        source: crate::utils::i18n::tr(language, "IP location").into(),
     })
 }
 

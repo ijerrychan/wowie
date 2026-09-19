@@ -300,7 +300,7 @@ fn is_hash(value: &str) -> bool {
 fn find_game_executable(root: &Path) -> Option<PathBuf> {
     let mut candidates = Vec::new();
     collect_executables(root, 0, &mut candidates);
-    candidates.sort_by(|left, right| right.1.cmp(&left.1));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.1));
     candidates.into_iter().next().map(|(path, _)| path)
 }
 

@@ -6,37 +6,12 @@ use std::os::windows::ffi::OsStrExt;
 pub fn launch(item: &SearchResult) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        use windows_sys::Win32::{
-            Foundation::GetLastError,
-            UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW},
-        };
-        let file = wide_null_os(&item.launch_target);
-        let args = wide_null_str(&item.launch_arguments);
-        let directory = item
-            .launch_working_directory
-            .as_ref()
-            .map(|path| wide_null_os(path));
-        let mut execute = SHELLEXECUTEINFOW {
-            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-            fMask: SEE_MASK_NOASYNC,
-            lpFile: file.as_ptr(),
-            lpParameters: if item.launch_arguments.is_empty() {
-                std::ptr::null()
-            } else {
-                args.as_ptr()
-            },
-            lpDirectory: directory
-                .as_ref()
-                .map_or(std::ptr::null(), |value| value.as_ptr()),
-            nShow: 1,
-            ..Default::default()
-        };
-        if unsafe { ShellExecuteExW(&mut execute) } == 0 {
-            anyhow::bail!("ShellExecuteExW failed with Windows error {}", unsafe {
-                GetLastError()
-            });
-        }
-        Ok(())
+        shell_execute(
+            &item.launch_target,
+            &item.launch_arguments,
+            item.launch_working_directory.as_deref(),
+            None,
+        )
     }
     #[cfg(target_os = "macos")]
     {
@@ -65,47 +40,60 @@ pub fn launch(item: &SearchResult) -> Result<()> {
 pub fn launch_entry(entry: &crate::result::LaunchEntry, as_admin: bool) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        use windows_sys::Win32::{
-            Foundation::GetLastError,
-            UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW},
-        };
-        let file = wide_null_os(&entry.target);
-        let args = wide_null_str(&entry.arguments);
-        let verb = as_admin.then(|| wide_null_str("runas"));
-        let directory = entry
-            .working_directory
-            .as_ref()
-            .map(|path| wide_null_os(path.as_path()));
-        let mut execute = SHELLEXECUTEINFOW {
-            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-            fMask: SEE_MASK_NOASYNC,
-            lpVerb: verb
-                .as_ref()
-                .map_or(std::ptr::null(), |value| value.as_ptr()),
-            lpFile: file.as_ptr(),
-            lpParameters: if entry.arguments.is_empty() {
-                std::ptr::null()
-            } else {
-                args.as_ptr()
-            },
-            lpDirectory: directory
-                .as_ref()
-                .map_or(std::ptr::null(), |value| value.as_ptr()),
-            nShow: 1,
-            ..Default::default()
-        };
-        if unsafe { ShellExecuteExW(&mut execute) } == 0 {
-            anyhow::bail!("ShellExecuteExW failed with Windows error {}", unsafe {
-                GetLastError()
-            });
-        }
-        Ok(())
+        shell_execute(
+            &entry.target,
+            &entry.arguments,
+            entry.working_directory.as_deref(),
+            as_admin.then_some("runas"),
+        )
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (entry, as_admin);
         anyhow::bail!("administrator launch is only supported on Windows")
     }
+}
+
+#[cfg(target_os = "windows")]
+fn shell_execute(
+    file: &std::path::Path,
+    arguments: &str,
+    directory: Option<&std::path::Path>,
+    verb: Option<&str>,
+) -> Result<()> {
+    use windows_sys::Win32::{
+        Foundation::GetLastError,
+        UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW},
+    };
+
+    let file = wide_null_os(file);
+    let args = wide_null_str(arguments);
+    let verb = verb.map(wide_null_str);
+    let directory = directory.map(wide_null_os);
+    let mut execute = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOASYNC,
+        lpVerb: verb
+            .as_ref()
+            .map_or(std::ptr::null(), |value| value.as_ptr()),
+        lpFile: file.as_ptr(),
+        lpParameters: if arguments.is_empty() {
+            std::ptr::null()
+        } else {
+            args.as_ptr()
+        },
+        lpDirectory: directory
+            .as_ref()
+            .map_or(std::ptr::null(), |value| value.as_ptr()),
+        nShow: 1,
+        ..Default::default()
+    };
+    if unsafe { ShellExecuteExW(&mut execute) } == 0 {
+        anyhow::bail!("ShellExecuteExW failed with Windows error {}", unsafe {
+            GetLastError()
+        });
+    }
+    Ok(())
 }
 
 pub fn open_containing_directory(item: &SearchResult) -> Result<()> {

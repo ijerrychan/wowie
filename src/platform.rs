@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::borrow::Cow;
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[cfg(not(windows))]
@@ -207,6 +208,54 @@ pub mod windows_rules {
                 r"C:\Start Menu\Utilities\Task Manager.lnk"
             )));
         }
+    }
+}
+
+/// The shell used to execute command shortcuts.
+///
+/// Shell discovery is a platform concern. Dynamic providers consume this
+/// small value without needing target-specific branches of their own.
+#[derive(Debug, Clone)]
+pub struct CommandShell {
+    pub path: PathBuf,
+    pub label: String,
+}
+
+pub fn command_shell() -> CommandShell {
+    #[cfg(windows)]
+    let path = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path).find_map(|directory| {
+            let candidate = directory.join("pwsh.exe");
+            candidate.is_file().then_some(candidate)
+        })
+    });
+
+    #[cfg(windows)]
+    let path = path.unwrap_or_else(|| PathBuf::from("powershell.exe"));
+
+    #[cfg(not(windows))]
+    let path = PathBuf::from("pwsh");
+
+    let label = command_shell_label(&path);
+    CommandShell { path, label }
+}
+
+pub fn command_shell_arguments(command: &str) -> String {
+    let escaped = command.replace('"', "\\\"");
+    format!("-NoLogo -NoExit -Command \"{escaped}\"")
+}
+
+fn command_shell_label(path: &Path) -> String {
+    let name = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match name.as_str() {
+        "pwsh" => "PowerShell 7".into(),
+        "powershell" => "Windows PowerShell".into(),
+        "cmd" => "cmd".into(),
+        _ => path.display().to_string(),
     }
 }
 

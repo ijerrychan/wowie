@@ -65,6 +65,10 @@ pub struct DetailView {
     pub actions: Vec<DetailAction>,
     pub source: String,
     pub preferred_width: Option<i32>,
+    /// Optional lower bound for the detail card's content height, in logical
+    /// pixels. This is deliberately a minimum rather than a fixed height so
+    /// the surrounding result list keeps its own natural size.
+    pub minimum_height: Option<i32>,
     pub scrollable: bool,
 }
 

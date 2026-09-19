@@ -13,7 +13,10 @@ export component Launcher inherits Window {
     title: "Wowie";
     no-frame: true;
     width: window-width * 1px;
-    height: search-field.text == "" ? root.empty-window-height : detail-visible ? (100px + root.detail-panel-height) : results.length > 0 ? min(498px, 100px + root.result-row-height * results.length) : 186px;
+    // With details open, both columns contribute to the window's required
+    // height. Using only the detail card here clipped long result lists to a
+    // short plugin detail such as the devtools TODO card.
+    height: search-field.text == "" ? root.empty-window-height : detail-visible ? (100px + root.results-area-height) : results.length > 0 ? min(498px, 100px + root.result-row-height * results.length) : 186px;
     background: transparent;
 
     in-out property <int> window-width: 900;
@@ -28,6 +31,7 @@ export component Launcher inherits Window {
     in property <[DetailBlock]> detail-blocks;
     in property <[ContextActionRow]> detail-actions;
     in property <int> detail-panel-preferred-width: 0;
+    in property <int> detail-panel-minimum-height: 0;
     in property <bool> detail-panel-scrollable: false;
     in-out property <string> launch-error: "";
     in-out property <string> last-action-id: "";
@@ -61,8 +65,10 @@ export component Launcher inherits Window {
     private property <length> result-column-gap: root.window-inset + root.result-row-inset + root.detail-panel-inset;
     private property <length> detail-panel-inset: 2px;
     private property <length> detail-panel-bottom-inset: 6px;
-    private property <float> detail-panel-share: root.detail-panel-preferred-width > 0 ? root.detail-panel-preferred-width / root.window-width : 0.53;
-    private property <length> detail-panel-height: max(340px, 118px + root.detail-blocks.length * 60px + (root.detail-actions.length > 0 ? 50px : 0px));
+    private property <float> detail-panel-share: root.detail-panel-preferred-width > 0 ? root.detail-panel-preferred-width / root.window-width : 0.5;
+    private property <length> detail-panel-content-height: 118px + root.detail-blocks.length * 60px + (root.detail-actions.length > 0 ? 50px : 0px);
+    private property <length> detail-panel-height: max(root.detail-panel-content-height, root.detail-panel-minimum-height * 1px);
+    private property <length> results-area-height: root.detail-visible ? max(min(398px, root.results.length * root.result-row-height), root.detail-panel-height) : min(398px, root.results.length * root.result-row-height);
     private property <bool> detail-visible: root.detail-panel-visible && root.selected-index >= 0;
     private property <int> first-visible-index: max(0, round(-results-list.content-y / root.result-row-height));
     private property <bool> context-click-consumed: false;
@@ -133,7 +139,7 @@ export component Launcher inherits Window {
             }
 
             results-area := Rectangle {
-                height: root.detail-visible ? root.detail-panel-height : min(398px, root.results.length * root.result-row-height);
+                height: root.results-area-height;
                 background: transparent;
 
                 results-list := ListView {
@@ -188,7 +194,10 @@ export component Launcher inherits Window {
                     x: parent.width * (1.0 - root.detail-panel-share) - root.detail-panel-inset;
                     y: 0px;
                     width: parent.width * root.detail-panel-share;
-                    height: parent.height - root.detail-panel-bottom-inset;
+                    // Keep this card only as tall as its content (or declared
+                    // minimum). The list owns the column height, so a detail
+                    // provider cannot compress it by requesting a height.
+                    height: min(parent.height - root.detail-panel-bottom-inset, root.detail-panel-height);
                     background: root.dark-mode ? #242424 : #fbfcfe;
                     border-radius: 10px;
 
@@ -290,15 +299,16 @@ export component ContextMenu inherits Window {
                     }
                 }
             }
-            HorizontalBox {
-                x: 14px; y: 1px; width: parent.width - 28px; height: 30px; spacing: 6px;
-                Image { width: 16px; height: 16px; source: action.icon; image-fit: contain; }
-                VerticalBox {
-                    width: parent.width - 22px; height: 30px; spacing: 0px;
-                    Text { text: action.kind == "section" ? @tr("Other launch entries") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.title; color: action.kind == "section" ? root.text-secondary : root.text-primary; font-size: action.kind == "section" ? 11px : 13px; vertical-alignment: center; overflow: elide; }
-                    Text { text: action.subtitle; color: root.text-secondary; font-size: 10px; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
-                }
+            Image { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: action.icon; image-fit: contain; }
+            Text {
+                x: 36px; y: action.subtitle == "" ? 0px : 2px; width: parent.width - 50px;
+                height: action.subtitle == "" ? parent.height : 16px;
+                text: action.kind == "section" ? @tr("Other launch entries") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.title;
+                color: action.kind == "section" ? root.text-secondary : root.text-primary;
+                font-size: action.kind == "section" ? 11px : 13px;
+                vertical-alignment: center; overflow: elide;
             }
+            Text { x: 36px; y: 17px; width: parent.width - 50px; height: 12px; text: action.subtitle; color: root.text-secondary; font-size: 10px; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
         }
     }
 

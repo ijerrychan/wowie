@@ -141,11 +141,9 @@ unsafe extern "system" fn window_proc(
                     let _ = (*state()).sender.send(PlatformEvent::TogglePalette);
                 }
             }
-            WM_RBUTTONUP => {
-                if !state().is_null() {
-                    if let Ok(exit_label) = (*state()).exit_label.lock() {
-                        show_menu(hwnd, &exit_label);
-                    }
+            WM_RBUTTONUP if !state().is_null() => {
+                if let Ok(exit_label) = (*state()).exit_label.lock() {
+                    show_menu(hwnd, &exit_label);
                 }
             }
             _ => {}

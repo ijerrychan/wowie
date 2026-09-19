@@ -156,7 +156,7 @@ impl Config {
         if self.theme != "system" && self.theme != "light" && self.theme != "dark" {
             self.theme = DEFAULT_THEME.into();
         }
-        if self.language != "system" && !crate::i18n::is_supported_language(&self.language) {
+        if self.language != "system" && !crate::utils::i18n::is_supported_language(&self.language) {
             self.language = DEFAULT_LANGUAGE.into();
         }
         for shortcut in &mut self.shortcuts {

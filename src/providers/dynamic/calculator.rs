@@ -45,13 +45,15 @@ impl DynamicProvider for CalculatorProvider {
 fn result(query: &str, language: &str) -> Option<SearchResult> {
     let expression = query.trim();
     if expression.is_empty()
-        || !expression.chars().any(|character| character.is_ascii_digit())
+        || !expression
+            .chars()
+            .any(|character| character.is_ascii_digit())
         || !is_explicit_expression(expression)
     {
         return None;
     }
 
-    let value = meval::eval_str(expression).ok()?;
+    let value = evaluate(expression)?;
     if !value.is_finite() {
         return None;
     }
@@ -65,7 +67,7 @@ fn result(query: &str, language: &str) -> Option<SearchResult> {
         title: format!("= {display_value}"),
         category: ResultCategory::Calculator,
         aliases: vec![expression.to_owned()],
-        location: crate::i18n::tr(language, "Calculator").into(),
+        location: crate::utils::i18n::tr(language, "Calculator").into(),
         launch_target: PathBuf::new(),
         launch_arguments: String::new(),
         launch_working_directory: None,
@@ -77,6 +79,16 @@ fn result(query: &str, language: &str) -> Option<SearchResult> {
         icon: Some(IconSpec::Calculator),
         ranking_bias: 0,
     })
+}
+
+fn evaluate(expression: &str) -> Option<f64> {
+    let mut namespace = |name: &str, arguments: Vec<f64>| -> Option<f64> {
+        match name {
+            "sqrt" if arguments.len() == 1 => Some(arguments[0].sqrt()),
+            _ => None,
+        }
+    };
+    fasteval::ez_eval(expression, &mut namespace).ok()
 }
 
 fn is_explicit_expression(expression: &str) -> bool {

@@ -110,16 +110,31 @@ impl std::fmt::Debug for EmbeddedPlugin {
 }
 
 impl EmbeddedPlugin {
-    fn from_file(root: &Path, manifest: &PluginManifest, locale: &str,
-        preferences: &std::collections::BTreeMap<String, serde_json::Value>) -> Result<Self> {
+    fn from_file(
+        root: &Path,
+        manifest: &PluginManifest,
+        locale: &str,
+        preferences: &std::collections::BTreeMap<String, serde_json::Value>,
+    ) -> Result<Self> {
         let entry = root.join(&manifest.entry_point);
         let source = fs::read_to_string(&entry)
             .with_context(|| format!("read plugin entry point {}", entry.display()))?;
-        Self::from_source(&source, &manifest.entry_point, locale, manifest.default_locale.as_str(), preferences)
+        Self::from_source(
+            &source,
+            &manifest.entry_point,
+            locale,
+            manifest.default_locale.as_str(),
+            preferences,
+        )
     }
 
-    fn from_source(source: &str, chunk_name: &str, locale: &str, fallback_locale: &str,
-        preferences: &std::collections::BTreeMap<String, serde_json::Value>) -> Result<Self> {
+    fn from_source(
+        source: &str,
+        chunk_name: &str,
+        locale: &str,
+        fallback_locale: &str,
+        preferences: &std::collections::BTreeMap<String, serde_json::Value>,
+    ) -> Result<Self> {
         let lua = Lua::new();
         let wowie = lua.create_table()?;
         let locale_value = locale.to_owned();
@@ -131,31 +146,49 @@ impl EmbeddedPlugin {
             Ok(())
         })?;
         wowie.set("on", on)?;
-        wowie.set("locale", lua.create_function(move |_, key: Option<String>| {
-            if let Some(key) = key {
-                Ok(if key == "current" { locale_value.clone() } else { fallback_value.clone() })
-            } else {
-                Ok(locale_value.clone())
-            }
-        })?)?;
-        wowie.set("result", lua.create_function(|_, value: mlua::Table| Ok(value))?)?;
-        wowie.set("results", lua.create_function(|lua, items: mlua::Table| {
-            let result = lua.create_table()?;
-            result.set("items", items)?;
-            Ok(result)
-        })?)?;
-        wowie.set("action", lua.create_function(|lua, (id, icon): (String, Option<mlua::Table>)| {
-            let action = lua.create_table()?;
-            action.set("id", id)?;
-            if let Some(icon) = icon {
-                action.set("icon", icon)?;
-            }
-            Ok(action)
-        })?)?;
+        wowie.set(
+            "locale",
+            lua.create_function(move |_, key: Option<String>| {
+                if let Some(key) = key {
+                    Ok(if key == "current" {
+                        locale_value.clone()
+                    } else {
+                        fallback_value.clone()
+                    })
+                } else {
+                    Ok(locale_value.clone())
+                }
+            })?,
+        )?;
+        wowie.set(
+            "result",
+            lua.create_function(|_, value: mlua::Table| Ok(value))?,
+        )?;
+        wowie.set(
+            "results",
+            lua.create_function(|lua, items: mlua::Table| {
+                let result = lua.create_table()?;
+                result.set("items", items)?;
+                Ok(result)
+            })?,
+        )?;
+        wowie.set(
+            "action",
+            lua.create_function(|lua, (id, icon): (String, Option<mlua::Table>)| {
+                let action = lua.create_table()?;
+                action.set("id", id)?;
+                if let Some(icon) = icon {
+                    action.set("icon", icon)?;
+                }
+                Ok(action)
+            })?,
+        )?;
         lua.globals().set("wowie", wowie)?;
         lua.globals().set("__wowie_locale", locale)?;
-        lua.globals().set("__wowie_fallback_locale", fallback_locale)?;
-        lua.globals().set("__wowie_preferences", lua.to_value(preferences)?)?;
+        lua.globals()
+            .set("__wowie_fallback_locale", fallback_locale)?;
+        lua.globals()
+            .set("__wowie_preferences", lua.to_value(preferences)?)?;
         lua.load(source).set_name(chunk_name).exec()?;
 
         let plugin = Self { lua };
@@ -171,24 +204,45 @@ impl EmbeddedPlugin {
     }
 
     fn has_handler(&self, method: &str) -> Result<bool> {
-        Ok(!matches!(self.lua.globals().get::<Value>(format!("__wowie_{method}"))?, Value::Nil))
+        Ok(!matches!(
+            self.lua
+                .globals()
+                .get::<Value>(format!("__wowie_{method}"))?,
+            Value::Nil
+        ))
     }
 
-    fn call(&self, method: &str, request: &serde_json::Value,
-        item_id: Option<&str>, action_id: Option<&str>) -> Result<String> {
-        let callback: Function = self.lua.globals().get(format!("__wowie_{method}"))
+    fn call(
+        &self,
+        method: &str,
+        request: &serde_json::Value,
+        item_id: Option<&str>,
+        action_id: Option<&str>,
+    ) -> Result<String> {
+        let callback: Function = self
+            .lua
+            .globals()
+            .get(format!("__wowie_{method}"))
             .with_context(|| format!("plugin does not register {method} handler"))?;
         let context = self.lua.to_value(request)?;
         let value = match (item_id, action_id) {
-            (Some(item_id), Some(action_id)) => callback.call::<Value>((item_id, action_id, context))?,
+            (Some(item_id), Some(action_id)) => {
+                callback.call::<Value>((item_id, action_id, context))?
+            }
             _ if method == "query" => callback.call::<Value>((
-                request.get("query").and_then(|value| value.as_str()).unwrap_or_default(),
+                request
+                    .get("query")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default(),
                 context,
             ))?,
             _ => callback.call::<Value>(context)?,
         };
-        let value = if matches!(value, Value::Nil) { serde_json::Value::Object(Default::default()) }
-            else { self.lua.from_value(value)? };
+        let value = if matches!(value, Value::Nil) {
+            serde_json::Value::Object(Default::default())
+        } else {
+            self.lua.from_value(value)?
+        };
         Ok(serde_json::to_string(&value)?)
     }
 }
@@ -259,6 +313,8 @@ struct PluginDetailView {
     #[serde(default)]
     width: Option<PluginDetailWidth>,
     #[serde(default)]
+    height: Option<PluginDetailHeight>,
+    #[serde(default)]
     scrollable: bool,
 }
 
@@ -277,6 +333,11 @@ fn default_detail_min_width() -> i32 {
 
 fn default_detail_max_width() -> i32 {
     640
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginDetailHeight {
+    min: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -341,7 +402,7 @@ impl PluginManager {
         locale: &str,
         plugin_configs: &std::collections::BTreeMap<String, PluginConfig>,
     ) -> Self {
-        let locale = crate::i18n::effective_language(locale);
+        let locale = crate::utils::i18n::effective_language(locale);
         let mut roots = vec![PathBuf::from("plugins")];
         if let Some(data) = dirs::data_local_dir() {
             roots.push(data.join("Wowie").join("plugins"));
@@ -374,7 +435,10 @@ impl PluginManager {
                             failure_count: 0,
                         }));
                         let embedded = match EmbeddedPlugin::from_file(
-                            &dir, &manifest, &locale, &settings.preferences,
+                            &dir,
+                            &manifest,
+                            &locale,
+                            &settings.preferences,
                         ) {
                             Ok(plugin) => Some(Arc::new(Mutex::new(plugin))),
                             Err(error) => {
@@ -384,7 +448,10 @@ impl PluginManager {
                                     status.last_error = Some(error.to_string());
                                     status.failure_count = 1;
                                 }
-                                eprintln!("[plugin:{}] embedded start failed: {error:#}", manifest.id);
+                                eprintln!(
+                                    "[plugin:{}] embedded start failed: {error:#}",
+                                    manifest.id
+                                );
                                 None
                             }
                         };
@@ -416,7 +483,7 @@ impl PluginManager {
 
     pub fn set_locale(&self, locale: String) {
         if let Ok(mut current) = self.locale.lock() {
-            *current = crate::i18n::effective_language(&locale);
+            *current = crate::utils::i18n::effective_language(&locale);
         }
     }
 
@@ -521,8 +588,13 @@ impl PluginManager {
             .unwrap_or_else(|_| "en".into());
         let request = serde_json::json!({"method":"execute", "request_id":request_id, "item_id":item_id, "action_id":action_id, "api_version":plugin.manifest.api_version, "locale":locale, "preferences": plugin_preferences(plugin)});
         let result: Result<String> = (|| {
-            let embedded = plugin.embedded.as_ref().context("plugin is not initialized")?;
-            let embedded = embedded.lock().map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?;
+            let embedded = plugin
+                .embedded
+                .as_ref()
+                .context("plugin is not initialized")?;
+            let embedded = embedded
+                .lock()
+                .map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?;
             let output = embedded.call("execute", &request, Some(item_id), Some(action_id))?;
             validate_protocol_response(&output, &request_id)?;
             Ok(output)
@@ -593,11 +665,16 @@ fn query_plugin(
         "fallback_locale": plugin.manifest.default_locale,
         "preferences": plugin_preferences(plugin),
     });
-    let embedded = plugin.embedded.as_ref().context("plugin is not initialized")?;
-    let embedded = embedded.lock().map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?;
+    let embedded = plugin
+        .embedded
+        .as_ref()
+        .context("plugin is not initialized")?;
+    let embedded = embedded
+        .lock()
+        .map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?;
     let output = embedded.call("query", &request, None, None)?;
-    let response: QueryResponse = serde_json::from_str(&output)
-        .context("decode plugin response")?;
+    let response: QueryResponse =
+        serde_json::from_str(&output).context("decode plugin response")?;
     validate_query_response(&response, &request_id)?;
     Ok(response
         .items
@@ -790,6 +867,7 @@ fn to_detail_view(root: &Path, view: PluginDetailView) -> crate::result::DetailV
                 .preferred
                 .clamp(width.min.min(width.max), width.max.max(width.min))
         }),
+        minimum_height: view.height.map(|height| height.min.max(0)),
         scrollable: view.scrollable,
     }
 }
@@ -810,10 +888,8 @@ mod tests {
     use super::*;
     #[test]
     fn manifest_defaults_are_valid() {
-        let m: PluginManifest = serde_json::from_str(
-            r#"{"id":"x","name":"X","entry_point":"main.lua"}"#,
-        )
-        .unwrap();
+        let m: PluginManifest =
+            serde_json::from_str(r#"{"id":"x","name":"X","entry_point":"main.lua"}"#).unwrap();
         assert_eq!(m.api_version, 1);
         assert_eq!(m.version, "0.1.0");
     }
@@ -940,8 +1016,8 @@ mod tests {
         "#;
         let mut preferences = std::collections::BTreeMap::new();
         preferences.insert("token".into(), serde_json::json!("from-preferences"));
-        let plugin = EmbeddedPlugin::from_source(source, "test.lua", "zh-Hans", "en", &preferences)
-            .unwrap();
+        let plugin =
+            EmbeddedPlugin::from_source(source, "test.lua", "zh-Hans", "en", &preferences).unwrap();
         let query = serde_json::json!({
             "request_id": "query-test",
             "query": "hello",
@@ -957,7 +1033,9 @@ mod tests {
             "request_id": "execute-test",
             "preferences": preferences,
         });
-        let response = plugin.call("execute", &execute, Some("demo"), Some("open")).unwrap();
+        let response = plugin
+            .call("execute", &execute, Some("demo"), Some("open"))
+            .unwrap();
         let response: ExecuteResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(response.request_id.as_deref(), Some("execute-test"));
         assert_eq!(response.title, "demo:open");
@@ -968,7 +1046,9 @@ mod tests {
     fn bundled_devtools_plugin_exercises_public_plugin_surface() {
         let manager = PluginManager::discover_with_config("zh-Hans", &Default::default());
         let results = manager.query("dev");
-        assert!(results.iter().any(|result| result.id == "plugin:wowie-devtools:developer-guide"));
+        assert!(results
+            .iter()
+            .any(|result| result.id == "plugin:wowie-devtools:developer-guide"));
         let guide = results
             .iter()
             .find(|result| result.id == "plugin:wowie-devtools:developer-guide")
@@ -977,7 +1057,13 @@ mod tests {
         assert!(guide.detail.is_some());
         assert!(!guide.actions.is_empty());
         assert!(matches!(guide.icon, Some(IconSpec::Resource(_))));
-        assert!(matches!(guide.actions[0], Action::Plugin { icon: Some(IconSpec::Named(_)), .. }));
+        assert!(matches!(
+            guide.actions[0],
+            Action::Plugin {
+                icon: Some(IconSpec::Named(_)),
+                ..
+            }
+        ));
         assert!(guide
             .detail
             .as_ref()
@@ -985,7 +1071,9 @@ mod tests {
             .actions
             .iter()
             .all(|action| action.icon.is_some()));
-        let output = manager.execute("wowie-devtools", "developer-guide", "open").unwrap();
+        let output = manager
+            .execute("wowie-devtools", "developer-guide", "open")
+            .unwrap();
         assert!(output.contains("open"));
     }
 
@@ -1000,6 +1088,7 @@ mod tests {
                     {"type":"text","text":"ignored","color":"invalid"}
                 ],
                 "actions":[{"id":"open","title":"Open"}]
+                ,"height":{"min":280}
             }"#,
         )
         .unwrap();
@@ -1007,6 +1096,7 @@ mod tests {
         assert_eq!(detail.title, "Repository");
         assert_eq!(detail.blocks.len(), 3);
         assert_eq!(detail.actions[0].title, "Open");
+        assert_eq!(detail.minimum_height, Some(280));
         assert!(matches!(
             detail.blocks[1],
             crate::result::DetailBlock::Weather { .. }
