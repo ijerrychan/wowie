@@ -10,8 +10,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+// Result rows render icons at 24px. Keep up to a 2x source for HiDPI displays,
+// but never enlarge a low-resolution icon before it reaches the renderer.
 const MAX_ICON_DIMENSION: u32 = 64;
-const MAX_CACHED_ICONS: usize = 96;
 const MAX_CACHED_ICON_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Default)]
@@ -28,7 +29,7 @@ struct IconCache {
 }
 
 struct CachedIcon {
-    icon: Option<IconData>,
+    icon: Option<Arc<IconData>>,
     bytes: usize,
 }
 
@@ -37,10 +38,10 @@ impl IconService {
         Self::default()
     }
 
-    /// Resolve an icon off the UI thread and reuse both successful and failed
-    /// lookups. A failed lookup is cached as well so broken entries do not
-    /// repeatedly call into the Windows Shell while the user types.
-    pub fn resolve(&self, item: &SearchResult) -> Option<IconData> {
+    /// Resolve an icon off the UI thread and reuse successful lookups. Failed
+    /// lookups are not retained because they carry no pixel data and would
+    /// otherwise bypass the byte-based cache bound.
+    pub fn resolve(&self, item: &SearchResult) -> Option<Arc<IconData>> {
         let source_key = icon_source_key(item);
         if let Ok(mut cache) = self.cache.lock() {
             if let Some(icon) = cache.get(&source_key) {
@@ -48,33 +49,35 @@ impl IconService {
             }
         }
 
-        let icon = resolve_uncached(item);
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(source_key, icon.clone());
+        let icon = resolve_uncached(item).map(Arc::new);
+        if let Some(icon) = icon.as_ref() {
+            if let Ok(mut cache) = self.cache.lock() {
+                cache.insert(source_key, Some(Arc::clone(icon)));
+            }
         }
         icon
     }
 }
 
 impl IconCache {
-    fn get(&mut self, key: &str) -> Option<Option<IconData>> {
+    fn get(&mut self, key: &str) -> Option<Option<Arc<IconData>>> {
         let icon = self.entries.get(key).map(|entry| entry.icon.clone())?;
         self.touch(key);
         Some(icon)
     }
 
-    fn insert(&mut self, key: String, icon: Option<IconData>) {
+    fn insert(&mut self, key: String, icon: Option<Arc<IconData>>) {
         if let Some(previous) = self.entries.remove(&key) {
             self.bytes = self.bytes.saturating_sub(previous.bytes);
             self.lru.retain(|existing| existing != &key);
         }
 
-        let bytes = icon.as_ref().map_or(0, icon_bytes);
+        let bytes = icon.as_ref().map_or(0, |icon| icon_bytes(icon));
         self.bytes += bytes;
         self.lru.push_back(key.clone());
         self.entries.insert(key, CachedIcon { icon, bytes });
 
-        while self.entries.len() > MAX_CACHED_ICONS || self.bytes > MAX_CACHED_ICON_BYTES {
+        while self.bytes > MAX_CACHED_ICON_BYTES {
             let Some(oldest) = self.lru.pop_front() else {
                 break;
             };
@@ -109,12 +112,30 @@ fn resolve_uncached(item: &SearchResult) -> Option<IconData> {
         }
     }
 
-    crate::platform::application_icon(icon_target).or_else(|| {
+    let icon = application_icon_with_path_lookup(icon_target).or_else(|| {
         item.launch_entries
             .iter()
             .map(|entry| &entry.path)
             .filter(|path| !crate::platform::windows_rules::is_shortcut_path(path))
-            .find_map(|path| crate::platform::application_icon(path))
+            .find_map(|path| application_icon_with_path_lookup(path))
+    });
+    icon
+}
+
+fn application_icon_with_path_lookup(target: &Path) -> Option<IconData> {
+    crate::platform::application_icon(target).or_else(|| {
+        let name = target.file_name()?.to_str()?;
+        if target
+            .parent()
+            .is_some_and(|parent| !parent.as_os_str().is_empty())
+        {
+            return None;
+        }
+        let search_path = std::env::var_os("PATH")?;
+        std::env::split_paths(&search_path)
+            .map(|directory| directory.join(name))
+            .find(|path| path.is_file())
+            .and_then(|path| crate::platform::application_icon(&path))
     })
 }
 
@@ -127,8 +148,6 @@ fn fetch_favicon(target: &Path) -> Option<IconData> {
 
 fn decode_image(bytes: &[u8]) -> Option<IconData> {
     let image = image::load_from_memory(bytes).ok()?;
-    // Favicon and plugin assets are not trusted to be small. Keep the payload
-    // close to the 24px UI size before it reaches the renderer/GPU.
     let image = image
         .thumbnail(MAX_ICON_DIMENSION, MAX_ICON_DIMENSION)
         .to_rgba8();

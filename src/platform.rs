@@ -151,10 +151,12 @@ pub mod windows_rules {
     pub const UPDATER_FILE_STEM: &str = "update";
 
     pub fn is_shell_namespace(path: &Path) -> bool {
-        path.to_string_lossy()
+        let value = path.to_string_lossy();
+        value
             .trim()
             .get(.."shell:".len())
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("shell:"))
+            || value.trim_start().starts_with("::")
     }
 
     pub fn is_updater_path(path: &Path) -> bool {
@@ -186,6 +188,7 @@ pub mod windows_rules {
         #[test]
         fn recognizes_shell_namespace_paths() {
             assert!(is_shell_namespace(Path::new(r"shell:AppsFolder\Demo")));
+            assert!(is_shell_namespace(Path::new(r":::{CLSID}")));
             assert!(!is_shell_namespace(Path::new(r"C:\Apps\Demo.exe")));
         }
 
@@ -269,8 +272,8 @@ pub struct ShortcutInfo {
     pub target: Option<std::path::PathBuf>,
     pub arguments: Option<String>,
     pub working_directory: Option<std::path::PathBuf>,
-    /// File that owns the shortcut's shell icon. The icon index is resolved
-    /// by Shell32 and is not needed by the renderer.
+    /// File that owns the shortcut's shell icon. The icon index selects the
+    /// resource used when resolving the icon through Shell32.
     pub icon_path: Option<std::path::PathBuf>,
     pub icon_index: Option<i32>,
 }

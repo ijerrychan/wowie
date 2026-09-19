@@ -21,6 +21,7 @@ pub struct Config {
     pub show_on_startup: bool,
     pub hide_on_focus_loss: bool,
     pub show_advanced_details: bool,
+    pub show_advanced_launch_entries: bool,
     pub fuzzy_search: bool,
     pub shortcuts: Vec<ShortcutConfig>,
     pub providers: ProviderConfig,
@@ -80,6 +81,7 @@ impl Default for Config {
             show_on_startup: true,
             hide_on_focus_loss: true,
             show_advanced_details: false,
+            show_advanced_launch_entries: false,
             fuzzy_search: true,
             shortcuts: vec![ShortcutConfig {
                 name: "Search with Google".into(),
@@ -239,6 +241,7 @@ mod tests {
         assert!(config.show_on_startup);
         assert!(config.hide_on_focus_loss);
         assert!(!config.show_advanced_details);
+        assert!(!config.show_advanced_launch_entries);
         assert!(config.fuzzy_search);
         assert!(config
             .shortcuts

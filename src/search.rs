@@ -6,11 +6,11 @@ use anyhow::{Context, Result};
 use nucleo_matcher::{Config as MatcherConfig, Matcher, Utf32Str};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Mutex,
+    Arc, Mutex,
 };
 
 pub struct SearchCore {
-    results: Mutex<Vec<SearchResult>>,
+    results: Mutex<Arc<Vec<SearchResult>>>,
     providers: ProviderRegistry,
     dynamic_results: Mutex<Vec<SearchResult>>,
     ranker: Ranker,
@@ -21,7 +21,7 @@ impl SearchCore {
     #[cfg(test)]
     pub fn new(results: Vec<SearchResult>) -> Self {
         Self {
-            results: Mutex::new(results),
+            results: Mutex::new(Arc::new(results)),
             providers: ProviderRegistry::without_dynamic(PluginManager::discover_with_locale("en")),
             dynamic_results: Mutex::new(Vec::new()),
             ranker: Ranker::in_memory(),
@@ -35,7 +35,7 @@ impl SearchCore {
         shortcuts: Vec<crate::config::ShortcutConfig>,
     ) -> Self {
         Self {
-            results: Mutex::new(results),
+            results: Mutex::new(Arc::new(results)),
             providers: ProviderRegistry::default_providers(plugins, shortcuts),
             dynamic_results: Mutex::new(Vec::new()),
             ranker: Ranker::load(),
@@ -75,7 +75,7 @@ impl SearchCore {
             })
     }
 
-    pub fn replace_results(&self, results: Vec<SearchResult>) {
+    pub fn replace_results(&self, results: Arc<Vec<SearchResult>>) {
         if let Ok(mut indexed) = self.results.lock() {
             *indexed = results;
         }
@@ -100,17 +100,7 @@ impl SearchCore {
         requested_action_id: &str,
     ) -> Result<crate::plugin::ExecuteResponse> {
         let item = self.by_id(item_id).context("result not found")?;
-        let Some(crate::result::Action::Plugin { action_id, .. }) =
-            item.actions.iter().find(|action| {
-                matches!(
-                    action,
-                    crate::result::Action::Plugin { action_id, .. }
-                        if action_id == requested_action_id
-                )
-            })
-        else {
-            anyhow::bail!("result has no plugin action")
-        };
+        let (_, action_id) = crate::provider::find_plugin_action(&item, requested_action_id)?;
         self.providers.execute_plugin_action(&item, action_id)
     }
 
@@ -133,22 +123,25 @@ impl SearchCore {
                     .unwrap_or(0)
             );
         }
-        let mut all = self
-            .results
-            .lock()
-            .map(|results| results.clone())
-            .unwrap_or_default();
         let dynamic = self.providers.query(&input);
-        all.extend(dynamic.iter().cloned());
         // Launch callbacks resolve rows by id after the search worker returns.
         // Keep only the current query's dynamic records so a repeated shortcut
         // id cannot resolve to an older command or URL.
         if let Ok(mut cached) = self.dynamic_results.lock() {
             cached.clear();
-            cached.extend(dynamic);
+            cached.extend(dynamic.iter().cloned());
         }
-        let mut ranked: Vec<(RankKey, &SearchResult)> = all
-            .iter()
+        let indexed = self
+            .results
+            .lock()
+            .ok()
+            .map(|indexed| Arc::clone(&*indexed));
+        let mut ranked: Vec<(RankKey, &SearchResult)> = indexed
+            .as_ref()
+            .map(|results| results.iter())
+            .into_iter()
+            .flatten()
+            .chain(dynamic.iter())
             .filter_map(|item| {
                 let title_score = match_score(
                     &query,
@@ -283,6 +276,28 @@ fn match_score(
             quality: 0,
         });
     }
+    if query.is_ascii() && title.is_ascii() {
+        let title_len = title.chars().count() as i32;
+        if ascii_eq_ignore_case(title, query) {
+            return Some(MatchScore {
+                class: 4,
+                quality: 1000,
+            });
+        }
+        if ascii_starts_with_ignore_case(title, query) {
+            return Some(MatchScore {
+                class: 3,
+                quality: (1000 - title_len).max(1),
+            });
+        }
+        if ascii_contains_ignore_case(title, query) {
+            return Some(MatchScore {
+                class: 2,
+                quality: (1000 - title_len).max(1),
+            });
+        }
+    }
+
     let text = title.to_lowercase();
     if text == query {
         return Some(MatchScore {
@@ -313,6 +328,29 @@ fn match_score(
         }
     }
     None
+}
+
+fn ascii_eq_ignore_case(left: &str, right: &str) -> bool {
+    ascii_bytes_eq_ignore_case(left.as_bytes(), right.as_bytes())
+}
+
+fn ascii_starts_with_ignore_case(text: &str, prefix: &str) -> bool {
+    text.len() >= prefix.len()
+        && ascii_bytes_eq_ignore_case(&text.as_bytes()[..prefix.len()], prefix.as_bytes())
+}
+
+fn ascii_contains_ignore_case(text: &str, needle: &str) -> bool {
+    text.as_bytes()
+        .windows(needle.len())
+        .any(|window| ascii_bytes_eq_ignore_case(window, needle.as_bytes()))
+}
+
+fn ascii_bytes_eq_ignore_case(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.eq_ignore_ascii_case(right))
 }
 
 #[cfg(test)]

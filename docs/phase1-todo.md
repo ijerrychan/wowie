@@ -11,6 +11,7 @@
 - [x] 实现跨平台启动动作适配层
 - [x] 接入 Windows 全局 Hotkey：默认 `Alt+Space`
 - [x] 增加 JSON 持久化配置：快捷键、窗口宽度、主题、语言、启动显示、失焦隐藏和高级字段显示
+- [x] 增加 `show_advanced_launch_entries`：默认仅显示参数不同的快捷方式，开启后显示全部非主启动入口，并支持热加载
 - [x] 实现 ShortcutProvider：`>` 执行命令、内置 `w` 网址快捷指令和配置型 URL 模板快捷指令
 - [x] 快捷指令支持无前缀低优先级匹配，并使用独立 `Shortcut` 分类
 - [x] 应用配置中的窗口宽度；搜索结果不设数量上限，由列表滚动展示
@@ -65,12 +66,14 @@
 - [x] 改用原生 Windows API 替代 Package / AppsFolder 的 PowerShell 枚举
 - [x] 增加应用图标
   - [x] 已接入 Windows `SHGetFileInfoW`，对 `shell:AppsFolder\...` 使用 PIDL 解析；请求 32×32 并转换为 RGBA 后在 Slint 中显示，不放大低分辨率图标。
+  - [x] 外部 favicon 和插件图片最多缩小到 64×64；低于该尺寸的图标保持原始分辨率，不主动插值放大。
   - [x] 将图标提取迁移到后台线程，并通过 `IconService` 缓存。
 - [x] 结果文本与图标解析解耦；仅加载首屏及滚动后可见区域的图标。
 - [x] URL favicon 使用 IconService 缓存；同一网站不同查询参数共享缓存
 - [x] 为商店应用和控制面板隐藏技术路径，支持 `show_advanced_details` 配置显示高级字段
 - [x] 普通模式显示最终执行文件名和默认入口参数，高级模式显示完整目标路径和参数
 - [x] 上下文菜单移除默认启动入口，并以本地化分组显示其他启动入口
+- [x] 复用公共 helper 统一 Shell namespace、插件 Action 和 Windows 图标像素处理；核心模块整体拆分暂缓
 - [x] 对虚拟 AppsFolder 入口采用保守关联策略，避免误合并不同 Shell 与 exe 启动行为
 - [x] 为 Result / Action 增加启动错误状态与用户可见反馈
 - [x] 补充 App Provider、Search Core、Launcher 的测试覆盖

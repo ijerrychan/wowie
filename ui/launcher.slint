@@ -81,8 +81,8 @@ export component Launcher inherits Window {
         background: root.canvas;
         border-color: root.border;
         border-width: 1px;
-        border-radius: 18px;
-        clip: true;
+        // Keep the shell flat and avoid a rounded clip layer on every frame.
+        border-radius: 12px;
 
         VerticalBox {
             padding: 10px;
@@ -247,7 +247,6 @@ export component ContextMenu inherits Window {
         border-color: root.border;
         border-width: 1px;
         border-radius: 8px;
-        clip: true;
 
         for action[index] in root.actions : Rectangle {
             x: 1px; y: 8px + index * 32px; width: parent.width - 2px; height: 32px;

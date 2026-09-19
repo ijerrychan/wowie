@@ -469,12 +469,20 @@ pub(crate) fn indexed_application_icon(target: &Path, index: i32) -> Option<supe
 fn icon_pixels(
     icon_info: &windows_sys::Win32::UI::WindowsAndMessaging::ICONINFO,
 ) -> Option<super::IconData> {
+    // Keep the native extraction at the shell's large-icon size. Low-resolution
+    // icons are intentionally passed through without interpolation.
+    bitmap_pixels(icon_info.hbmColor, 32, 32)
+}
+
+fn bitmap_pixels(
+    bitmap: *mut std::ffi::c_void,
+    width: u32,
+    height: u32,
+) -> Option<super::IconData> {
     use std::mem;
     use windows_sys::Win32::Graphics::Gdi::{
         GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
     };
-    let width = 32_u32;
-    let height = 32_u32;
     let mut pixels = vec![0_u8; (width * height * 4) as usize];
     let mut bitmap_info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
@@ -493,7 +501,7 @@ fn icon_pixels(
         && unsafe {
             GetDIBits(
                 dc,
-                icon_info.hbmColor,
+                bitmap,
                 0,
                 height,
                 pixels.as_mut_ptr().cast(),
@@ -561,14 +569,9 @@ fn application_icon_with_flags(
     use_file_attributes: bool,
 ) -> Option<super::IconData> {
     use std::{mem, os::windows::ffi::OsStrExt};
-    use windows_sys::Win32::{
-        Graphics::Gdi::{
-            GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
-        },
-        UI::{
-            Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON},
-            WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO},
-        },
+    use windows_sys::Win32::UI::{
+        Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON},
+        WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO},
     };
     let wide: Vec<u16> = _target.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut file_info: SHFILEINFOW = unsafe { mem::zeroed() };
@@ -590,7 +593,7 @@ fn application_icon_with_flags(
     };
     if !use_file_attributes
         && (ok == 0 || file_info.hIcon.is_null())
-        && is_shell_namespace_target(_target)
+        && super::windows_rules::is_shell_namespace(_target)
     {
         use windows::{
             core::PCWSTR,
@@ -620,48 +623,7 @@ fn application_icon_with_flags(
         if unsafe { GetIconInfo(file_info.hIcon, &mut icon_info) } == 0 {
             return None;
         }
-        let width = 32_u32;
-        let height = 32_u32;
-        let mut pixels = vec![0_u8; (width * height * 4) as usize];
-        let mut bitmap_info = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: width as i32,
-                biHeight: -(height as i32),
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: 0,
-                ..unsafe { mem::zeroed() }
-            },
-            bmiColors: [unsafe { mem::zeroed() }],
-        };
-        let dc = unsafe { GetDC(std::ptr::null_mut()) };
-        let copied = !dc.is_null()
-            && unsafe {
-                GetDIBits(
-                    dc,
-                    icon_info.hbmColor,
-                    0,
-                    height,
-                    pixels.as_mut_ptr().cast(),
-                    &mut bitmap_info,
-                    DIB_RGB_COLORS,
-                )
-            } != 0;
-        if !dc.is_null() {
-            unsafe { ReleaseDC(std::ptr::null_mut(), dc) };
-        }
-        if !copied {
-            return None;
-        }
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
-        }
-        Some(super::IconData {
-            width,
-            height,
-            rgba: pixels,
-        })
+        bitmap_pixels(icon_info.hbmColor, 32, 32)
     })();
     unsafe {
         DestroyIcon(file_info.hIcon);
@@ -677,14 +639,6 @@ fn application_icon_with_flags(
         }
     }
     result
-}
-
-fn is_shell_namespace_target(target: &Path) -> bool {
-    let value = target.to_string_lossy();
-    value
-        .get(.."shell:".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("shell:"))
-        || value.starts_with("::")
 }
 
 fn collect_apps_folder(applications: &mut Vec<super::StoreApplication>) {

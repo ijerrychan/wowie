@@ -14,32 +14,61 @@ const DOCUMENT_EXTENSIONS: &[&str] = &[
     "xltm", "xltx",
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TargetClassification {
+    pub category: ResultCategory,
+    pub is_http_url: bool,
+}
+
 /// Classify an item from the target Windows will ultimately open.
 ///
 /// Providers should keep their explicit categories. This function is only a
 /// fallback for ordinary indexed files and shortcuts whose target is known.
 pub fn classify_target(target: &Path) -> ResultCategory {
+    classify_target_info(target).category
+}
+
+pub fn classify_target_info(target: &Path) -> TargetClassification {
     let value = target.to_string_lossy().trim().to_owned();
     if value.is_empty() {
-        return ResultCategory::Other;
+        return TargetClassification {
+            category: ResultCategory::Other,
+            is_http_url: false,
+        };
     }
     if is_shell_target(&value) {
-        return ResultCategory::Application;
+        return TargetClassification {
+            category: ResultCategory::Application,
+            is_http_url: false,
+        };
     }
-    if url_scheme(&value).is_some() {
-        return ResultCategory::Website;
-    }
-    let extension = target
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(str::to_ascii_lowercase);
-    match extension.as_deref() {
-        Some(extension) if WEBSITE_EXTENSIONS.contains(&extension) => ResultCategory::Website,
-        Some(extension) if DOCUMENT_EXTENSIONS.contains(&extension) => ResultCategory::Document,
-        Some(extension) if APPLICATION_EXTENSIONS.contains(&extension) => {
-            ResultCategory::Application
+    let parsed_url = url::Url::parse(&value).ok();
+    let is_http_url = parsed_url
+        .as_ref()
+        .is_some_and(|url| matches!(url.scheme(), "http" | "https"));
+    let category = if parsed_url
+        .as_ref()
+        .is_some_and(|url| is_http_url && url.host().is_some())
+    {
+        ResultCategory::Website
+    } else {
+        let extension = target
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase);
+        match extension.as_deref() {
+            Some(extension) if WEBSITE_EXTENSIONS.contains(&extension) => ResultCategory::Website,
+            Some(extension) if DOCUMENT_EXTENSIONS.contains(&extension) => ResultCategory::Document,
+            Some(extension) if APPLICATION_EXTENSIONS.contains(&extension) => {
+                ResultCategory::Application
+            }
+            _ => ResultCategory::Other,
         }
-        _ => ResultCategory::Other,
+    };
+
+    TargetClassification {
+        category,
+        is_http_url,
     }
 }
 
@@ -48,11 +77,6 @@ fn is_shell_target(value: &str) -> bool {
         .get(.."shell:".len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("shell:"))
         || value.starts_with("::")
-}
-
-fn url_scheme(value: &str) -> Option<&str> {
-    let (scheme, _) = value.split_once("://")?;
-    matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https").then_some(scheme)
 }
 
 #[cfg(test)]

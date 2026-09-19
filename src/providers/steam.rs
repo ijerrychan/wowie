@@ -11,11 +11,6 @@ use std::{
 const NON_LAUNCHER_EXECUTABLE_MARKERS: [&str; 6] =
     ["unins", "uninstall", "setup", "install", "crash", "redist"];
 
-#[allow(dead_code)]
-pub fn discover() -> Vec<SearchResult> {
-    discover_with_config(&crate::config::ProviderConfig::default())
-}
-
 pub fn discover_with_config(config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
     let mut roots = crate::platform::steam_install_roots();
     roots.extend(default_roots());

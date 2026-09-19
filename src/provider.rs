@@ -16,6 +16,22 @@ pub trait DynamicProvider: Send + Sync {
     fn set_language(&mut self, _language: String) {}
 }
 
+pub(crate) fn find_plugin_action<'a>(
+    item: &'a SearchResult,
+    requested_action_id: &str,
+) -> Result<(&'a str, &'a str)> {
+    item.actions
+        .iter()
+        .find_map(|action| match action {
+            crate::result::Action::Plugin {
+                plugin_id,
+                action_id,
+            } if action_id == requested_action_id => Some((plugin_id.as_str(), action_id.as_str())),
+            _ => None,
+        })
+        .context("result has no plugin action")
+}
+
 pub struct ProviderRegistry {
     plugins: PluginManager,
     dynamic: Vec<Mutex<Box<dyn DynamicProvider>>>,
@@ -78,29 +94,7 @@ impl ProviderRegistry {
         item: &SearchResult,
         requested_action_id: &str,
     ) -> Result<crate::plugin::ExecuteResponse> {
-        let action_id = item
-            .actions
-            .iter()
-            .find_map(|action| match action {
-                crate::result::Action::Plugin { action_id, .. }
-                    if action_id == requested_action_id =>
-                {
-                    Some(action_id.as_str())
-                }
-                _ => None,
-            })
-            .context("result has no plugin action")?;
-        let plugin_id = item
-            .actions
-            .iter()
-            .find_map(|action| match action {
-                crate::result::Action::Plugin {
-                    plugin_id,
-                    action_id: id,
-                } if id == action_id => Some(plugin_id.as_str()),
-                _ => None,
-            })
-            .context("plugin action is unavailable")?;
+        let (plugin_id, action_id) = find_plugin_action(item, requested_action_id)?;
         let output = self.plugins.execute(
             plugin_id,
             item.id.rsplit(':').next().unwrap_or_default(),

@@ -43,9 +43,8 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
         return Vec::new();
     }
 
-    // Temporary detail-view fixture. Keep this in the dynamic shortcut path so
-    // the UI can exercise a provider-owned result before a weather provider is
-    // introduced. The right-hand panel currently uses static sample data.
+    // The shortcut owns the searchable preview; the matching detail provider
+    // performs the network request after the result is selected.
     if crate::i18n::tr_aliases(language, "Launcher", "Weather keyword")
         .iter()
         .any(|keyword| query.eq_ignore_ascii_case(keyword))
@@ -250,48 +249,36 @@ fn expand_template(template: &str, query: &str) -> String {
     )
 }
 
+/// Locate a user-entered web address with linkify, then use the URL parser only
+/// to normalize the recognized HTTP/HTTPS URL.
 fn web_url(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() || value.chars().any(char::is_whitespace) {
         return None;
     }
-    let candidate = if value.contains("://") {
-        value.to_owned()
-    } else {
-        format!("https://{value}")
-    };
+
+    let mut finder = linkify::LinkFinder::new();
+    finder
+        .kinds(&[linkify::LinkKind::Url])
+        .url_must_have_scheme(false)
+        .url_can_be_iri(true);
+    let candidate = finder.links(value).next().and_then(|link| {
+        (link.start() == 0 && link.end() == value.len()).then(|| {
+            if link.as_str().starts_with("http://")
+                || link.as_str().starts_with("https://")
+            {
+                link.as_str().to_owned()
+            } else {
+                format!("https://{}", link.as_str())
+            }
+        })
+    });
+    let candidate = candidate?;
     let parsed = url::Url::parse(&candidate).ok()?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host().is_none() {
         return None;
     }
-    let host = parsed.host_str()?;
-    let obvious_host = host.eq_ignore_ascii_case("localhost") || is_valid_domain(host);
-    obvious_host.then(|| parsed.to_string())
-}
-
-fn is_valid_domain(host: &str) -> bool {
-    let labels = host.trim_end_matches('.').split('.').collect::<Vec<_>>();
-    if labels.len() < 2
-        || labels.iter().any(|label| {
-            label.is_empty()
-                || label.len() > 63
-                || label.starts_with('-')
-                || label.ends_with('-')
-                || !label
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
-        })
-    {
-        return false;
-    }
-    let top_level = labels.last().expect("domain has at least two labels");
-    top_level.len() >= 2
-        && top_level
-            .chars()
-            .any(|character| character.is_ascii_alphabetic())
-        && labels
-            .iter()
-            .any(|label| label.chars().any(|character| !character.is_ascii_digit()))
+    Some(parsed.to_string())
 }
 
 fn fallback_web_url(value: &str) -> String {
@@ -421,11 +408,11 @@ mod tests {
     }
 
     #[test]
-    fn web_shortcut_requires_explicit_prefix_for_ip_addresses() {
+    fn web_shortcut_follows_linkify_ip_support() {
         let implicit_ipv4 = results("192.168.1.10", &[], "en")
             .into_iter()
             .any(|item| item.title.starts_with("Open website"));
-        assert!(!implicit_ipv4);
+        assert!(implicit_ipv4);
 
         let implicit_ipv6 = results("[::1]", &[], "en")
             .into_iter()
@@ -439,6 +426,18 @@ mod tests {
         assert_eq!(
             explicit.launch_target,
             PathBuf::from("https://192.168.1.10")
+        );
+    }
+
+    #[test]
+    fn web_shortcut_supports_ported_hosts_via_linkify() {
+        let result = results("example.com:8443/path", &[], "en")
+            .into_iter()
+            .find(|item| item.title.starts_with("Open website"))
+            .expect("ported web shortcut");
+        assert_eq!(
+            result.launch_target,
+            PathBuf::from("https://example.com:8443/path")
         );
     }
 

@@ -6,16 +6,17 @@
 //! by their resolved target.
 
 use crate::platform::source_ids;
-use crate::result::{Action, IconSpec, LaunchEntry, ResultCategory, SearchResult};
+use crate::result::{IconSpec, LaunchEntry, ResultCategory, SearchResult};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use url::Url;
 
 pub struct AppProvider {
-    items: Vec<SearchResult>,
+    items: Arc<Vec<SearchResult>>,
     sources: HashMap<crate::platform::AppProviderSource, Vec<SearchResult>>,
     config: crate::config::ProviderConfig,
 }
@@ -64,7 +65,7 @@ impl AppProvider {
     /// before the potentially slow Windows Shell enumeration starts.
     pub fn empty_with_config(config: &crate::config::ProviderConfig) -> Self {
         Self {
-            items: Vec::new(),
+            items: Arc::new(Vec::new()),
             sources: HashMap::new(),
             config: config.clone(),
         }
@@ -78,26 +79,7 @@ impl AppProvider {
             .filter(|provider| (provider.enabled)(&self.config))
             .map(|provider| (provider.source, (provider.discover)(&self.config)))
             .collect();
-        self.items = merge_sources(&self.sources);
-    }
-
-    #[allow(dead_code)]
-    pub fn discover() -> Self {
-        Self::discover_with_config(&crate::config::ProviderConfig::default())
-    }
-
-    pub fn discover_with_config(config: &crate::config::ProviderConfig) -> Self {
-        let sources = PROVIDER_DEFINITIONS
-            .into_iter()
-            .filter(|provider| (provider.enabled)(config))
-            .map(|provider| (provider.source, (provider.discover)(config)))
-            .collect();
-        let items = merge_sources(&sources);
-        Self {
-            items,
-            sources,
-            config: config.clone(),
-        }
+        self.items = Arc::new(merge_sources(&self.sources));
     }
 
     /// Re-enumerate only the source reported by the platform watcher.
@@ -118,7 +100,7 @@ impl AppProvider {
             return false;
         }
         self.sources.insert(source, refreshed);
-        self.items = merge_sources(&self.sources);
+        self.items = Arc::new(merge_sources(&self.sources));
         true
     }
 
@@ -133,12 +115,12 @@ impl AppProvider {
             .collect();
         self.config = config.clone();
         self.sources = sources;
-        self.items = merge_sources(&self.sources);
+        self.items = Arc::new(merge_sources(&self.sources));
         true
     }
 
-    pub fn snapshot(&self) -> Vec<SearchResult> {
-        self.items.clone()
+    pub fn snapshot(&self) -> Arc<Vec<SearchResult>> {
+        Arc::clone(&self.items)
     }
 
     pub fn watch_sources(
@@ -208,12 +190,13 @@ fn merge_sources(
     debug_records("before file association", &items);
     associate_file_entries(&mut items);
     debug_records("after file association", &items);
-    items.sort_by(|left, right| {
-        source_priority(&left.source)
-            .cmp(&source_priority(&right.source))
-            .then_with(|| left.title.to_lowercase().cmp(&right.title.to_lowercase()))
-            .then_with(|| left.identity.cmp(&right.identity))
-            .then_with(|| left.location.cmp(&right.location))
+    items.sort_by_cached_key(|item| {
+        (
+            source_priority(&item.source),
+            item.title.to_lowercase(),
+            item.identity.clone(),
+            item.location.clone(),
+        )
     });
     merge_by_identity(&mut items);
     classify_unclassified_items(&mut items);
@@ -226,22 +209,32 @@ fn classify_unclassified_items(items: &mut [SearchResult]) {
         if item.category != ResultCategory::Unclassified {
             continue;
         }
-        let target = item
+        let selected = item
             .launch_entries
             .iter()
             .find_map(|entry| {
-                (!entry.target.as_os_str().is_empty()
-                    && !is_shell_namespace(&entry.target)
-                    && !looks_like_uri(&entry.target))
-                .then_some(&entry.target)
+                if entry.target.as_os_str().is_empty() || is_shell_namespace(&entry.target) {
+                    return None;
+                }
+                let classification = crate::classifier::classify_target_info(&entry.target);
+                (!classification.is_http_url).then_some((&entry.target, classification))
             })
             .or_else(|| {
                 item.launch_entries.iter().find_map(|entry| {
-                    (!entry.target.as_os_str().is_empty()).then_some(&entry.target)
+                    (!entry.target.as_os_str().is_empty()).then_some((
+                        &entry.target,
+                        crate::classifier::classify_target_info(&entry.target),
+                    ))
                 })
             })
-            .unwrap_or(&item.launch_target);
-        item.category = crate::classifier::classify_target(target);
+            .unwrap_or_else(|| {
+                (
+                    &item.launch_target,
+                    crate::classifier::classify_target_info(&item.launch_target),
+                )
+            });
+        let (target, classification) = selected;
+        item.category = classification.category;
         if item.category == ResultCategory::Website && item.icon.is_none() {
             item.icon = Some(IconSpec::DefaultOpen(target.clone()));
         }
@@ -401,9 +394,9 @@ fn collect_tree(
         return;
     };
 
-    let mut entries: Vec<_> = entries.flatten().collect();
-    entries.sort_by_key(|entry| entry.path().to_string_lossy().to_lowercase());
-    for entry in entries {
+    // Ordering is established once after all provider sources are collected
+    // in `merge_sources`; sorting every directory here only repeats work.
+    for entry in entries.flatten() {
         let path = entry.path();
         // This mirrors WalkDir::follow_links(false) used by the legacy index.
         if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
@@ -611,33 +604,28 @@ fn normalize_url(value: &str) -> Option<String> {
     Some(url.to_string())
 }
 
-fn is_website_target(value: &Path) -> bool {
-    Url::parse(value.to_string_lossy().trim())
-        .map(|url| matches!(url.scheme(), "http" | "https"))
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 fn is_website_shortcut(target: &Path, arguments: Option<&str>) -> bool {
     website_url(target, arguments).is_some()
 }
 
 fn website_url(target: &Path, arguments: Option<&str>) -> Option<String> {
-    let candidate = if is_website_target(target) {
-        Some(target.to_string_lossy().trim().to_owned())
-    } else {
+    normalized_http_url(&target.to_string_lossy()).or_else(|| {
         arguments
             .into_iter()
             .flat_map(|value| value.split_whitespace())
             .map(|value| value.trim_matches('"'))
-            .find(|value| {
-                Url::parse(value)
-                    .map(|url| matches!(url.scheme(), "http" | "https"))
-                    .unwrap_or(false)
-            })
-            .map(str::to_owned)
-    }?;
-    normalize_url(&candidate)
+            .find_map(normalized_http_url)
+    })
+}
+
+fn normalized_http_url(value: &str) -> Option<String> {
+    let mut url = Url::parse(value.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url.set_fragment(None);
+    Some(url.to_string())
 }
 
 fn expand_windows_variables(path: PathBuf) -> PathBuf {
@@ -675,11 +663,26 @@ fn read_url_target(path: &Path) -> Option<String> {
 
 fn associate_file_entries(items: &mut Vec<SearchResult>) {
     let mut unified = Vec::with_capacity(items.len());
+    let mut application_targets: HashMap<String, Vec<usize>> = HashMap::new();
     for item in std::mem::take(items) {
         let is_file_entry = is_file_source(&item.source);
         let match_index = if is_file_entry && !is_remote_website(&item) {
             item.launch_entries.first().and_then(|entry| {
-                let candidates: Vec<_> = unified
+                let strong_matches = filesystem_target_key(&entry.target)
+                    .and_then(|key| application_targets.get(&key))
+                    .cloned()
+                    .unwrap_or_default();
+                if strong_matches.len() == 1 {
+                    return strong_matches.into_iter().next();
+                }
+                if !strong_matches.is_empty() {
+                    return None;
+                }
+
+                // Virtual Shell entries and constrained title fallbacks do
+                // not have a filesystem key. Keep the slower compatibility
+                // path only for those cases.
+                let candidates = unified
                     .iter()
                     .enumerate()
                     .filter_map(|(index, application)| {
@@ -689,9 +692,8 @@ fn associate_file_entries(items: &mut Vec<SearchResult>) {
                                     .map(|strength| (index, strength))
                             })
                             .flatten()
-                    })
-                    .collect();
-                select_association_candidate(&candidates)
+                    });
+                select_association_candidate(candidates)
             })
         } else {
             None
@@ -706,16 +708,22 @@ fn associate_file_entries(items: &mut Vec<SearchResult>) {
             application.sources.extend(item.sources);
             merge_launch_entries(application, item.launch_entries);
         } else {
+            let index = unified.len();
+            if is_store_application(&item) {
+                for entry in &item.launch_entries {
+                    if let Some(key) = filesystem_target_key(&entry.target) {
+                        let matches = application_targets.entry(key).or_default();
+                        if !matches.contains(&index) {
+                            matches.push(index);
+                        }
+                    }
+                }
+            }
             unified.push(item);
         }
     }
     for item in &mut unified {
-        item.sources
-            .sort_by_key(|source| source.as_str().to_lowercase());
-        item.sources.dedup();
         refresh_application_location(item);
-        refresh_display_location(item);
-        refresh_launch_actions(item);
     }
     *items = unified;
 }
@@ -725,13 +733,12 @@ fn is_store_application(item: &SearchResult) -> bool {
 }
 
 fn is_remote_website(item: &SearchResult) -> bool {
-    if looks_like_uri(&item.launch_target) {
+    if website_url(&item.launch_target, None).is_some() {
         return true;
     }
-    item.launch_entries.iter().any(|entry| {
-        looks_like_uri(&entry.target)
-            || website_url(&entry.target, Some(&entry.arguments)).is_some()
-    })
+    item.launch_entries
+        .iter()
+        .any(|entry| website_url(&entry.target, Some(&entry.arguments)).is_some())
 }
 
 fn is_file_source(source: &crate::platform::SourceId) -> bool {
@@ -851,33 +858,31 @@ fn shortcut_match_strength(
         .then_some(MatchStrength::Strong)
 }
 
-fn select_association_candidate(candidates: &[(usize, MatchStrength)]) -> Option<usize> {
-    let strong: Vec<_> = candidates
-        .iter()
-        .filter_map(|(index, strength)| (*strength == MatchStrength::Strong).then_some(*index))
-        .collect();
-    if strong.len() == 1 {
-        return strong.into_iter().next();
+fn select_association_candidate(
+    candidates: impl IntoIterator<Item = (usize, MatchStrength)>,
+) -> Option<usize> {
+    let mut strong = None;
+    let mut strong_count = 0;
+    let mut fallback = None;
+    let mut fallback_count = 0;
+
+    for (index, strength) in candidates {
+        match strength {
+            MatchStrength::Strong => {
+                strong = Some(index);
+                strong_count += 1;
+            }
+            MatchStrength::TitleFallback => {
+                fallback = Some(index);
+                fallback_count += 1;
+            }
+        }
     }
-    if !strong.is_empty() {
+
+    if strong_count > 1 {
         return None;
     }
-    let fallback: Vec<_> = candidates
-        .iter()
-        .filter_map(|(index, strength)| {
-            (*strength == MatchStrength::TitleFallback).then_some(*index)
-        })
-        .collect();
-    (fallback.len() == 1).then(|| fallback[0])
-}
-
-fn refresh_launch_actions(item: &mut SearchResult) {
-    item.actions = item
-        .launch_entries
-        .iter()
-        .cloned()
-        .map(Action::Launch)
-        .collect();
+    strong.or_else(|| (fallback_count == 1).then_some(fallback).flatten())
 }
 
 /// Merge launch provenance at the same point as application-record merging.
@@ -885,7 +890,6 @@ fn refresh_launch_actions(item: &mut SearchResult) {
 /// this helper then keeps only distinct launch behavior within that record.
 fn merge_launch_entries(existing: &mut SearchResult, incoming: Vec<LaunchEntry>) {
     existing.launch_entries.extend(incoming);
-    dedup_launch_entries_by_behavior(&mut existing.launch_entries);
 }
 
 /// Keep one entry for each actual launch behavior. The discovered source and
@@ -893,16 +897,31 @@ fn merge_launch_entries(existing: &mut SearchResult, incoming: Vec<LaunchEntry>)
 /// launches. Arguments and working directory do change the behavior and must
 /// therefore remain part of the deduplication key.
 fn dedup_launch_entries_by_behavior(entries: &mut Vec<LaunchEntry>) {
-    entries.sort_by(|left, right| {
-        launch_behavior_key(left)
-            .cmp(&launch_behavior_key(right))
-            .then_with(|| source_priority(&left.source).cmp(&source_priority(&right.source)))
-            .then_with(|| left.source.as_str().cmp(&right.source.as_str()))
-            .then_with(|| left.path.cmp(&right.path))
-    });
+    let mut keyed = entries
+        .drain(..)
+        .map(|entry| {
+            let behavior = launch_behavior_key(&entry);
+            let source_name = entry.source.as_str().into_owned();
+            let path = entry.path.clone();
+            (
+                behavior,
+                source_priority(&entry.source),
+                source_name,
+                path,
+                entry,
+            )
+        })
+        .collect::<Vec<_>>();
 
-    let mut seen = HashSet::new();
-    entries.retain(|entry| seen.insert(launch_behavior_key(entry)));
+    keyed.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.cmp(&right.3))
+    });
+    keyed.dedup_by(|left, right| left.0 == right.0);
+    entries.extend(keyed.into_iter().map(|(_, _, _, _, entry)| entry));
 }
 
 fn launch_behavior_key(entry: &LaunchEntry) -> (String, String, String) {
@@ -981,24 +1000,20 @@ fn refresh_application_location(item: &mut SearchResult) {
 /// Shell namespace targets, URLs, and updater launchers when a better target
 /// exists. This keeps presentation aligned with the provider merge policy.
 pub(crate) fn preferred_launch_entry(item: &SearchResult) -> Option<&LaunchEntry> {
-    let concrete = item
+    let is_concrete =
+        |entry: &&LaunchEntry| !is_shell_namespace(&entry.target) && !looks_like_uri(&entry.target);
+    let has_non_updater = item
         .launch_entries
         .iter()
-        .filter(|entry| !is_shell_namespace(&entry.target) && !looks_like_uri(&entry.target))
-        .collect::<Vec<_>>();
-    let candidates = if concrete
+        .filter(is_concrete)
+        .any(|entry| !crate::platform::windows_rules::is_updater_path(&entry.target));
+
+    item.launch_entries
         .iter()
-        .any(|entry| !crate::platform::windows_rules::is_updater_path(&entry.target))
-    {
-        concrete
-            .into_iter()
-            .filter(|entry| !crate::platform::windows_rules::is_updater_path(&entry.target))
-            .collect::<Vec<_>>()
-    } else {
-        concrete
-    };
-    candidates
-        .into_iter()
+        .filter(is_concrete)
+        .filter(|entry| {
+            !has_non_updater || !crate::platform::windows_rules::is_updater_path(&entry.target)
+        })
         .min_by_key(|entry| {
             (
                 entry.source.priority(),
@@ -1019,11 +1034,11 @@ pub(crate) fn preferred_launch_entry(item: &SearchResult) -> Option<&LaunchEntry
         })
 }
 
-pub(crate) fn is_default_launch_entry(item: &SearchResult, entry: &LaunchEntry) -> bool {
-    preferred_launch_entry(item)
-        .is_some_and(|default| launch_behavior_key(default) == launch_behavior_key(entry))
+pub(crate) fn same_launch_behavior(left: &LaunchEntry, right: &LaunchEntry) -> bool {
+    launch_behavior_key(left) == launch_behavior_key(right)
 }
 
+#[cfg(test)]
 fn refresh_display_location(item: &mut SearchResult) {
     if item.category == ResultCategory::ControlPanel {
         return;
@@ -1081,11 +1096,13 @@ fn is_shell_namespace(path: &Path) -> bool {
 }
 
 fn same_filesystem_target(left: &Path, right: &Path) -> bool {
-    !is_shell_namespace(left)
-        && !is_shell_namespace(right)
-        && !looks_like_uri(left)
-        && !looks_like_uri(right)
-        && normalize_path(left) == normalize_path(right)
+    filesystem_target_key(left)
+        .zip(filesystem_target_key(right))
+        .is_some_and(|(left, right)| left == right)
+}
+
+fn filesystem_target_key(path: &Path) -> Option<String> {
+    (!is_shell_namespace(path) && !looks_like_uri(path)).then(|| normalize_path(path))
 }
 
 fn looks_like_uri(path: &Path) -> bool {
@@ -1149,12 +1166,8 @@ fn aumid_identity(aumid: &str) -> String {
 }
 
 fn merge_by_identity(items: &mut Vec<SearchResult>) {
-    let mut grouped = HashMap::<String, SearchResult>::new();
+    let mut grouped = HashMap::<String, SearchResult>::with_capacity(items.len());
     for mut item in std::mem::take(items) {
-        // Establish the launch-entry invariant for records that arrive here
-        // without passing through file association (including provider tests
-        // and future providers with multiple entries per record).
-        dedup_launch_entries_by_behavior(&mut item.launch_entries);
         let mut aliases = std::mem::take(&mut item.aliases);
         aliases.push(item.title.clone());
         if item.identity.starts_with("exe:") {
@@ -1211,14 +1224,18 @@ fn merge_by_identity(items: &mut Vec<SearchResult>) {
     }
     let mut merged: Vec<_> = grouped.into_values().collect();
     for item in &mut merged {
-        item.aliases.sort_by_key(|alias| alias.to_lowercase());
+        // Deduplicate only after all records with this identity have been
+        // merged. Doing it earlier repeats the same normalization work for
+        // every intermediate merge.
+        dedup_launch_entries_by_behavior(&mut item.launch_entries);
+        item.aliases
+            .sort_by_cached_key(|alias| alias.to_lowercase());
         item.aliases
             .dedup_by(|left, right| left.eq_ignore_ascii_case(right));
         item.sources
-            .sort_by_key(|source| source.as_str().to_lowercase());
+            .sort_by_cached_key(|source| source.as_str().to_lowercase());
         item.sources.dedup();
         refresh_application_location(item);
-        refresh_launch_actions(item);
     }
     merged.sort_by_cached_key(|item| item.title.to_lowercase());
     *items = merged;
@@ -1334,7 +1351,7 @@ mod tests {
         merge_by_identity(&mut items);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].launch_entries.len(), 2);
-        assert_eq!(items[0].actions.len(), 2);
+        assert!(items[0].actions.is_empty());
         assert!(items[0].aliases.iter().any(|alias| alias == "Demo (work)"));
     }
 

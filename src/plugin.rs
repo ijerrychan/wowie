@@ -7,7 +7,7 @@
 
 use crate::result::{Action, IconSpec, LaunchEntry, ResultCategory, SearchResult};
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     fs,
     io::{BufRead, BufReader, Write},
@@ -74,15 +74,6 @@ struct ResidentProcess {
     _child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
-}
-
-#[derive(Debug, Serialize)]
-struct QueryRequest<'a> {
-    method: &'static str,
-    query: &'a str,
-    api_version: u32,
-    locale: String,
-    fallback_locale: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -274,49 +265,20 @@ impl PluginManager {
         if let Some(process) = &plugin.process {
             return resident_request(process, &request);
         }
-        let mut command = Command::new(&plugin.manifest.runtime);
-        command
-            .arg(&plugin.manifest.entry_point)
-            .current_dir(&plugin.root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        hide_console_window(&mut command);
-        let mut child = command.spawn()?;
-        use std::io::Write;
-        child
-            .stdin
-            .take()
-            .context("plugin stdin unavailable")?
-            .write_all(format!("{request}\n").as_bytes())?;
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
-            anyhow::bail!(
-                "exit status {}; {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        let output = run_short_lived(plugin, &request)?;
+        Ok(String::from_utf8_lossy(&output).trim().to_owned())
     }
 }
 
 fn query_plugin(plugin: &InstalledPlugin, query: &str, locale: &str) -> Result<Vec<SearchResult>> {
-    let request = serde_json::to_string(&QueryRequest {
-        method: "query",
-        query,
-        api_version: plugin.manifest.api_version,
-        locale: locale.to_owned(),
-        fallback_locale: &plugin.manifest.default_locale,
-    })?;
+    let request = serde_json::json!({
+        "method": "query",
+        "query": query,
+        "api_version": plugin.manifest.api_version,
+        "locale": locale,
+        "fallback_locale": plugin.manifest.default_locale,
+    });
     if let Some(process) = &plugin.process {
-        let request = serde_json::json!({
-            "method": "query",
-            "query": query,
-            "api_version": plugin.manifest.api_version,
-            "locale": locale,
-            "fallback_locale": plugin.manifest.default_locale,
-        });
         let output = resident_request(process, &request)?;
         let response: QueryResponse =
             serde_json::from_str(&output).context("decode plugin response")?;
@@ -326,6 +288,17 @@ fn query_plugin(plugin: &InstalledPlugin, query: &str, locale: &str) -> Result<V
             .map(|item| to_result(plugin, item))
             .collect());
     }
+    let output = run_short_lived(plugin, &request)?;
+    let response: QueryResponse =
+        serde_json::from_slice(&output).context("decode plugin response")?;
+    Ok(response
+        .items
+        .into_iter()
+        .map(|item| to_result(plugin, item))
+        .collect())
+}
+
+fn run_short_lived(plugin: &InstalledPlugin, request: &serde_json::Value) -> Result<Vec<u8>> {
     let mut command = Command::new(&plugin.manifest.runtime);
     command
         .arg(&plugin.manifest.entry_point)
@@ -351,13 +324,7 @@ fn query_plugin(plugin: &InstalledPlugin, query: &str, locale: &str) -> Result<V
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let response: QueryResponse =
-        serde_json::from_slice(&output.stdout).context("decode plugin response")?;
-    Ok(response
-        .items
-        .into_iter()
-        .map(|item| to_result(plugin, item))
-        .collect())
+    Ok(output.stdout)
 }
 
 fn hide_console_window(command: &mut Command) {

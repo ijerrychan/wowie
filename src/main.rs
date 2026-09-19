@@ -67,7 +67,7 @@ fn main() -> Result<()> {
     let app_source_events = AppProvider::watch_sources(Arc::clone(&custom_directories));
     let config_events = config::watch_changes();
     let engine = search::SearchCore::with_plugins_and_shortcuts(
-        provider.snapshot(),
+        provider.snapshot().as_ref().clone(),
         plugin::PluginManager::discover_with_locale(&config.language),
         config.shortcuts.clone(),
     );
@@ -81,6 +81,8 @@ fn main() -> Result<()> {
     let context_generation = Arc::new(AtomicU64::new(0));
     let context_item = Arc::new(Mutex::new(None::<SearchResult>));
     let show_advanced_details = Arc::new(AtomicBool::new(config.show_advanced_details));
+    let show_advanced_launch_entries =
+        Arc::new(AtomicBool::new(config.show_advanced_launch_entries));
     let follow_system_theme = Arc::new(AtomicBool::new(config.theme == "system"));
     let hide_on_focus_loss = Arc::new(AtomicBool::new(config.hide_on_focus_loss));
     let query_generation = Arc::new(AtomicU64::new(0));
@@ -393,6 +395,7 @@ fn main() -> Result<()> {
         let context_generation = Arc::clone(&context_generation);
         let context_item = Arc::clone(&context_item);
         let visible = Arc::clone(&visible);
+        let show_advanced_launch_entries = Arc::clone(&show_advanced_launch_entries);
         window.on_context_menu_requested(move |index| {
             let Some(item) = weak.upgrade().and_then(|window| {
                 window
@@ -402,7 +405,8 @@ fn main() -> Result<()> {
             }) else {
                 return;
             };
-            let actions = context_actions(&item);
+            let actions =
+                context_actions(&item, show_advanced_launch_entries.load(Ordering::Acquire));
             if actions.is_empty() {
                 hide_context_menu(
                     &context_weak,
@@ -501,11 +505,8 @@ fn main() -> Result<()> {
                 value if value.starts_with("launch:") => value[7..]
                     .parse::<usize>()
                     .ok()
-                    .and_then(|index| item.actions.get(index))
-                    .and_then(|action| match action {
-                        result::Action::Launch(entry) => Some(launcher::launch_entry(entry, false)),
-                        result::Action::Plugin { .. } => None,
-                    })
+                    .and_then(|index| item.launch_entries.get(index))
+                    .map(|entry| launcher::launch_entry(entry, false))
                     .unwrap_or_else(|| anyhow::bail!("launch action is unavailable")),
                 _ => Err(anyhow::anyhow!("unknown context action")),
             };
@@ -560,6 +561,7 @@ fn main() -> Result<()> {
         let query_generation = Arc::clone(&query_generation);
         let current_query = Arc::clone(&current_query);
         let show_advanced_details = Arc::clone(&show_advanced_details);
+        let show_advanced_launch_entries = Arc::clone(&show_advanced_launch_entries);
         let follow_system_theme = Arc::clone(&follow_system_theme);
         let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
         let platform_for_config = Arc::clone(&platform);
@@ -593,6 +595,8 @@ fn main() -> Result<()> {
                         engine.replace_provider_language(updated.language.clone());
                         show_advanced_details
                             .store(updated.show_advanced_details, Ordering::Release);
+                        show_advanced_launch_entries
+                            .store(updated.show_advanced_launch_entries, Ordering::Release);
                         let weak_for_config = weak.clone();
                         let platform_for_config = Arc::clone(&platform_for_config);
                         let theme = updated.theme.clone();
@@ -1105,7 +1109,10 @@ struct ResultRowPayload {
     category: String,
 }
 
-fn context_actions(item: &SearchResult) -> Vec<ContextActionRow> {
+fn context_actions(
+    item: &SearchResult,
+    show_advanced_launch_entries: bool,
+) -> Vec<ContextActionRow> {
     let is_filesystem_target = is_supported_filesystem_target(&item.launch_target);
     let is_store_shell_target = is_apps_folder_target(&item.launch_target);
     let mut actions = Vec::new();
@@ -1128,21 +1135,7 @@ fn context_actions(item: &SearchResult) -> Vec<ContextActionRow> {
     // ShortcutProvider actions are direct query actions and intentionally do
     // not populate the indexed launch_entries field. They must not be shown
     // as alternate application launch entries.
-    let other_launches = if item.launch_entries.is_empty() {
-        Vec::new()
-    } else {
-        item.actions
-            .iter()
-            .enumerate()
-            .filter_map(|(index, action)| {
-                let result::Action::Launch(entry) = action else {
-                    return None;
-                };
-                (!crate::providers::app::is_default_launch_entry(item, entry))
-                    .then_some((index, entry))
-            })
-            .collect::<Vec<_>>()
-    };
+    let other_launches = visible_launch_entries(item, show_advanced_launch_entries);
     if !other_launches.is_empty() {
         actions.push(ContextActionRow {
             id: "section:other-launch-entries".into(),
@@ -1160,6 +1153,28 @@ fn context_actions(item: &SearchResult) -> Vec<ContextActionRow> {
         }
     }
     actions
+}
+
+fn visible_launch_entries(
+    item: &SearchResult,
+    show_advanced_launch_entries: bool,
+) -> Vec<(usize, &result::LaunchEntry)> {
+    let Some(default) = crate::providers::app::preferred_launch_entry(item) else {
+        return Vec::new();
+    };
+    item.launch_entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            if crate::providers::app::same_launch_behavior(default, entry) {
+                return None;
+            }
+            let allowed = show_advanced_launch_entries
+                || (crate::platform::windows_rules::is_shortcut_path(&entry.path)
+                    && entry.arguments.trim() != default.arguments.trim());
+            allowed.then_some((index, entry))
+        })
+        .collect()
 }
 
 fn launch_entry_label(entry: &result::LaunchEntry) -> String {
@@ -1302,6 +1317,7 @@ fn request_icons(
     let weak = weak.clone();
     let query_generation = Arc::clone(query_generation);
     std::thread::spawn(move || {
+        let mut resolved = Vec::with_capacity(pending.len());
         for (index, item) in pending {
             if query_generation.load(Ordering::Acquire) != query_id {
                 return;
@@ -1309,23 +1325,27 @@ fn request_icons(
             let Some(icon) = icon_service.resolve(&item) else {
                 continue;
             };
-            let weak_for_callback = weak.clone();
-            let query_generation_for_callback = Arc::clone(&query_generation);
-            let _ = slint::invoke_from_event_loop(move || {
-                if query_generation_for_callback.load(Ordering::Acquire) != query_id {
-                    return;
-                }
-                let Some(window) = weak_for_callback.upgrade() else {
-                    return;
-                };
-                let model = window.get_results();
-                let Some(mut row) = model.row_data(index) else {
-                    return;
-                };
-                row.icon = icon_to_image(&icon);
-                model.set_row_data(index, row);
-            });
+            resolved.push((index, icon));
         }
+        if resolved.is_empty() {
+            return;
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            if query_generation.load(Ordering::Acquire) != query_id {
+                return;
+            }
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let model = window.get_results();
+            for (index, icon) in resolved {
+                let Some(mut row) = model.row_data(index) else {
+                    continue;
+                };
+                row.icon = icon_to_image(icon.as_ref());
+                model.set_row_data(index, row);
+            }
+        });
     });
 }
 
@@ -1385,7 +1405,7 @@ mod tests {
             ranking_bias: 0,
         };
 
-        assert!(context_actions(&item)
+        assert!(context_actions(&item, false)
             .iter()
             .all(|action| action.kind != "section"));
     }
@@ -1401,6 +1421,56 @@ mod tests {
         };
 
         assert_eq!(launch_entry_label(&entry), "Chrome - Work");
+    }
+
+    #[test]
+    fn default_mode_only_shows_shortcuts_with_distinct_arguments() {
+        let default = result::LaunchEntry {
+            source: SourceId::StartMenu,
+            path: PathBuf::from(r"C:\Chrome.lnk"),
+            target: PathBuf::from(r"C:\chrome.exe"),
+            arguments: "--profile-directory=Default".into(),
+            working_directory: None,
+        };
+        let same_arguments = result::LaunchEntry {
+            path: PathBuf::from(r"C:\Chrome - Copy.lnk"),
+            ..default.clone()
+        };
+        let different_arguments = result::LaunchEntry {
+            path: PathBuf::from(r"C:\Chrome - Work.lnk"),
+            arguments: "--profile-directory=Work".into(),
+            ..default.clone()
+        };
+        let item = SearchResult {
+            id: "exe:chrome".into(),
+            identity: "exe:chrome".into(),
+            title: "Chrome".into(),
+            category: ResultCategory::Application,
+            aliases: Vec::new(),
+            location: "chrome.exe".into(),
+            launch_target: default.target.clone(),
+            launch_arguments: default.arguments.clone(),
+            launch_working_directory: None,
+            source: SourceId::StartMenu,
+            sources: vec![SourceId::StartMenu],
+            launch_entries: vec![
+                default.clone(),
+                same_arguments.clone(),
+                different_arguments.clone(),
+            ],
+            actions: vec![
+                result::Action::Launch(default),
+                result::Action::Launch(same_arguments),
+                result::Action::Launch(different_arguments),
+            ],
+            detail: None,
+            icon: None,
+            ranking_bias: 0,
+        };
+        let visible = visible_launch_entries(&item, false);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].1.arguments, "--profile-directory=Work");
+        assert_eq!(visible_launch_entries(&item, true).len(), 1);
     }
 
     #[test]
