@@ -233,6 +233,8 @@ fn weather_detail_view(language: &str) -> crate::result::DetailView {
             color: "secondary".into(),
         }],
         actions: Vec::new(),
+        preferred_width: None,
+        scrollable: false,
     }
 }
 

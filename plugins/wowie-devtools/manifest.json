@@ -1,0 +1,18 @@
+{
+  "id": "wowie-devtools",
+  "name": "Wowie Developer Tools",
+  "version": "0.1.0",
+  "api_version": 1,
+  "entry_point": "main.lua",
+  "keywords": ["wowie", "plugin", "developer", "docs"],
+  "commands": [
+    {
+      "id": "open",
+      "title": "Open Wowie developer resources",
+      "keywords": ["help", "guide"],
+      "action_words": ["dev", "plugin"],
+      "icon": {"type": "named", "id": "wowie"}
+    }
+  ],
+  "default_locale": "en"
+}

@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fs, path::PathBuf};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs,
+    path::PathBuf,
+};
 
 const DEFAULT_HOTKEY: &str = "Alt+Space";
 const DEFAULT_RENDERER: &str = "femtovg";
@@ -24,6 +28,7 @@ pub struct Config {
     pub show_advanced_launch_entries: bool,
     pub fuzzy_search: bool,
     pub shortcuts: Vec<ShortcutConfig>,
+    pub plugins: BTreeMap<String, PluginConfig>,
     pub providers: ProviderConfig,
 }
 
@@ -38,6 +43,24 @@ pub struct ShortcutConfig {
     pub target: String,
     #[serde(default)]
     pub arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PluginConfig {
+    pub enabled: bool,
+    pub weight: i32,
+    pub preferences: BTreeMap<String, serde_json::Value>,
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            weight: 0,
+            preferences: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +114,7 @@ impl Default for Config {
                 target: String::new(),
                 arguments: String::new(),
             }],
+            plugins: BTreeMap::new(),
             providers: ProviderConfig::default(),
         }
     }
@@ -155,6 +179,17 @@ impl Config {
                     _ => false,
                 }
         });
+        self.plugins = std::mem::take(&mut self.plugins)
+            .into_iter()
+            .filter_map(|(id, mut plugin)| {
+                let id = id.trim().to_ascii_lowercase();
+                if id.is_empty() {
+                    return None;
+                }
+                plugin.weight = plugin.weight.clamp(-1000, 1000);
+                Some((id, plugin))
+            })
+            .collect();
         self.providers
             .steam_excluded_app_ids
             .retain(|value| !value.trim().is_empty());
@@ -255,5 +290,23 @@ mod tests {
             .indexed_extensions
             .iter()
             .any(|extension| extension == "exe"));
+        assert!(config.plugins.is_empty());
+    }
+
+    #[test]
+    fn plugin_settings_are_normalized() {
+        let mut config = Config::default();
+        config.plugins.insert(
+            " GitHub ".into(),
+            PluginConfig {
+                enabled: false,
+                weight: 5000,
+                preferences: BTreeMap::new(),
+            },
+        );
+        config.normalize();
+        let settings = config.plugins.get("github").unwrap();
+        assert!(!settings.enabled);
+        assert_eq!(settings.weight, 1000);
     }
 }

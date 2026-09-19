@@ -13,6 +13,7 @@ use std::{
 // Result rows render icons at 24px. Keep up to a 2x source for HiDPI displays,
 // but never enlarge a low-resolution icon before it reaches the renderer.
 const MAX_ICON_DIMENSION: u32 = 64;
+const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CACHED_ICON_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Default)]
@@ -56,6 +57,10 @@ impl IconService {
             }
         }
         icon
+    }
+
+    pub fn resolve_spec(&self, spec: &IconSpec) -> Option<Arc<IconData>> {
+        resolve_spec(spec).map(Arc::new)
     }
 }
 
@@ -169,10 +174,18 @@ fn resolve_spec(spec: &IconSpec) -> Option<IconData> {
         }
         IconSpec::DefaultOpen(target) => crate::platform::default_open_icon(target),
         IconSpec::Resource(path) => load_png_icon(path),
+        IconSpec::Named(name) => match name.as_str() {
+            "weather" => Some(weather_icon()),
+            "calculator" => Some(calculator_icon()),
+            _ => None,
+        },
     }
 }
 
 fn load_png_icon(path: &Path) -> Option<IconData> {
+    if std::fs::metadata(path).ok()?.len() > MAX_ICON_FILE_BYTES {
+        return None;
+    }
     let bytes = std::fs::read(path).ok()?;
     decode_image(&bytes)
 }
@@ -201,6 +214,7 @@ fn icon_source_key(item: &SearchResult) -> String {
             }
             IconSpec::Weather => "weather".into(),
             IconSpec::Calculator => "calculator".into(),
+            IconSpec::Named(name) => format!("named:{name}"),
         };
     }
 

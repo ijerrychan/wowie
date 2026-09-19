@@ -68,7 +68,7 @@ fn main() -> Result<()> {
     let config_events = config::watch_changes();
     let engine = search::SearchCore::with_plugins_and_shortcuts(
         provider.snapshot().as_ref().clone(),
-        plugin::PluginManager::discover_with_locale(&config.language),
+        plugin::PluginManager::discover_with_config(&config.language, &config.plugins),
         config.shortcuts.clone(),
     );
     let engine = Arc::new(engine);
@@ -464,6 +464,7 @@ fn main() -> Result<()> {
         let context_generation = Arc::clone(&context_generation);
         let context_item = Arc::clone(&context_item);
         let visible = Arc::clone(&visible);
+        let engine = Arc::clone(&engine);
         context_window.on_action_requested(move |action_id| {
             let Some(item) = context_item.lock().ok().and_then(|current| current.clone()) else {
                 return;
@@ -489,6 +490,30 @@ fn main() -> Result<()> {
                         }
                     });
                 });
+                return;
+            }
+            if let Some(plugin_action_id) = action_id.strip_prefix("plugin-action:") {
+                let result = engine.execute_plugin_action(&item.id, plugin_action_id);
+                hide_context_menu(
+                    &context_weak,
+                    &weak,
+                    &context_visible,
+                    &context_generation,
+                    &context_item,
+                    false,
+                    &visible,
+                );
+                if let Some(window) = weak.upgrade() {
+                    match result {
+                        Ok(output) => {
+                            window.set_last_action_id(item.id.clone().into());
+                            window.set_last_action_result(output.title.into());
+                            window.set_last_action_subtitle(output.subtitle.into());
+                            window.set_launch_error(String::new().into());
+                        }
+                        Err(error) => window.set_launch_error(error.to_string().into()),
+                    }
+                }
                 return;
             }
             let result = match action_id.as_str() {
@@ -593,6 +618,7 @@ fn main() -> Result<()> {
                         engine.replace_shortcuts(updated.shortcuts);
                         engine.replace_fuzzy_search(updated.fuzzy_search);
                         engine.replace_provider_language(updated.language.clone());
+                        engine.replace_plugin_config(&updated.plugins);
                         show_advanced_details
                             .store(updated.show_advanced_details, Ordering::Release);
                         show_advanced_launch_entries
@@ -896,12 +922,16 @@ fn set_detail_view(window: &Launcher, view: Option<&DetailView>) {
         window.set_detail_title(view.title.clone().into());
         window.set_detail_subtitle(view.subtitle.clone().into());
         window.set_detail_source(view.source.clone().into());
+        window.set_detail_panel_preferred_width(view.preferred_width.unwrap_or(0));
+        window.set_detail_panel_scrollable(view.scrollable);
         window.set_detail_blocks(detail_blocks_model(view));
         window.set_detail_actions(detail_actions_model(view));
     } else {
         window.set_detail_title(String::new().into());
         window.set_detail_subtitle(String::new().into());
         window.set_detail_source(String::new().into());
+        window.set_detail_panel_preferred_width(0);
+        window.set_detail_panel_scrollable(false);
         window.set_detail_blocks(ModelRc::from(Rc::new(VecModel::from(
             Vec::<DetailBlock>::new(),
         ))));
@@ -921,6 +951,7 @@ fn detail_blocks_model(view: &DetailView) -> ModelRc<DetailBlock> {
                 label: String::new().into(),
                 value: text.clone().into(),
                 color: color.clone().into(),
+                icon: slint::Image::default(),
             },
             ResultDetailBlock::Metric {
                 label,
@@ -931,24 +962,32 @@ fn detail_blocks_model(view: &DetailView) -> ModelRc<DetailBlock> {
                 label: label.clone().into(),
                 value: value.clone().into(),
                 color: color.clone().into(),
+                icon: slint::Image::default(),
             },
-            ResultDetailBlock::Icon { glyph, color } => DetailBlock {
+            ResultDetailBlock::Icon { glyph, color, icon } => DetailBlock {
                 kind: "icon".into(),
                 label: String::new().into(),
                 value: glyph.clone().into(),
                 color: color.clone().into(),
+                icon: icon
+                    .as_ref()
+                    .and_then(|icon| IconService::new().resolve_spec(icon))
+                    .map(|icon| icon_to_image(icon.as_ref()))
+                    .unwrap_or_default(),
             },
             ResultDetailBlock::Weather { value } => DetailBlock {
                 kind: "weather".into(),
                 label: String::new().into(),
                 value: value.clone().into(),
                 color: String::new().into(),
+                icon: slint::Image::default(),
             },
             ResultDetailBlock::Separator => DetailBlock {
                 kind: "separator".into(),
                 label: String::new().into(),
                 value: String::new().into(),
                 color: String::new().into(),
+                icon: slint::Image::default(),
             },
         })
         .collect::<Vec<_>>();
@@ -965,6 +1004,12 @@ fn detail_actions_model(view: &DetailView) -> ModelRc<ContextActionRow> {
             title: action.title.clone().into(),
             subtitle: String::new().into(),
             kind: "detail".into(),
+            icon: action
+                .icon
+                .as_ref()
+                .and_then(|icon| IconService::new().resolve_spec(icon))
+                .map(|icon| icon_to_image(icon.as_ref()))
+                .unwrap_or_default(),
         })
         .collect::<Vec<_>>();
     ModelRc::from(Rc::new(VecModel::from(actions)))
@@ -1008,6 +1053,8 @@ fn weather_detail_view(data: &details::weather::WeatherData, language: &str) -> 
                 color: "secondary".into(),
             },
         ],
+        preferred_width: None,
+        scrollable: false,
     }
 }
 
@@ -1116,12 +1163,14 @@ fn context_actions(
     let is_filesystem_target = is_supported_filesystem_target(&item.launch_target);
     let is_store_shell_target = is_apps_folder_target(&item.launch_target);
     let mut actions = Vec::new();
+    let icon_service = IconService::new();
     if is_filesystem_target {
         actions.push(ContextActionRow {
             id: "open-directory".into(),
             title: "Open containing folder".into(),
             subtitle: "".into(),
             kind: "common".into(),
+            icon: slint::Image::default(),
         });
     }
     if is_filesystem_target || is_store_shell_target {
@@ -1130,7 +1179,26 @@ fn context_actions(
             title: "Run as administrator".into(),
             subtitle: "".into(),
             kind: "common".into(),
+            icon: slint::Image::default(),
         });
+    }
+    for action in &item.actions {
+        if let result::Action::Plugin {
+            action_id, icon, ..
+        } = action
+        {
+            actions.push(ContextActionRow {
+                id: format!("plugin-action:{action_id}").into(),
+                title: action_id.clone().into(),
+                subtitle: "".into(),
+                kind: "plugin".into(),
+                icon: icon
+                    .as_ref()
+                    .and_then(|icon| icon_service.resolve_spec(icon))
+                    .map(|icon| icon_to_image(icon.as_ref()))
+                    .unwrap_or_default(),
+            });
+        }
     }
     // ShortcutProvider actions are direct query actions and intentionally do
     // not populate the indexed launch_entries field. They must not be shown
@@ -1142,6 +1210,7 @@ fn context_actions(
             title: "".into(),
             subtitle: "".into(),
             kind: "section".into(),
+            icon: slint::Image::default(),
         });
         for (index, entry) in other_launches {
             actions.push(ContextActionRow {
@@ -1149,6 +1218,7 @@ fn context_actions(
                 title: launch_entry_label(entry).into(),
                 subtitle: "".into(),
                 kind: "launch".into(),
+                icon: slint::Image::default(),
             });
         }
     }

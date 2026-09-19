@@ -1,8 +1,8 @@
-import { VerticalBox, ListView } from "std-widgets.slint";
+import { HorizontalBox, VerticalBox, ListView } from "std-widgets.slint";
 
 export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, category: string }
-export struct ContextActionRow { id: string, title: string, subtitle: string, kind: string }
-export struct DetailBlock { kind: string, label: string, value: string, color: string }
+export struct ContextActionRow { id: string, title: string, subtitle: string, kind: string, icon: image }
+export struct DetailBlock { kind: string, label: string, value: string, color: string, icon: image }
 
 component SearchGlyph inherits Rectangle {
     background: transparent;
@@ -27,6 +27,8 @@ export component Launcher inherits Window {
     in property <string> detail-source: "";
     in property <[DetailBlock]> detail-blocks;
     in property <[ContextActionRow]> detail-actions;
+    in property <int> detail-panel-preferred-width: 0;
+    in property <bool> detail-panel-scrollable: false;
     in-out property <string> launch-error: "";
     in-out property <string> last-action-id: "";
     in-out property <string> last-action-result: "";
@@ -59,7 +61,7 @@ export component Launcher inherits Window {
     private property <length> result-column-gap: root.window-inset + root.result-row-inset + root.detail-panel-inset;
     private property <length> detail-panel-inset: 2px;
     private property <length> detail-panel-bottom-inset: 6px;
-    private property <float> detail-panel-share: 0.53;
+    private property <float> detail-panel-share: root.detail-panel-preferred-width > 0 ? root.detail-panel-preferred-width / root.window-width : 0.53;
     private property <length> detail-panel-height: max(340px, 118px + root.detail-blocks.length * 60px + (root.detail-actions.length > 0 ? 50px : 0px));
     private property <bool> detail-visible: root.detail-panel-visible && root.selected-index >= 0;
     private property <int> first-visible-index: max(0, round(-results-list.content-y / root.result-row-height));
@@ -205,7 +207,8 @@ export component Launcher inherits Window {
                                 Text { x: 10px; y: 8px; width: parent.width - 20px; height: 14px; text: block.label; color: root.text-tertiary; font-size: 10px; }
                                 Text { x: 10px; y: 26px; width: parent.width - 20px; height: 18px; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 13px; font-weight: 600; overflow: elide; }
                             }
-                            if (block.kind == "icon") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
+                            if (block.kind == "icon") : Image { width: parent.width; height: parent.height; source: block.icon; image-fit: contain; visible: block.icon.width > 0; }
+                            if (block.kind == "icon") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; visible: block.icon.width == 0; }
                             if (block.kind == "separator") : Rectangle { y: 0px; width: parent.width; height: 1px; background: transparent; }
                             if (block.kind == "weather") : Text {
                                 width: parent.width; height: parent.height;
@@ -220,7 +223,8 @@ export component Launcher inherits Window {
                         background: action-area.has-hover ? root.surface-hover : root.dark-mode ? #2b2b2b : #f1f3f6;
                         border-color: root.border; border-width: 1px; border-radius: 7px;
                         action-area := TouchArea { clicked => { root.detail-action-requested(index); } }
-                        Text { x: 8px; y: 0px; width: parent.width - 16px; height: parent.height; text: action.title; color: root.text-secondary; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+                        Image { x: 8px; y: 6px; width: 16px; height: 16px; source: action.icon; image-fit: contain; }
+                        Text { x: 28px; y: 0px; width: parent.width - 36px; height: parent.height; text: action.title; color: root.text-secondary; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
                     }
                     Text { x: 20px; y: parent.height - 42px; width: parent.width - 40px; height: 18px; text: root.detail-source; color: root.text-tertiary; font-size: 10px; overflow: elide; }
                 }
@@ -286,10 +290,14 @@ export component ContextMenu inherits Window {
                     }
                 }
             }
-            VerticalBox {
-                x: 14px; y: 1px; width: parent.width - 28px; height: 30px; spacing: 0px;
-                Text { text: action.kind == "section" ? @tr("Other launch entries") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.title; color: action.kind == "section" ? root.text-secondary : root.text-primary; font-size: action.kind == "section" ? 11px : 13px; vertical-alignment: center; overflow: elide; }
-                Text { text: action.subtitle; color: root.text-secondary; font-size: 10px; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
+            HorizontalBox {
+                x: 14px; y: 1px; width: parent.width - 28px; height: 30px; spacing: 6px;
+                Image { width: 16px; height: 16px; source: action.icon; image-fit: contain; }
+                VerticalBox {
+                    width: parent.width - 22px; height: 30px; spacing: 0px;
+                    Text { text: action.kind == "section" ? @tr("Other launch entries") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.title; color: action.kind == "section" ? root.text-secondary : root.text-primary; font-size: action.kind == "section" ? 11px : 13px; vertical-alignment: center; overflow: elide; }
+                    Text { text: action.subtitle; color: root.text-secondary; font-size: 10px; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
+                }
             }
         }
     }

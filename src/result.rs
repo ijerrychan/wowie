@@ -6,6 +6,7 @@ pub enum Action {
     Plugin {
         plugin_id: String,
         action_id: String,
+        icon: Option<IconSpec>,
     },
 }
 
@@ -63,12 +64,15 @@ pub struct DetailView {
     pub blocks: Vec<DetailBlock>,
     pub actions: Vec<DetailAction>,
     pub source: String,
+    pub preferred_width: Option<i32>,
+    pub scrollable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetailAction {
     pub id: String,
     pub title: String,
+    pub icon: Option<IconSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +89,7 @@ pub enum DetailBlock {
     Icon {
         glyph: String,
         color: String,
+        icon: Option<IconSpec>,
     },
     Weather {
         value: String,
@@ -110,4 +115,16 @@ pub enum IconSpec {
     /// application. The cache can safely share it across files with the same
     /// extension.
     DefaultOpen(std::path::PathBuf),
+    /// A semantic host icon name, resolved by the shared icon service.
+    Named(String),
+}
+
+/// A plugin-facing icon reference. It is resolved into an `IconSpec` only at
+/// the host boundary, so commands and results share one protocol type.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum IconRef {
+    Resource { path: String },
+    System { target: String },
+    Named { id: String },
 }

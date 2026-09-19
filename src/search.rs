@@ -22,7 +22,10 @@ impl SearchCore {
     pub fn new(results: Vec<SearchResult>) -> Self {
         Self {
             results: Mutex::new(Arc::new(results)),
-            providers: ProviderRegistry::without_dynamic(PluginManager::discover_with_locale("en")),
+            providers: ProviderRegistry::without_dynamic(PluginManager::discover_with_config(
+                "en",
+                &std::collections::BTreeMap::new(),
+            )),
             dynamic_results: Mutex::new(Vec::new()),
             ranker: Ranker::in_memory(),
             fuzzy_search: AtomicBool::new(true),
@@ -53,6 +56,13 @@ impl SearchCore {
 
     pub fn replace_provider_language(&self, language: String) {
         self.providers.set_language(language);
+    }
+
+    pub fn replace_plugin_config(
+        &self,
+        plugin_configs: &std::collections::BTreeMap<String, crate::config::PluginConfig>,
+    ) {
+        self.providers.replace_plugin_config(plugin_configs);
     }
 
     pub fn record_success(&self, item_id: &str, query: &str) {
@@ -658,7 +668,7 @@ mod tests {
         };
         let core = SearchCore::with_plugins_and_shortcuts(
             vec![notepad],
-            PluginManager::discover_with_locale("en"),
+            PluginManager::discover_with_config("en", &std::collections::BTreeMap::new()),
             Vec::new(),
         );
         let found = core.search("notepad");
@@ -672,7 +682,7 @@ mod tests {
     fn explicit_shortcut_prefix_is_available_before_an_argument() {
         let core = SearchCore::with_plugins_and_shortcuts(
             Vec::new(),
-            PluginManager::discover_with_locale("en"),
+            PluginManager::discover_with_config("en", &std::collections::BTreeMap::new()),
             Vec::new(),
         );
         core.replace_provider_language("en".into());
@@ -714,7 +724,7 @@ mod tests {
     fn generated_shortcuts_can_be_resolved_for_launch() {
         let core = SearchCore::with_plugins_and_shortcuts(
             Vec::new(),
-            PluginManager::discover_with_locale("en"),
+            PluginManager::discover_with_config("en", &std::collections::BTreeMap::new()),
             Vec::new(),
         );
         let found = core.search("> ipconfig");

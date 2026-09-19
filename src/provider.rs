@@ -4,7 +4,11 @@
 //! dynamic result providers. Adding a provider should only require implementing
 //! `DynamicProvider` and placing it in `src/providers/dynamic`.
 
-use crate::{config::ShortcutConfig, plugin::PluginManager, result::SearchResult};
+use crate::{
+    config::{PluginConfig, ShortcutConfig},
+    plugin::PluginManager,
+    result::SearchResult,
+};
 use anyhow::{Context, Result};
 use std::sync::Mutex;
 
@@ -26,6 +30,7 @@ pub(crate) fn find_plugin_action<'a>(
             crate::result::Action::Plugin {
                 plugin_id,
                 action_id,
+                ..
             } if action_id == requested_action_id => Some((plugin_id.as_str(), action_id.as_str())),
             _ => None,
         })
@@ -87,6 +92,13 @@ impl ProviderRegistry {
                 provider.set_language(language.clone());
             }
         }
+    }
+
+    pub fn replace_plugin_config(
+        &self,
+        plugin_configs: &std::collections::BTreeMap<String, PluginConfig>,
+    ) {
+        self.plugins.replace_config(plugin_configs);
     }
 
     pub fn execute_plugin_action(

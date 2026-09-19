@@ -172,6 +172,8 @@ pub fn detail_view(data: &WeatherData, language: &str) -> crate::result::DetailV
                 color: "secondary".into(),
             },
         ],
+        preferred_width: None,
+        scrollable: false,
     }
 }
 
@@ -189,6 +191,8 @@ pub fn error_detail_view(language: &str) -> crate::result::DetailView {
             text: crate::i18n::tr(language, "Weather unavailable").into(),
             color: "secondary".into(),
         }],
+        preferred_width: None,
+        scrollable: false,
     }
 }
 
