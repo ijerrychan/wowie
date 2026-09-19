@@ -25,7 +25,7 @@ local function icon(kind, value)
 end
 
 wowie.on("query", function(query, context)
-    local locale = wowie.locale()
+    local locale = context.locale or wowie.locale()
     local workspace = preference(context, "workspace", "repository")
     local command = context.command_id
     local suffix = text(locale, "Workspace: " .. workspace, "工作区：" .. workspace)
@@ -37,10 +37,10 @@ wowie.on("query", function(query, context)
             subtitle = suffix,
             aliases = {"plugin guide", "lua api", "插件文档"},
             target = "docs/插件开发.md",
-            icon = icon("named", "book"),
+            icon = {type = "resource", path = "icons/book-open.svg"},
             command_id = command,
             actions = {
-                wowie.action("open", icon("system", "folder")),
+                wowie.action("open", icon("named", "book")),
                 wowie.action("inspect", icon("named", "calculator"))
             },
             detail = {
@@ -50,11 +50,11 @@ wowie.on("query", function(query, context)
                 blocks = {
                     {type = "text", text = text(locale, "Runs inside Wowie without an external runtime.", "运行在 Wowie 内部，不依赖外部运行时。"), color = "primary"},
                     {type = "metric", label = text(locale, "Runtime", "运行时"), value = "Embedded Lua", color = "accent"},
-                    {type = "icon", glyph = "★", color = "accent", icon = icon("named", "book")},
+                    {type = "icon", glyph = "★", color = "accent", icon = {type = "resource", path = "icons/book-open.svg"}},
                     {type = "separator"}
                 },
                 actions = {
-                    {id = "open", title = text(locale, "Open guide", "打开指南"), icon = icon("system", "folder")},
+                    {id = "open", title = text(locale, "Open guide", "打开指南"), icon = icon("named", "book")},
                     {id = "inspect", title = text(locale, "Inspect API", "检查 API"), icon = icon("named", "calculator")}
                 },
                 width = {preferred = 500, min = 360, max = 680}
@@ -69,7 +69,7 @@ wowie.on("query", function(query, context)
             icon = icon("named", "checklist"),
             command_id = command,
             actions = {
-                wowie.action("open", icon("system", "folder"))
+                wowie.action("open", icon("named", "checklist"))
             },
             detail = {
                 title = text(locale, "Plugin Support Roadmap", "插件支持路线图"),
@@ -78,7 +78,7 @@ wowie.on("query", function(query, context)
                     {type = "text", text = text(locale, "Phase 4 detail enhancements are intentionally paused.", "Phase 4 详情增强已暂缓。"), color = "secondary"}
                 },
                 actions = {
-                    {id = "open", title = text(locale, "Open TODO", "打开 TODO"), icon = icon("system", "folder")}
+                    {id = "open", title = text(locale, "Open TODO", "打开 TODO"), icon = icon("named", "checklist")}
                 },
                 width = {preferred = 440, min = 320, max = 600}
             }
@@ -92,7 +92,7 @@ wowie.on("query", function(query, context)
 end)
 
 wowie.on("execute", function(item_id, action_id, context)
-    local locale = wowie.locale()
+    local locale = context.locale or wowie.locale()
     local label = text(locale, "Executed ", "已执行 ")
     return {
         request_id = context.request_id,

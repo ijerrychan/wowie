@@ -14,6 +14,7 @@ use std::{
 // but never enlarge a low-resolution icon before it reaches the renderer.
 const MAX_ICON_DIMENSION: u32 = 64;
 const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const ICON_SIZE: u32 = 64;
 const MAX_CACHED_ICON_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Default)]
@@ -166,19 +167,28 @@ fn decode_image(bytes: &[u8]) -> Option<IconData> {
 
 fn resolve_spec(spec: &IconSpec) -> Option<IconData> {
     match spec {
-        IconSpec::Weather => Some(weather_icon()),
-        IconSpec::Calculator => Some(calculator_icon()),
+        IconSpec::Weather => load_svg_bytes(include_bytes!("../assets/icons/cloud-sun.svg")),
+        IconSpec::Calculator => load_svg_bytes(include_bytes!("../assets/icons/calculator.svg")),
         IconSpec::System(target) => crate::platform::application_icon(target),
         IconSpec::SystemIndexed { path, index } => {
             crate::platform::indexed_application_icon(path, *index)
         }
         IconSpec::DefaultOpen(target) => crate::platform::default_open_icon(target),
-        IconSpec::Resource(path) => load_png_icon(path),
-        IconSpec::Named(name) => match name.as_str() {
-            "weather" => Some(weather_icon()),
-            "calculator" => Some(calculator_icon()),
-            _ => None,
+        IconSpec::Resource(path) => match path.extension().and_then(|extension| extension.to_str()) {
+            Some(extension) if extension.eq_ignore_ascii_case("svg") => load_svg_icon(path),
+            _ => load_png_icon(path),
         },
+        IconSpec::Named(name) => named_icon(name),
+    }
+}
+
+fn named_icon(name: &str) -> Option<IconData> {
+    match name {
+        "weather" => load_svg_bytes(include_bytes!("../assets/icons/cloud-sun.svg")),
+        "calculator" => load_svg_bytes(include_bytes!("../assets/icons/calculator.svg")),
+        "book" | "wowie" => load_svg_bytes(include_bytes!("../assets/icons/book-open.svg")),
+        "checklist" => load_svg_bytes(include_bytes!("../assets/icons/list-checks.svg")),
+        _ => None,
     }
 }
 
@@ -188,6 +198,36 @@ fn load_png_icon(path: &Path) -> Option<IconData> {
     }
     let bytes = std::fs::read(path).ok()?;
     decode_image(&bytes)
+}
+
+fn load_svg_icon(path: &Path) -> Option<IconData> {
+    if std::fs::metadata(path).ok()?.len() > MAX_ICON_FILE_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    load_svg_bytes(&bytes)
+}
+
+fn load_svg_bytes(bytes: &[u8]) -> Option<IconData> {
+    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?;
+    let source = tree.size();
+    let scale = (ICON_SIZE as f32 / source.width()).min(ICON_SIZE as f32 / source.height());
+    let width = (source.width() * scale).round().max(1.0) as u32;
+    let height = (source.height() * scale).round().max(1.0) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(ICON_SIZE, ICON_SIZE)?;
+    let offset_x = (ICON_SIZE - width) as f32 / 2.0;
+    let offset_y = (ICON_SIZE - height) as f32 / 2.0;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale)
+            .post_translate(offset_x, offset_y),
+        &mut pixmap.as_mut(),
+    );
+    Some(IconData {
+        width: ICON_SIZE,
+        height: ICON_SIZE,
+        rgba: pixmap.take(),
+    })
 }
 
 fn icon_source_key(item: &SearchResult) -> String {
@@ -230,83 +270,6 @@ fn icon_source_key(item: &SearchResult) -> String {
         .map(|entry| entry.target.display().to_string())
         .unwrap_or_else(|| item.launch_target.display().to_string());
     format!("fallback:{fallback}")
-}
-
-fn weather_icon() -> IconData {
-    let size = 64_u32;
-    let mut rgba = vec![0_u8; (size * size * 4) as usize];
-    let mut pixel = |x: u32, y: u32, color: [u8; 4]| {
-        if x < size && y < size {
-            let index = ((y * size + x) * 4) as usize;
-            rgba[index..index + 4].copy_from_slice(&color);
-        }
-    };
-    let sun = [255, 193, 68, 255];
-    for y in 8..42 {
-        for x in 8..42 {
-            let dx = x as i32 - 25;
-            let dy = y as i32 - 25;
-            if dx * dx + dy * dy <= 13 * 13 {
-                pixel(x, y, sun);
-            }
-        }
-    }
-    let cloud = [235, 241, 248, 255];
-    for y in 31..53 {
-        for x in 19..57 {
-            let left = (x as i32 - 29).pow(2) + (y as i32 - 42).pow(2) <= 11 * 11;
-            let middle = (x as i32 - 39).pow(2) + (y as i32 - 35).pow(2) <= 13 * 13;
-            let right = (x as i32 - 49).pow(2) + (y as i32 - 43).pow(2) <= 10 * 10;
-            if left || middle || right || (y >= 42 && x >= 24 && x <= 53) {
-                pixel(x, y, cloud);
-            }
-        }
-    }
-    IconData {
-        width: size,
-        height: size,
-        rgba,
-    }
-}
-
-fn calculator_icon() -> IconData {
-    let size = 64_u32;
-    let mut rgba = vec![0_u8; (size * size * 4) as usize];
-    let mut pixel = |x: u32, y: u32, color: [u8; 4]| {
-        if x < size && y < size {
-            let index = ((y * size + x) * 4) as usize;
-            rgba[index..index + 4].copy_from_slice(&color);
-        }
-    };
-    let body = [86, 98, 116, 255];
-    let screen = [220, 239, 224, 255];
-    let key = [244, 180, 76, 255];
-    for y in 5..59 {
-        for x in 10..54 {
-            pixel(x, y, body);
-        }
-    }
-    for y in 12..24 {
-        for x in 16..48 {
-            pixel(x, y, screen);
-        }
-    }
-    for row in 0..3 {
-        for column in 0..4 {
-            let left = 16 + column * 8;
-            let top = 30 + row * 8;
-            for y in top..top + 5 {
-                for x in left..left + 5 {
-                    pixel(x, y, key);
-                }
-            }
-        }
-    }
-    IconData {
-        width: size,
-        height: size,
-        rgba,
-    }
 }
 
 fn favicon_origin(target: &Path) -> Option<String> {
@@ -362,6 +325,20 @@ mod tests {
         first.icon = Some(icon.clone());
         second.icon = Some(icon);
         assert_eq!(icon_source_key(&first), icon_source_key(&second));
+    }
+
+    #[test]
+    fn named_plugin_icons_are_resolvable() {
+        for name in ["book", "checklist", "wowie"] {
+            assert!(resolve_spec(&IconSpec::Named(name.into())).is_some());
+        }
+    }
+
+    #[test]
+    fn bundled_svg_icons_render_to_icon_data() {
+        let icon = resolve_spec(&IconSpec::Named("calculator".into())).unwrap();
+        assert_eq!((icon.width, icon.height), (64, 64));
+        assert!(icon.rgba.iter().any(|channel| *channel != 0));
     }
 
     #[test]

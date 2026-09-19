@@ -13,7 +13,7 @@ export component Launcher inherits Window {
     title: "Wowie";
     no-frame: true;
     width: window-width * 1px;
-    height: search-field.text == "" ? root.empty-window-height : detail-visible ? (100px + root.detail-panel-height) : results.length > 0 ? min(506px, 108px + root.result-row-height * results.length) : 192px;
+    height: search-field.text == "" ? root.empty-window-height : detail-visible ? (100px + root.detail-panel-height) : results.length > 0 ? min(498px, 100px + root.result-row-height * results.length) : 186px;
     background: transparent;
 
     in-out property <int> window-width: 900;
@@ -106,7 +106,7 @@ export component Launcher inherits Window {
         VerticalBox {
             padding: root.content-padding;
             padding-top: root.empty-state-padding;
-            padding-bottom: search-field.text == "" ? root.empty-state-padding : root.content-padding;
+            padding-bottom: search-field.text == "" ? root.empty-state-padding : 4px;
             spacing: root.content-spacing;
 
             Rectangle {
@@ -129,7 +129,7 @@ export component Launcher inherits Window {
                         reject
                     }
                 }
-                Text { x: parent.width - 122px; y: 0px; width: 92px; height: parent.height; text: @tr("{} results", root.result-count); color: root.text-tertiary; font-size: 10px; horizontal-alignment: right; vertical-alignment: center; overflow: elide; visible: search-field.text != ""; }
+                Text { x: parent.width - 122px; y: 0px; width: 92px; height: parent.height; text: @tr("{} results", root.result-count); color: root.text-tertiary; font-size: 11px; horizontal-alignment: right; vertical-alignment: center; overflow: elide; visible: search-field.text != ""; }
             }
 
             results-area := Rectangle {
@@ -177,7 +177,7 @@ export component Launcher inherits Window {
                     Text {
                         x: parent.width - 76px; y: (root.result-row-height - root.result-category-height) / 2; width: 68px; height: root.result-category-height;
                         text: row.category == "game" ? @tr("Game") : row.category == "website" ? @tr("Website") : row.category == "shortcut" ? @tr("Shortcut") : row.category == "calculator" ? @tr("Calculator") : row.category == "document" ? @tr("Document") : row.category == "other" ? @tr("Other") : row.category == "control-panel" ? @tr("Control Panel") : @tr("Application");
-                        color: root.text-tertiary; font-size: 10px;
+                        color: root.text-tertiary; font-size: 11px;
                         horizontal-alignment: center; vertical-alignment: center;
                         visible: !root.detail-visible;
                     }
@@ -251,7 +251,7 @@ export component ContextMenu inherits Window {
     title: "Wowie Context Menu";
     no-frame: true;
     width: 292px;
-    height: max(48px, 16px + root.actions.length * root.menu-item-height);
+    height: max(40px, 8px + root.actions.length * root.menu-item-height);
     background: transparent;
 
     in property <bool> dark-mode: true;
@@ -275,7 +275,7 @@ export component ContextMenu inherits Window {
         border-radius: 8px;
 
         for action[index] in root.actions : Rectangle {
-            x: 1px; y: 8px + index * root.menu-item-height;
+            x: 1px; y: 4px + index * root.menu-item-height;
             width: parent.width - 2px; height: root.menu-item-height;
             background: action.kind == "section" ? root.canvas : action-area.has-hover ? root.hover : root.canvas;
             border-radius: 6px;

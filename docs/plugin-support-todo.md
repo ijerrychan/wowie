@@ -38,7 +38,7 @@
 - [x] 统一 `IconRef`：`resource`、`system`、`named`
 - [x] 结果、command、Action、DetailAction、DetailBlock 使用统一图标模型
 - [x] 插件资源路径禁止绝对路径和 `..` 穿越
-- [x] PNG 文件大小和缩略图尺寸限制
+- [x] PNG、ICO、SVG 文件大小和缩略图尺寸限制
 - [x] 无法解析资源时保留 glyph fallback
 - [x] query 上下文传入当前 locale 和 fallback locale
 - [ ] light/dark 主题图标变体

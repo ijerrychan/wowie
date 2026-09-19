@@ -57,7 +57,7 @@ pub fn tr_aliases(
     aliases
 }
 
-fn effective_language(language: &str) -> String {
+pub(crate) fn effective_language(language: &str) -> String {
     if language != "system" {
         return language.to_owned();
     }

@@ -341,6 +341,7 @@ impl PluginManager {
         locale: &str,
         plugin_configs: &std::collections::BTreeMap<String, PluginConfig>,
     ) -> Self {
+        let locale = crate::i18n::effective_language(locale);
         let mut roots = vec![PathBuf::from("plugins")];
         if let Some(data) = dirs::data_local_dir() {
             roots.push(data.join("Wowie").join("plugins"));
@@ -373,7 +374,7 @@ impl PluginManager {
                             failure_count: 0,
                         }));
                         let embedded = match EmbeddedPlugin::from_file(
-                            &dir, &manifest, locale, &settings.preferences,
+                            &dir, &manifest, &locale, &settings.preferences,
                         ) {
                             Ok(plugin) => Some(Arc::new(Mutex::new(plugin))),
                             Err(error) => {
@@ -415,7 +416,7 @@ impl PluginManager {
 
     pub fn set_locale(&self, locale: String) {
         if let Ok(mut current) = self.locale.lock() {
-            *current = locale;
+            *current = crate::i18n::effective_language(&locale);
         }
     }
 
@@ -513,7 +514,12 @@ impl PluginManager {
             anyhow::bail!("plugin is disabled");
         }
         let request_id = next_request_id("execute");
-        let request = serde_json::json!({"method":"execute", "request_id":request_id, "item_id":item_id, "action_id":action_id, "api_version":plugin.manifest.api_version, "preferences": plugin_preferences(plugin)});
+        let locale = self
+            .locale
+            .lock()
+            .map(|locale| locale.clone())
+            .unwrap_or_else(|_| "en".into());
+        let request = serde_json::json!({"method":"execute", "request_id":request_id, "item_id":item_id, "action_id":action_id, "api_version":plugin.manifest.api_version, "locale":locale, "preferences": plugin_preferences(plugin)});
         let result: Result<String> = (|| {
             let embedded = plugin.embedded.as_ref().context("plugin is not initialized")?;
             let embedded = embedded.lock().map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?;
@@ -967,9 +973,18 @@ mod tests {
             .iter()
             .find(|result| result.id == "plugin:wowie-devtools:developer-guide")
             .unwrap();
+        assert_eq!(guide.title, "插件开发指南");
         assert!(guide.detail.is_some());
         assert!(!guide.actions.is_empty());
-        assert!(matches!(guide.icon, Some(IconSpec::Named(_))));
+        assert!(matches!(guide.icon, Some(IconSpec::Resource(_))));
+        assert!(matches!(guide.actions[0], Action::Plugin { icon: Some(IconSpec::Named(_)), .. }));
+        assert!(guide
+            .detail
+            .as_ref()
+            .unwrap()
+            .actions
+            .iter()
+            .all(|action| action.icon.is_some()));
         let output = manager.execute("wowie-devtools", "developer-guide", "open").unwrap();
         assert!(output.contains("open"));
     }
