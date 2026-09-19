@@ -4,7 +4,7 @@ use std::{collections::HashSet, fs, path::PathBuf};
 
 const DEFAULT_HOTKEY: &str = "Alt+Space";
 const DEFAULT_RENDERER: &str = "femtovg";
-const DEFAULT_WINDOW_WIDTH: u32 = 720;
+const DEFAULT_WINDOW_WIDTH: u32 = 780;
 const MIN_WINDOW_WIDTH: u32 = 420;
 const MAX_WINDOW_WIDTH: u32 = 1200;
 const DEFAULT_THEME: &str = "system";

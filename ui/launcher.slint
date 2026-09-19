@@ -13,7 +13,7 @@ export component Launcher inherits Window {
     title: "Wowie";
     no-frame: true;
     width: window-width * 1px;
-    height: search-field.text == "" ? 68px : detail-visible ? (100px + root.detail-panel-height) : results.length > 0 ? min(506px, 108px + results.length * root.result-row-height) : 192px;
+    height: search-field.text == "" ? root.empty-window-height : detail-visible ? (100px + root.detail-panel-height) : results.length > 0 ? min(506px, 108px + root.result-row-height * results.length) : 192px;
     background: transparent;
 
     in-out property <int> window-width: 900;
@@ -43,14 +43,29 @@ export component Launcher inherits Window {
     callback context-menu-dismissed;
     callback dismiss-requested;
 
-    private property <length> result-row-height: 56px;
+    // Primary density controls. Keep row geometry here so compactness can be tuned centrally.
+    private property <length> search-row-height: 40px;
+    private property <length> result-row-height: 50px;
+    private property <length> result-icon-size: 24px;
+    private property <length> result-content-height: 40px;
+    private property <length> result-content-offset: 2px;
+    private property <length> result-category-height: 22px;
+    private property <length> empty-state-padding: 8px;
+    private property <length> empty-window-height: 2 * root.window-inset + root.search-row-height + 2 * root.empty-state-padding;
+    private property <length> window-inset: 4px;
+    private property <length> content-padding: 10px;
+    private property <length> content-spacing: 8px;
+    private property <length> result-row-inset: 2px;
+    private property <length> result-column-gap: root.window-inset + root.result-row-inset + root.detail-panel-inset;
+    private property <length> detail-panel-inset: 2px;
+    private property <length> detail-panel-bottom-inset: 6px;
+    private property <float> detail-panel-share: 0.53;
     private property <length> detail-panel-height: max(340px, 118px + root.detail-blocks.length * 60px + (root.detail-actions.length > 0 ? 50px : 0px));
     private property <bool> detail-visible: root.detail-panel-visible && root.selected-index >= 0;
     private property <int> first-visible-index: max(0, round(-results-list.content-y / root.result-row-height));
     private property <bool> context-click-consumed: false;
     private property <int> last-visible-index: min(root.results.length, round((-results-list.content-y + results-list.visible-height) / root.result-row-height) + 1);
     private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
-    private property <color> surface: root.dark-mode ? #292929 : #ffffff;
     private property <color> surface-hover: root.dark-mode ? #323232 : #f1f3f6;
     private property <color> surface-selected: root.accent-background;
     private property <color> border: root.dark-mode ? #484848 : #d9dde5;
@@ -77,7 +92,9 @@ export component Launcher inherits Window {
     changed last-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
 
     Rectangle {
-        x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px;
+        x: root.window-inset; y: root.window-inset;
+        width: parent.width - 2 * root.window-inset;
+        height: parent.height - 2 * root.window-inset;
         background: root.canvas;
         border-color: root.border;
         border-width: 1px;
@@ -85,17 +102,19 @@ export component Launcher inherits Window {
         border-radius: 12px;
 
         VerticalBox {
-            padding: 10px;
-            spacing: 8px;
+            padding: root.content-padding;
+            padding-top: root.empty-state-padding;
+            padding-bottom: search-field.text == "" ? root.empty-state-padding : root.content-padding;
+            spacing: root.content-spacing;
 
-            search-surface := Rectangle {
-                height: 40px;
+            Rectangle {
+                height: root.search-row-height;
                 background: transparent;
 
-                SearchGlyph { x: 14px; y: 8px; width: 24px; height: 24px; }
+                SearchGlyph { x: 14px; y: (root.search-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; }
                 Text { x: 48px; y: 0px; width: parent.width - 126px; height: parent.height; text: @tr("Search applications"); color: root.text-tertiary; font-size: 16px; vertical-alignment: center; visible: search-field.text == ""; }
                 search-field := TextInput {
-                    x: 48px; y: 0px; width: parent.width - 126px; height: parent.height;
+                    x: 48px; y: 0px; width: parent.width - 126px; height: root.search-row-height;
                     color: root.text-primary; font-size: 16px; vertical-alignment: center; single-line: true;
                     selection-background-color: root.accent-color;
                     selection-foreground-color: #ffffff;
@@ -117,13 +136,14 @@ export component Launcher inherits Window {
 
                 results-list := ListView {
                     x: 0px; y: 0px;
-                    width: parent.width - (root.detail-visible ? parent.width / 2 + 12px : 0px);
+                    width: root.detail-visible ? parent.width * (1.0 - root.detail-panel-share) - root.result-column-gap : parent.width;
                     height: parent.height;
                 for row[index] in root.results : Rectangle {
+                    x: root.result-row-inset;
+                    width: parent.width - 2 * root.result-row-inset;
                     height: root.result-row-height;
-                    // A single flat row background replaces the old Fluent-like
-                    // rounded selection plus accent indicator.
-                    background: index == root.selected-index ? root.surface-selected : transparent;
+                    background: index == root.selected-index ? root.surface-selected : item-area.has-hover ? root.surface-hover : transparent;
+                    border-radius: 8px;
                     item-area := TouchArea {
                         pointer-event(event) => {
                             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
@@ -146,14 +166,14 @@ export component Launcher inherits Window {
                             }
                         }
                     }
-                    Image { x: 18px; y: 16px; width: 24px; height: 24px; source: row.icon; image-fit: contain; }
+                    Image { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source: row.icon; image-fit: contain; }
                     VerticalBox {
-                        x: 60px; y: 5px; width: parent.width - 76px; height: 40px; spacing: 2px;
+                        x: 60px; y: root.result-content-offset; width: parent.width - 76px; height: root.result-content-height; spacing: 2px;
                         Text { text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: 14px; font-weight: 500; overflow: elide; }
-                        Text { width: parent.width - 4px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "store-application" ? @tr("Store application") : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
+                        Text { width: parent.width - 4px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "apps-folder-entry" ? @tr("Windows app") : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
                     }
                     Text {
-                        x: parent.width - 76px; y: 17px; width: 68px; height: 22px;
+                        x: parent.width - 76px; y: (root.result-row-height - root.result-category-height) / 2; width: 68px; height: root.result-category-height;
                         text: row.category == "game" ? @tr("Game") : row.category == "website" ? @tr("Website") : row.category == "shortcut" ? @tr("Shortcut") : row.category == "calculator" ? @tr("Calculator") : row.category == "document" ? @tr("Document") : row.category == "other" ? @tr("Other") : row.category == "control-panel" ? @tr("Control Panel") : @tr("Application");
                         color: root.text-tertiary; font-size: 10px;
                         horizontal-alignment: center; vertical-alignment: center;
@@ -163,10 +183,12 @@ export component Launcher inherits Window {
                 }
 
                 if (root.detail-visible) : Rectangle {
-                    x: parent.width / 2; y: 0px; width: parent.width / 2; height: parent.height;
+                    x: parent.width * (1.0 - root.detail-panel-share) - root.detail-panel-inset;
+                    y: 0px;
+                    width: parent.width * root.detail-panel-share;
+                    height: parent.height - root.detail-panel-bottom-inset;
                     background: root.dark-mode ? #242424 : #fbfcfe;
-
-                    Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: root.border; }
+                    border-radius: 10px;
 
                     Text { x: 20px; y: 18px; width: parent.width - 40px; height: 24px; text: root.detail-title; color: root.text-primary; font-size: 17px; font-weight: 600; overflow: elide; }
                     Text { x: 20px; y: 44px; width: parent.width - 40px; height: 18px; text: root.detail-subtitle; color: root.text-secondary; font-size: 11px; overflow: elide; }
@@ -225,7 +247,7 @@ export component ContextMenu inherits Window {
     title: "Wowie Context Menu";
     no-frame: true;
     width: 292px;
-    height: max(48px, 16px + root.actions.length * 32px);
+    height: max(48px, 16px + root.actions.length * root.menu-item-height);
     background: transparent;
 
     in property <bool> dark-mode: true;
@@ -235,8 +257,8 @@ export component ContextMenu inherits Window {
     callback dismissed;
 
     private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
-    private property <color> surface: root.dark-mode ? #292929 : #ffffff;
     private property <color> hover: root.dark-mode ? #383838 : #eef1f5;
+    private property <length> menu-item-height: 32px;
     private property <color> border: root.dark-mode ? #484848 : #d9dde5;
     private property <color> text-primary: root.dark-mode ? #f5f5f5 : #1b1b1f;
     private property <color> text-secondary: root.dark-mode ? #b6b6b6 : #5d5f66;
@@ -249,8 +271,10 @@ export component ContextMenu inherits Window {
         border-radius: 8px;
 
         for action[index] in root.actions : Rectangle {
-            x: 1px; y: 8px + index * 32px; width: parent.width - 2px; height: 32px;
+            x: 1px; y: 8px + index * root.menu-item-height;
+            width: parent.width - 2px; height: root.menu-item-height;
             background: action.kind == "section" ? root.canvas : action-area.has-hover ? root.hover : root.canvas;
+            border-radius: 6px;
             action-area := TouchArea {
                 enabled: action.kind != "section";
                 pointer-event(event) => {

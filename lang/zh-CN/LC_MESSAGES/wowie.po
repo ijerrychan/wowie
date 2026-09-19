@@ -40,8 +40,8 @@ msgid "Calculator"
 msgstr "计算器"
 
 msgctxt "Launcher"
-msgid "Store application"
-msgstr "商店应用"
+msgid "Windows app"
+msgstr "Windows 应用"
 
 msgctxt "Launcher"
 msgid "Control Panel"

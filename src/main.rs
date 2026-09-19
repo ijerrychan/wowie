@@ -1223,7 +1223,7 @@ impl ResultRowPayload {
             title: item.title.clone().into(),
             location: location.into(),
             location_kind: if !show_advanced_details && is_store_application_shell_target(item) {
-                "store-application"
+                "apps-folder-entry"
             } else {
                 ""
             }
