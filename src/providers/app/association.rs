@@ -16,34 +16,7 @@ pub(super) fn associate_file_entries(items: &mut Vec<SearchResult>) {
     for item in std::mem::take(items) {
         let is_file_entry = is_file_source(&item.source);
         let match_index = if is_file_entry && !is_remote_website(&item) {
-            item.launch_entries.first().and_then(|entry| {
-                let strong_matches = filesystem_target_key(&entry.target)
-                    .and_then(|key| application_targets.get(&key))
-                    .cloned()
-                    .unwrap_or_default();
-                if strong_matches.len() == 1 {
-                    return strong_matches.into_iter().next();
-                }
-                if !strong_matches.is_empty() {
-                    return None;
-                }
-
-                // Virtual Shell entries and constrained title fallbacks do
-                // not have a filesystem key. Keep the slower compatibility
-                // path only for those cases.
-                let candidates = unified
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, application)| {
-                        is_store_application(application)
-                            .then(|| {
-                                shortcut_match_strength(&item, entry, application)
-                                    .map(|strength| (index, strength))
-                            })
-                            .flatten()
-                    });
-                select_association_candidate(candidates)
-            })
+            select_file_association(&item, &unified, &application_targets)
         } else {
             None
         };
@@ -94,6 +67,48 @@ fn is_file_source(source: &crate::platform::SourceId) -> bool {
     source.is_file_source()
 }
 
+fn select_file_association(
+    item: &SearchResult,
+    applications: &[SearchResult],
+    application_targets: &HashMap<String, Vec<usize>>,
+) -> Option<usize> {
+    let mut candidates = HashMap::<usize, MatchStrength>::new();
+    for entry in &item.launch_entries {
+        let strong_matches = filesystem_target_key(&entry.target)
+            .and_then(|key| application_targets.get(&key))
+            .cloned()
+            .unwrap_or_default();
+        if !strong_matches.is_empty() {
+            for index in strong_matches {
+                if !package_identity_conflicts(item, &applications[index]) {
+                    candidates.insert(index, MatchStrength::Strong);
+                }
+            }
+            continue;
+        }
+
+        // Virtual Shell entries and constrained title fallbacks do not have a
+        // filesystem key. Keep the slower compatibility path only for those
+        // cases, but evaluate every launch entry before deciding.
+        for (index, application) in applications.iter().enumerate() {
+            if !is_store_application(application) {
+                continue;
+            }
+            if let Some(strength) = shortcut_match_strength(item, entry, application) {
+                candidates
+                    .entry(index)
+                    .and_modify(|current| {
+                        if matches!(strength, MatchStrength::Strong) {
+                            *current = MatchStrength::Strong;
+                        }
+                    })
+                    .or_insert(strength);
+            }
+        }
+    }
+    select_association_candidate(candidates.into_iter())
+}
+
 fn supports_exact_title_association(target: &Path) -> bool {
     target
         .extension()
@@ -101,6 +116,20 @@ fn supports_exact_title_association(target: &Path) -> bool {
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("ico")
         })
+}
+
+fn package_identity_conflicts(shortcut: &SearchResult, application: &SearchResult) -> bool {
+    let aumid_conflicts = shortcut
+        .app_user_model_id
+        .as_deref()
+        .zip(application.app_user_model_id.as_deref())
+        .is_some_and(|(left, right)| !left.eq_ignore_ascii_case(right));
+    let family_conflicts = shortcut
+        .package_family_name
+        .as_deref()
+        .zip(application.package_family_name.as_deref())
+        .is_some_and(|(left, right)| !left.eq_ignore_ascii_case(right));
+    aumid_conflicts || family_conflicts
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -114,6 +143,9 @@ fn shortcut_match_strength(
     entry: &LaunchEntry,
     application: &SearchResult,
 ) -> Option<MatchStrength> {
+    if package_identity_conflicts(shortcut, application) {
+        return None;
+    }
     // AUMID is authoritative when the shortcut exposes one. Conflicting
     // AUMIDs must never be merged through a weaker executable match.
     if shortcut.identity.starts_with("aumid:") {

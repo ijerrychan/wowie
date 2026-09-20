@@ -1118,6 +1118,10 @@ mod tests {
                 working_directory: None,
             })],
             detail: None,
+            description: None,
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
             icon: None,
             ranking_bias: 0,
         };
@@ -1181,6 +1185,10 @@ mod tests {
                 result::Action::Launch(different_arguments),
             ],
             detail: None,
+            description: None,
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
             icon: None,
             ranking_bias: 0,
         };

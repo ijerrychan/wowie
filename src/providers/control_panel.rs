@@ -33,6 +33,10 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
                 }],
                 actions: Vec::new(),
                 detail: None,
+                description: None,
+                app_user_model_id: None,
+                package_family_name: None,
+                package_metadata: None,
                 icon: Some(IconSpec::System(target)),
                 ranking_bias: 0,
             }

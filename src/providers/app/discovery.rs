@@ -11,8 +11,8 @@ use std::{
 use url::Url;
 
 use super::{
-    apps_folder_identity, executable_identity, normalize_path, shortcut_icon_target,
-    target_identity, target_stem_alias,
+    apps_folder_identity, executable_identity, normalize_path, packaged_identity_fields,
+    shortcut_icon_target, target_identity, target_stem_alias,
 };
 
 pub(super) fn discover_store_source(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
@@ -180,6 +180,10 @@ pub(super) fn collect_store_apps(output: &mut Vec<SearchResult>) {
             }],
             actions: Vec::new(),
             detail: None,
+            description: app.description,
+            app_user_model_id: app.app_user_model_id,
+            package_family_name: app.package_family_name,
+            package_metadata: app.package_metadata,
             icon: None,
             ranking_bias: 0,
         });
@@ -275,6 +279,10 @@ pub(super) fn collect_tree(
                 }],
                 actions: Vec::new(),
                 detail: None,
+                description: None,
+                app_user_model_id: None,
+                package_family_name: None,
+                package_metadata: None,
                 icon: None,
                 ranking_bias: 0,
             });
@@ -322,6 +330,10 @@ pub(super) fn collect_tree(
                 }],
                 actions: Vec::new(),
                 detail: None,
+                description: None,
+                app_user_model_id: None,
+                package_family_name: None,
+                package_metadata: None,
                 icon: Some(IconSpec::DefaultOpen(PathBuf::from(&url))),
                 ranking_bias: 0,
             });
@@ -353,6 +365,7 @@ pub(super) fn collect_tree(
             target_identity(&resolved_target)
         };
         let aliases = target_stem_alias(title, &resolved_target);
+        let (app_user_model_id, package_family_name) = packaged_identity_fields(&identity);
         output.push(SearchResult {
             id: identity.clone(),
             identity,
@@ -375,6 +388,10 @@ pub(super) fn collect_tree(
             }],
             actions: Vec::new(),
             detail: None,
+            description: None,
+            app_user_model_id,
+            package_family_name,
+            package_metadata: None,
             icon: website_url
                 .map(PathBuf::from)
                 .map(IconSpec::DefaultOpen)
@@ -421,6 +438,10 @@ pub(super) fn generic_file_result(path: &Path, title: &str, source: &str) -> Sea
         }],
         actions: Vec::new(),
         detail: None,
+        description: None,
+        app_user_model_id: None,
+        package_family_name: None,
+        package_metadata: None,
         icon: Some(IconSpec::DefaultOpen(path.to_owned())),
         ranking_bias: 0,
     }

@@ -124,6 +124,10 @@ pub(super) fn build_result(query: ShortcutQuery<'_>, spec: ShortcutSpec) -> Sear
         launch_entries: Vec::new(),
         actions,
         detail: None,
+        description: None,
+        app_user_model_id: None,
+        package_family_name: None,
+        package_metadata: None,
         icon,
         ranking_bias: 0,
     }

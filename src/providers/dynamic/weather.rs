@@ -88,6 +88,10 @@ fn result(language: &str) -> SearchResult {
         launch_entries: Vec::new(),
         actions: Vec::new(),
         detail: Some(detail_view(language)),
+        description: None,
+        app_user_model_id: None,
+        package_family_name: None,
+        package_metadata: None,
         icon: Some(IconSpec::Weather),
         ranking_bias: 0,
     }

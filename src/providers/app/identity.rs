@@ -23,6 +23,43 @@ pub(super) fn target_stem_alias(title: &str, target: &Path) -> Vec<String> {
     }
 }
 
+fn merge_metadata(preferred: &mut SearchResult, other: &SearchResult) {
+    if preferred.category == ResultCategory::Unclassified {
+        preferred.category = other.category;
+    } else if preferred.category == ResultCategory::Application
+        && other.category == ResultCategory::Website
+    {
+        preferred.category = ResultCategory::Website;
+    }
+
+    if preferred.icon.is_none() {
+        preferred.icon = other.icon.clone();
+    }
+    if preferred.detail.is_none() {
+        preferred.detail = other.detail.clone();
+    }
+    if preferred.description.is_none() {
+        preferred.description = other.description.clone();
+    }
+    if preferred.app_user_model_id.is_none() {
+        preferred.app_user_model_id = other.app_user_model_id.clone();
+    }
+    if preferred.package_family_name.is_none() {
+        preferred.package_family_name = other.package_family_name.clone();
+    }
+    if preferred.package_metadata.is_none() {
+        preferred.package_metadata = other.package_metadata.clone();
+    }
+    if preferred.ranking_bias == 0 {
+        preferred.ranking_bias = other.ranking_bias;
+    }
+    for action in &other.actions {
+        if !preferred.actions.contains(action) {
+            preferred.actions.push(action.clone());
+        }
+    }
+}
+
 pub(super) fn apps_folder_identity(target: &Path, arguments: Option<&str>) -> Option<String> {
     let value = apps_folder_value(target, arguments)?;
     if value.contains('!') && !value.contains(':') {
@@ -120,6 +157,19 @@ pub(super) fn aumid_identity(aumid: &str) -> String {
     format!("aumid:{}", aumid.trim().to_lowercase())
 }
 
+pub(super) fn packaged_identity_fields(identity: &str) -> (Option<String>, Option<String>) {
+    let Some(aumid) = identity.strip_prefix("aumid:") else {
+        return (None, None);
+    };
+    let aumid = aumid.trim().to_lowercase();
+    let family_name = aumid
+        .split('!')
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    (Some(aumid), family_name)
+}
+
 pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) {
     let mut grouped = HashMap::<String, SearchResult>::with_capacity(items.len());
     for mut item in std::mem::take(items) {
@@ -147,28 +197,23 @@ pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) {
         }
         match grouped.get_mut(&item.identity) {
             Some(existing) => {
-                if existing.category == ResultCategory::Application
-                    && item.category == ResultCategory::Website
-                {
-                    existing.category = ResultCategory::Website;
-                }
-                if existing.icon.is_none() {
-                    existing.icon = item.icon.clone();
-                }
+                let incoming_is_preferred =
+                    source_priority(&item.source) < source_priority(&existing.source);
                 existing.aliases.extend(aliases);
-                existing.sources.extend(item.sources);
-                merge_launch_entries(existing, item.launch_entries);
-                if source_priority(&item.source) < source_priority(&existing.source) {
+                existing.sources.extend(item.sources.iter().cloned());
+                merge_launch_entries(existing, item.launch_entries.clone());
+
+                if incoming_is_preferred {
                     let preserved_aliases = std::mem::take(&mut existing.aliases);
                     let preserved_sources = std::mem::take(&mut existing.sources);
                     let preserved_launch_entries = std::mem::take(&mut existing.launch_entries);
-                    if item.icon.is_none() {
-                        item.icon = existing.icon.take();
-                    }
+                    merge_metadata(&mut item, existing);
                     item.aliases = preserved_aliases;
                     item.sources = preserved_sources;
                     item.launch_entries = preserved_launch_entries;
                     *existing = item;
+                } else {
+                    merge_metadata(existing, &item);
                 }
             }
             None => {

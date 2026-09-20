@@ -76,6 +76,10 @@ fn result(query: &str, language: &str) -> Option<SearchResult> {
         launch_entries: Vec::new(),
         actions: Vec::new(),
         detail: None,
+        description: None,
+        app_user_model_id: None,
+        package_family_name: None,
+        package_metadata: None,
         icon: Some(IconSpec::Calculator),
         ranking_bias: 0,
     })

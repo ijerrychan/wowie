@@ -327,6 +327,14 @@ pub struct ShortcutInfo {
     pub icon_index: Option<i32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageMetadata {
+    pub full_name: Option<String>,
+    pub install_location: Option<std::path::PathBuf>,
+    /// The package Identity/Name value from the package metadata.
+    pub identity_name: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StoreApplication {
     pub identity: String,
@@ -334,6 +342,10 @@ pub struct StoreApplication {
     pub aliases: Vec<String>,
     pub launch_target: std::path::PathBuf,
     pub executable: Option<std::path::PathBuf>,
+    pub description: Option<String>,
+    pub app_user_model_id: Option<String>,
+    pub package_family_name: Option<String>,
+    pub package_metadata: Option<PackageMetadata>,
     pub source: &'static str,
 }
 

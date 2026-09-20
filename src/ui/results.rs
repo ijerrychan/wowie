@@ -150,7 +150,9 @@ fn display_location(item: &SearchResult, show_advanced_details: bool) -> String 
         return item.location.clone();
     };
     if !show_advanced_details && item.category == ResultCategory::Application {
-        return crate::platform::application_description(&entry.target).unwrap_or_default();
+        return item.description.clone().unwrap_or_else(|| {
+            crate::platform::application_description(&entry.target).unwrap_or_default()
+        });
     }
     let target = entry.target.to_string_lossy();
     let is_shell_or_url =

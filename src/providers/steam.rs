@@ -107,6 +107,10 @@ fn game_result(
         }],
         actions: Vec::new(),
         detail: None,
+        description: None,
+        app_user_model_id: None,
+        package_family_name: None,
+        package_metadata: None,
         icon,
         ranking_bias: -600,
     }

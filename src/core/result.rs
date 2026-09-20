@@ -52,6 +52,14 @@ pub struct SearchResult {
     pub actions: Vec<Action>,
     /// Optional declarative content rendered in the launcher's detail pane.
     pub detail: Option<DetailView>,
+    /// Optional user-facing application description collected during indexing.
+    pub description: Option<String>,
+    /// Windows AppUserModelId for packaged applications, when available.
+    pub app_user_model_id: Option<String>,
+    /// Windows PackageFamilyName for packaged applications, when available.
+    pub package_family_name: Option<String>,
+    /// Additional package identity metadata, when the package catalog exposes it.
+    pub package_metadata: Option<crate::platform::PackageMetadata>,
     pub icon: Option<IconSpec>,
     /// Provider-supplied ranking adjustment consumed generically by SearchCore.
     pub ranking_bias: i32,

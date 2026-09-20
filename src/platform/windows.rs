@@ -686,10 +686,13 @@ fn collect_apps_folder(applications: &mut Vec<super::StoreApplication>) {
         let (Some(title), Some(parsing)) = (title, parsing) else {
             continue;
         };
-        if title.trim().is_empty() || has_store_title(applications, &title) {
+        if title.trim().is_empty() {
             continue;
         }
-        applications.push(apps_folder_application(&parsing, filesystem_path, title));
+        push_store_application(
+            applications,
+            apps_folder_application(&parsing, filesystem_path, title),
+        );
     }
     unsafe { CoTaskMemFree(Some(root_pidl.cast())) };
 }
@@ -758,6 +761,18 @@ fn collect_packaged_apps(applications: &mut Vec<super::StoreApplication>) {
         let Ok(entries) = package.GetAppListEntries() else {
             continue;
         };
+        let package_id = package.Id().ok();
+        let package_metadata = Some(super::PackageMetadata {
+            full_name: package_id
+                .as_ref()
+                .and_then(|id| id.FullName().ok())
+                .map(|value| value.to_string()),
+            install_location: None,
+            identity_name: package_id
+                .as_ref()
+                .and_then(|id| id.Name().ok())
+                .map(|value| value.to_string()),
+        });
         for entry in entries {
             let (Ok(display), Ok(aumid)) = (entry.DisplayInfo(), entry.AppUserModelId()) else {
                 continue;
@@ -767,11 +782,18 @@ fn collect_packaged_apps(applications: &mut Vec<super::StoreApplication>) {
             };
             let title = title.to_string();
             let aumid = aumid.to_string();
-            if title.trim().is_empty() || aumid.is_empty() || has_store_title(applications, &title)
-            {
+            if title.trim().is_empty() || aumid.is_empty() {
                 continue;
             }
-            applications.push(store_application(&aumid, title, super::source_ids::PACKAGE));
+            push_store_application(
+                applications,
+                store_application_with_metadata(
+                    &aumid,
+                    title,
+                    super::source_ids::PACKAGE,
+                    package_metadata.clone(),
+                ),
+            );
         }
     }
 }
@@ -800,6 +822,10 @@ fn apps_folder_application(
             aliases: Vec::new(),
             launch_target: PathBuf::from(&url),
             executable: None,
+            description: None,
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
             source: super::source_ids::APPS_FOLDER,
         };
     }
@@ -815,6 +841,7 @@ fn apps_folder_application(
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
     {
+        let description = application_description(&path);
         return super::StoreApplication {
             identity: format!("exe:{}", path.to_string_lossy().trim().to_lowercase()),
             title,
@@ -824,6 +851,10 @@ fn apps_folder_application(
             // only a Shell namespace identifier and is not launchable.
             launch_target: path.clone(),
             executable: Some(path),
+            description,
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
             source: super::source_ids::APPS_FOLDER,
         };
     }
@@ -834,6 +865,10 @@ fn apps_folder_application(
         aliases: Vec::new(),
         launch_target: PathBuf::from(format!("shell:AppsFolder\\{value}")),
         executable: None,
+        description: None,
+        app_user_model_id: None,
+        package_family_name: None,
+        package_metadata: None,
         source: super::source_ids::APPS_FOLDER,
     }
 }
@@ -908,6 +943,15 @@ fn parse_guid(value: &str) -> Option<windows::core::GUID> {
 }
 
 fn store_application(aumid: &str, title: String, source: &'static str) -> super::StoreApplication {
+    store_application_with_metadata(aumid, title, source, None)
+}
+
+fn store_application_with_metadata(
+    aumid: &str,
+    title: String,
+    source: &'static str,
+    package_metadata: Option<super::PackageMetadata>,
+) -> super::StoreApplication {
     let mut aliases = Vec::new();
     if let Some(product) = aumid
         .split('!')
@@ -919,20 +963,57 @@ fn store_application(aumid: &str, title: String, source: &'static str) -> super:
             aliases.push(product);
         }
     }
+    let launch_target = PathBuf::from(format!("shell:AppsFolder\\{aumid}"));
+    let description = application_description(&launch_target);
+    let app_user_model_id = Some(aumid.to_owned());
+    let package_family_name = aumid
+        .split('!')
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned);
     super::StoreApplication {
         identity: format!("aumid:{}", aumid.to_lowercase()),
         title,
         aliases,
-        launch_target: PathBuf::from(format!("shell:AppsFolder\\{aumid}")),
+        launch_target,
         executable: None,
+        description,
+        app_user_model_id,
+        package_family_name,
+        package_metadata,
         source,
     }
 }
 
-fn has_store_title(applications: &[super::StoreApplication], title: &str) -> bool {
-    applications
-        .iter()
-        .any(|application| application.title.eq_ignore_ascii_case(title))
+fn push_store_application(
+    applications: &mut Vec<super::StoreApplication>,
+    application: super::StoreApplication,
+) {
+    // Display names are not identities: different packages can expose the
+    // same localized title. Only suppress an entry when its stable identity
+    // is already present; the later provider merge can still combine the
+    // same application across AppsFolder and Package sources.
+    if let Some(existing) = applications.iter_mut().find(|existing| {
+        existing
+            .identity
+            .eq_ignore_ascii_case(&application.identity)
+    }) {
+        if existing.description.is_none() {
+            existing.description = application.description;
+        }
+        if existing.app_user_model_id.is_none() {
+            existing.app_user_model_id = application.app_user_model_id;
+        }
+        if existing.package_family_name.is_none() {
+            existing.package_family_name = application.package_family_name;
+        }
+        if existing.package_metadata.is_none() {
+            existing.package_metadata = application.package_metadata;
+        }
+        existing.aliases.extend(application.aliases);
+        return;
+    }
+    applications.push(application);
 }
 
 fn register_hotkey_value(hotkey: &str) -> bool {
@@ -1296,6 +1377,14 @@ mod tests {
         );
         assert_eq!(application.title, "记事本");
         assert_eq!(
+            application.app_user_model_id.as_deref(),
+            Some("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App")
+        );
+        assert_eq!(
+            application.package_family_name.as_deref(),
+            Some("Microsoft.WindowsNotepad_8wekyb3d8bbwe")
+        );
+        assert_eq!(
             application.launch_target,
             PathBuf::from("shell:AppsFolder\\Microsoft.WindowsNotepad_8wekyb3d8bbwe!App")
         );
@@ -1342,6 +1431,83 @@ mod tests {
         assert_eq!(
             application.launch_target,
             PathBuf::from("http://support.steampowered.com/")
+        );
+    }
+
+    #[test]
+    fn store_index_keeps_same_title_with_distinct_identities() {
+        let mut applications = Vec::new();
+        push_store_application(
+            &mut applications,
+            apps_folder_application(
+                r"shell:AppsFolder\Contoso.Editor_abc!App",
+                None,
+                "Editor".into(),
+            ),
+        );
+        push_store_application(
+            &mut applications,
+            apps_folder_application(
+                r"shell:AppsFolder\Fabrikam.Editor_def!App",
+                None,
+                "Editor".into(),
+            ),
+        );
+
+        assert_eq!(applications.len(), 2);
+        assert_ne!(applications[0].identity, applications[1].identity);
+    }
+
+    #[test]
+    fn store_index_deduplicates_same_identity_case_insensitively() {
+        let mut applications = Vec::new();
+        push_store_application(
+            &mut applications,
+            apps_folder_application(
+                r"shell:AppsFolder\Contoso.Editor_abc!App",
+                None,
+                "Editor".into(),
+            ),
+        );
+        push_store_application(
+            &mut applications,
+            apps_folder_application(
+                r"shell:AppsFolder\contoso.editor_ABC!APP",
+                None,
+                "Editor (Package)".into(),
+            ),
+        );
+
+        assert_eq!(applications.len(), 1);
+        assert_eq!(applications[0].title, "Editor");
+    }
+
+    #[test]
+    fn package_metadata_is_kept_on_packaged_application_records() {
+        let application = store_application_with_metadata(
+            "Contoso.Editor_abc!Main",
+            "Editor".into(),
+            crate::platform::source_ids::PACKAGE,
+            Some(crate::platform::PackageMetadata {
+                full_name: Some("Contoso.Editor_1.0.0.0_neutral__abc".into()),
+                install_location: None,
+                identity_name: Some("Contoso.Editor".into()),
+            }),
+        );
+
+        assert_eq!(
+            application
+                .package_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.full_name.as_deref()),
+            Some("Contoso.Editor_1.0.0.0_neutral__abc")
+        );
+        assert_eq!(
+            application
+                .package_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.identity_name.as_deref()),
+            Some("Contoso.Editor")
         );
     }
 

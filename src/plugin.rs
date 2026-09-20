@@ -789,6 +789,10 @@ fn to_result(
         launch_entries: Vec::<LaunchEntry>::new(),
         actions,
         detail: item.detail.map(|view| to_detail_view(&plugin.root, view)),
+        description: None,
+        app_user_model_id: None,
+        package_family_name: None,
+        package_metadata: None,
         icon: icon.and_then(|icon| resolve_plugin_icon(&plugin.root, icon)),
         ranking_bias: plugin.weight.load(Ordering::Acquire),
     }

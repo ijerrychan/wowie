@@ -38,7 +38,7 @@ AppsFolder / Package / StartMenu / Desktop / 其他来源
 
 ## P0：修复可能丢数据或误合并的问题
 
-### [ ] 移除 AppsFolder 阶段基于标题的提前丢弃
+### [x] 移除 AppsFolder 阶段基于标题的提前丢弃
 
 当前 AppsFolder 枚举中存在按本地化标题判断是否已经存在商店应用的逻辑。相同标题不等于相同应用，两个不同包可能拥有相同的显示名称。
 
@@ -51,13 +51,20 @@ AppsFolder / Package / StartMenu / Desktop / 其他来源
 
 验收标准：
 
-- 两个不同 PackageFamilyName 但标题相同的应用都能被索引。
-- 同一应用从 AppsFolder 和 Package Catalog 返回时仍只显示一个结果。
-- 不同语言环境下，标题变化不会改变去重结果。
+- [x] 两个不同 PackageFamilyName 但标题相同的应用都能被索引。
+- [x] 同一应用从 AppsFolder 和 Package Catalog 返回时仍只显示一个结果。
+- [x] 不同语言环境下，标题变化不会改变去重结果。
 
-### [ ] 完善重复记录的元数据合并策略
+### [x] 完善重复记录的元数据合并策略
 
 `merge_by_identity()` 当前主要合并 aliases、sources、launch entries 和部分图标信息。当高优先级来源替换当前记录时，其他来源的描述、Action、detail 或 ranking 信息可能没有统一的保留规则。
+
+当前进度：
+
+- [x] Action 按稳定值合并并去重。
+- [x] detail、图标和类别采用非空优先及来源优先级策略。
+- [x] ranking bias 在 canonical record 替换时保留有效值。
+- [x] 将应用描述加入索引结果模型并纳入合并策略。
 
 调整方向：
 
@@ -92,9 +99,15 @@ AppsFolder / Package / StartMenu / Desktop / 其他来源
 - 只有弱证据时，不自动合并；最多生成待确认候选。
 - 多个强候选或强弱证据冲突时，必须拒绝合并。
 
+当前进度：
+
+- [x] 入口关联会拒绝冲突的 AppUserModelId / PackageFamilyName。
+- [x] 文件目标强匹配也会经过包身份冲突检查，不能绕过身份保护。
+- [ ] 将匹配证据正式类型化，并输出可解释的去重决策诊断。
+
 ## P1：完善索引质量和包应用处理
 
-### [ ] 让快捷方式关联检查全部有效启动入口
+### [x] 让快捷方式关联检查全部有效启动入口
 
 关联逻辑不应只依赖某个项目的第一个 `LaunchEntry`。一个结果可能同时包含多个快捷方式、多个目标或不同启动参数。
 
@@ -104,6 +117,8 @@ AppsFolder / Package / StartMenu / Desktop / 其他来源
 - 为每个候选入口计算匹配强度。
 - 只有唯一强匹配时自动关联。
 - 多个入口分别匹配不同应用时保留歧义，不强行合并。
+
+已实现：遍历所有启动入口，合并同一应用的重复候选，并让强匹配优先于受限标题回退；多个不同候选仍会拒绝自动关联。
 
 ### [ ] 将包应用身份提升为显式索引字段
 
@@ -115,6 +130,13 @@ AppsFolder / Package / StartMenu / Desktop / 其他来源
 - Package install location
 - Application manifest identity
 - 应用级 DisplayName 和 Description 的来源
+
+当前进度：
+
+- [x] `SearchResult` 和 `StoreApplication` 显式保存 `AppUserModelId`。
+- [x] 从 AUMID 保存 `PackageFamilyName`，并在重复项合并时保留。
+- [x] 保存 Package full name 和 package identity name。
+- [ ] 补充可靠的 Package 安装位置。
 
 这样可以避免从 `aumid:` 字符串中反向拆解业务信息，并方便精确查询、诊断和后续增量更新。
 
