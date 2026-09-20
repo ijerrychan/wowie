@@ -120,7 +120,7 @@ AppsFolder / Package / StartMenu / Desktop / 其他来源
 
 已实现：遍历所有启动入口，合并同一应用的重复候选，并让强匹配优先于受限标题回退；多个不同候选仍会拒绝自动关联。
 
-### [ ] 将包应用身份提升为显式索引字段
+### [x] 将包应用身份提升为显式索引字段
 
 当前部分包信息通过 identity 字符串表达。后续可在应用索引模型中显式保存：
 
@@ -136,11 +136,11 @@ AppsFolder / Package / StartMenu / Desktop / 其他来源
 - [x] `SearchResult` 和 `StoreApplication` 显式保存 `AppUserModelId`。
 - [x] 从 AUMID 保存 `PackageFamilyName`，并在重复项合并时保留。
 - [x] 保存 Package full name 和 package identity name。
-- [ ] 补充可靠的 Package 安装位置。
+- [x] 通过 `ApplicationModel::Package::InstalledLocation` 保存可靠的 Package 安装位置。
 
 这样可以避免从 `aumid:` 字符串中反向拆解业务信息，并方便精确查询、诊断和后续增量更新。
 
-### [ ] 改进包应用描述获取和本地化资源解析
+### [x] 改进包应用描述获取和本地化资源解析
 
 应用描述应优先从应用级 manifest `Description` 获取，并支持 `ms-resource:` 资源解析；Package 级 Description、AppsFolder 展示名称和 EXE `FileDescription` 作为有明确优先级的回退来源。
 
@@ -167,9 +167,10 @@ EXE FileDescription / 快捷方式 Description
 - [x] 优先读取 `AppInfo.DisplayInfo.Description`，并回退到 `Package.Description`。
 - [x] 对 `ms-resource:` 描述引用使用包 FullName 通过 Windows Shell 解析。
 - [x] 解析失败或缺少包身份时返回空值，继续使用类别名称回退。
-- [ ] 补充不同 Windows 版本、资源命名空间和多语言包的实机覆盖测试。
+- [x] 增加资源引用构造、缺少包上下文和解析失败回退的自动化覆盖。
+- [ ] 补充不同 Windows 版本、资源命名空间和多语言包的实机覆盖测试；这项需要对应的真实 Store 包和系统语言环境。
 
-### [ ] 扩展 Windows 目标规范化
+### [x] 扩展 Windows 目标规范化
 
 在不强制解析真实文件、避免启动阶段明显变慢的前提下，补充以下等价形式的处理：
 
@@ -187,11 +188,14 @@ EXE FileDescription / 快捷方式 Description
 - [x] 保持 UNC、本地路径和 Shell namespace 的边界隔离。
 - [x] 将标准 `file:` URL 规范化为本地文件路径参与目标比较。
 - [x] 保留原始启动目标，不改变实际启动入口。
-- [ ] 补充 8.3 路径、junction/symbolic link 和更多 file URL 变体。
+- [x] 对包含 8.3 短路径片段的现有目标使用 `GetLongPathNameW` 参与比较。
+- [x] 增加 `file://localhost/...` 等 file URL 变体覆盖。
+- [x] 增加受控的 junction/symbolic link 解析开关：设置 `WOWIE_RESOLVE_LINKS` 后才调用 `canonicalize`，默认不增加启动阶段 I/O。
+- [ ] 补充真实 NTFS 8.3、junction/symbolic link 和不同 URL 编码组合的 Windows 实机覆盖测试。
 
 ## P1：完善测试和诊断能力
 
-### [ ] 增加完整索引流水线快照测试
+### [x] 增加完整索引流水线快照测试
 
 测试不应只验证单个 helper，而应覆盖：
 
@@ -223,7 +227,10 @@ EXE FileDescription / 快捷方式 Description
 - [x] 增加跨来源完整流水线回归测试，覆盖发现、入口关联、identity 合并、分类和默认入口选择。
 - [x] 覆盖同名不同包、同一目标不同参数，以及包身份冲突保护。
 - [x] 覆盖 AppsFolder 优先级、Package 元数据补全和关联来源保留。
-- [ ] 补齐 URL、Shell path、本地 HTML、资源描述和来源刷新删除等场景。
+- [x] 覆盖 URL、Shell path、本地 HTML 和来源快照删除后的结果保留。
+- [x] 验证来源记录顺序变化不会改变最终合并结果。
+- [x] 覆盖资源描述缺少上下文、解析失败和包元数据回退路径。
+- [ ] 补充资源描述多语言和更复杂的刷新竞态场景；前者需要真实多语言包，后者需要可控的通知竞态注入。
 
 ### [x] 添加去重决策诊断信息
 
@@ -265,7 +272,7 @@ EXE FileDescription / 快捷方式 Description
 
 ## P2：缓存和架构优化
 
-### [ ] 将索引缓存按来源拆分
+### [x] 将索引缓存按来源拆分
 
 参考 PowerToys 的 Win32 / Package 分离方式，将来源快照和统一结果合并分开：
 
@@ -288,7 +295,16 @@ Source Repository
 - 明确区分来源缓存和最终合并结果。
 - 后续支持按 PackageFamilyName、AUMID 或文件目标快速查询。
 
-### [ ] 减少来源刷新后的全量合并成本
+当前进度：
+
+- [x] `AppProvider.sources` 保存各来源独立快照，`items` 保存统一合并结果。
+- [x] 单个来源刷新只重新发现该来源，其他来源快照继续复用。
+- [x] 来源没有变化时跳过统一结果重建。
+- [x] 建立基于 AUMID、PackageFamilyName 和 filesystem target 的来源反向索引基础。
+- [x] 对身份和启动拓扑不变的包来源刷新，复用现有合并结果，仅局部更新展示元数据。
+- [ ] 将反向索引进一步接入身份或入口拓扑变化时的局部关联重算。
+
+### [x] 减少来源刷新后的全量合并成本
 
 在保证结果确定性的前提下，评估：
 
@@ -296,6 +312,12 @@ Source Repository
 - 为 filesystem target、AUMID 和 PackageFamilyName 建立反向索引。
 - 将完整合并保留为启动时重建和诊断模式下的校验路径。
 - 增加索引耗时基准，避免为了微优化牺牲去重正确性。
+
+当前进度：
+
+- [x] 来源刷新会计算 AUMID、PackageFamilyName 和 filesystem target 的受影响键集合。
+- [x] 元数据-only 包刷新会只重算受影响 identity；拓扑变化仍安全回退到全量合并。
+- [ ] 使用受影响键集合进一步重算局部 identity 和入口关联，并证明与全量结果完全等价。
 
 ### [ ] 统一应用索引的内部中间模型
 

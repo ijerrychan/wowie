@@ -49,6 +49,7 @@ use identity::{
 pub struct AppProvider {
     items: Arc<Vec<SearchResult>>,
     sources: HashMap<crate::platform::AppProviderSource, Vec<SearchResult>>,
+    source_lookup: SourceLookup,
     config: crate::config::ProviderConfig,
 }
 
@@ -56,6 +57,95 @@ struct ProviderDefinition {
     source: crate::platform::AppProviderSource,
     enabled: fn(&crate::config::ProviderConfig) -> bool,
     discover: fn(&crate::config::ProviderConfig) -> Vec<SearchResult>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct SourceLookup {
+    by_aumid: HashMap<String, Vec<(crate::platform::AppProviderSource, usize)>>,
+    by_package_family: HashMap<String, Vec<(crate::platform::AppProviderSource, usize)>>,
+    by_filesystem_target: HashMap<String, Vec<(crate::platform::AppProviderSource, usize)>>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LookupImpact {
+    aumids: HashSet<String>,
+    package_families: HashSet<String>,
+    filesystem_targets: HashSet<String>,
+}
+
+impl SourceLookup {
+    fn from_sources(
+        sources: &HashMap<crate::platform::AppProviderSource, Vec<SearchResult>>,
+    ) -> Self {
+        let mut lookup = Self::default();
+        for (source, records) in sources {
+            for (index, record) in records.iter().enumerate() {
+                if let Some(aumid) = record.app_user_model_id.as_deref() {
+                    lookup
+                        .by_aumid
+                        .entry(aumid.trim().to_lowercase())
+                        .or_default()
+                        .push((*source, index));
+                }
+                if let Some(family) = record.package_family_name.as_deref() {
+                    lookup
+                        .by_package_family
+                        .entry(family.trim().to_lowercase())
+                        .or_default()
+                        .push((*source, index));
+                }
+                let mut targets = record
+                    .launch_entries
+                    .iter()
+                    .filter_map(|entry| filesystem_target_key(&entry.target))
+                    .collect::<Vec<_>>();
+                if let Some(target) = filesystem_target_key(&record.launch_target) {
+                    targets.push(target);
+                }
+                targets.sort();
+                targets.dedup();
+                for target in targets {
+                    lookup
+                        .by_filesystem_target
+                        .entry(target)
+                        .or_default()
+                        .push((*source, index));
+                }
+            }
+        }
+        lookup
+    }
+
+    fn key_counts(&self) -> (usize, usize, usize) {
+        (
+            self.by_aumid.len(),
+            self.by_package_family.len(),
+            self.by_filesystem_target.len(),
+        )
+    }
+
+    fn diff(&self, other: &Self) -> LookupImpact {
+        fn changed_keys<T: PartialEq>(
+            before: &HashMap<String, T>,
+            after: &HashMap<String, T>,
+        ) -> HashSet<String> {
+            before
+                .keys()
+                .chain(after.keys())
+                .filter(|key| before.get(*key) != after.get(*key))
+                .cloned()
+                .collect()
+        }
+
+        LookupImpact {
+            aumids: changed_keys(&self.by_aumid, &other.by_aumid),
+            package_families: changed_keys(&self.by_package_family, &other.by_package_family),
+            filesystem_targets: changed_keys(
+                &self.by_filesystem_target,
+                &other.by_filesystem_target,
+            ),
+        }
+    }
 }
 
 const PROVIDER_DEFINITIONS: [ProviderDefinition; 6] = [
@@ -98,6 +188,7 @@ impl AppProvider {
         Self {
             items: Arc::new(Vec::new()),
             sources: HashMap::new(),
+            source_lookup: SourceLookup::default(),
             config: config.clone(),
         }
     }
@@ -106,6 +197,7 @@ impl AppProvider {
     /// construction so callers can run it on the provider worker thread.
     pub fn discover_initial(&mut self) {
         self.sources = discover_sources(&self.config);
+        self.rebuild_source_lookup();
         self.items = Arc::new(merge_sources(&self.sources));
     }
 
@@ -135,8 +227,25 @@ impl AppProvider {
         if self.sources.get(&source) == Some(&refreshed) {
             return false;
         }
+        let previous = self.sources.get(&source).cloned().unwrap_or_default();
         self.sources.insert(source, refreshed);
-        self.items = Arc::new(merge_sources(&self.sources));
+        let updated_lookup = SourceLookup::from_sources(&self.sources);
+        let impact = self.source_lookup.diff(&updated_lookup);
+        if debug_enabled() {
+            eprintln!(
+                "[provider] source refresh impact source={:?} aumid_keys={} package_family_keys={} filesystem_target_keys={}",
+                source,
+                impact.aumids.len(),
+                impact.package_families.len(),
+                impact.filesystem_targets.len(),
+            );
+        }
+        self.source_lookup = updated_lookup;
+        let refreshed = self.sources.get(&source).expect("refreshed source");
+        self.items = Arc::new(
+            try_merge_store_metadata_refresh(&previous, refreshed, &self.items)
+                .unwrap_or_else(|| merge_sources(&self.sources)),
+        );
         true
     }
 
@@ -147,12 +256,24 @@ impl AppProvider {
         let sources = discover_sources(config);
         self.config = config.clone();
         self.sources = sources;
+        self.rebuild_source_lookup();
         self.items = Arc::new(merge_sources(&self.sources));
         true
     }
 
     pub fn snapshot(&self) -> Arc<Vec<SearchResult>> {
         Arc::clone(&self.items)
+    }
+
+    fn rebuild_source_lookup(&mut self) {
+        self.source_lookup = SourceLookup::from_sources(&self.sources);
+        if debug_enabled() {
+            let (aumids, families, targets) = self.source_lookup.key_counts();
+            eprintln!(
+                "[provider] source lookup keys aumid={} package_family={} filesystem_target={}",
+                aumids, families, targets
+            );
+        }
     }
 
     pub fn watch_sources(
@@ -206,14 +327,7 @@ fn merge_sources(
     debug_records("before file association", &items);
     let association_stats = associate_file_entries(&mut items);
     debug_records("after file association", &items);
-    items.sort_by_cached_key(|item| {
-        (
-            source_priority(&item.source),
-            item.title.to_lowercase(),
-            item.identity.clone(),
-            item.location.clone(),
-        )
-    });
+    sort_merge_inputs(&mut items);
     let identity_stats = merge_by_identity(&mut items);
     classify_unclassified_items(&mut items);
     debug_records("final merged records", &items);
@@ -225,6 +339,91 @@ fn merge_sources(
         started.elapsed(),
     );
     items
+}
+
+fn sort_merge_inputs(items: &mut [SearchResult]) {
+    items.sort_by_cached_key(|item| {
+        (
+            source_priority(&item.source),
+            item.title.to_lowercase(),
+            item.identity.clone(),
+            item.location.clone(),
+        )
+    });
+}
+
+/// Update a packaged-source refresh locally when its topology is unchanged.
+///
+/// A package refresh can change display metadata (for example a localized
+/// description) without changing any launch or identity evidence. In that
+/// narrow case the existing merged records already contain all associations,
+/// so rebuilding only the affected identity is safe. Any addition/removal,
+/// identity change, target change, or shortcut-like source falls back to the
+/// complete association pipeline.
+fn try_merge_store_metadata_refresh(
+    previous: &[SearchResult],
+    refreshed: &[SearchResult],
+    current: &[SearchResult],
+) -> Option<Vec<SearchResult>> {
+    if previous.is_empty() || previous.len() != refreshed.len() || current.is_empty() {
+        return None;
+    }
+
+    let mut before = HashMap::with_capacity(previous.len());
+    for record in previous {
+        if !record.source.is_store_application()
+            || record.identity.is_empty()
+            || before.insert(record.identity.clone(), record).is_some()
+        {
+            return None;
+        }
+    }
+
+    let mut changed = Vec::<SearchResult>::new();
+    let mut seen = HashSet::with_capacity(refreshed.len());
+    for record in refreshed {
+        if !record.source.is_store_application()
+            || record.identity.is_empty()
+            || !seen.insert(record.identity.clone())
+        {
+            return None;
+        }
+        let old = before.get(&record.identity)?;
+        if old.source != record.source
+            || old.launch_target != record.launch_target
+            || old.launch_arguments != record.launch_arguments
+            || old.launch_working_directory != record.launch_working_directory
+            || old.launch_entries != record.launch_entries
+            || old.app_user_model_id != record.app_user_model_id
+            || old.package_family_name != record.package_family_name
+        {
+            return None;
+        }
+        if *old != record {
+            changed.push(record.clone());
+        }
+    }
+
+    let mut result = current.to_vec();
+    for incoming in changed {
+        let index = result
+            .iter()
+            .position(|item| item.identity == incoming.identity)?;
+        let existing = &result[index];
+        let mut candidates = if existing.source == incoming.source {
+            vec![incoming.clone(), existing.clone()]
+        } else {
+            vec![existing.clone(), incoming.clone()]
+        };
+        merge_by_identity(&mut candidates);
+        if candidates.len() != 1 {
+            return None;
+        }
+        result[index] = candidates.pop().expect("single merged identity");
+    }
+    classify_unclassified_items(&mut result);
+    sort_merge_inputs(&mut result);
+    Some(result)
 }
 
 fn log_index_stats(
@@ -354,6 +553,145 @@ mod tests {
             icon: None,
             ranking_bias: 0,
         }
+    }
+
+    #[test]
+    fn source_lookup_indexes_package_and_filesystem_identity() {
+        let mut application = item(
+            "aumid:contoso.editor_abc!main",
+            "Editor",
+            source_ids::APPS_FOLDER,
+        );
+        application.app_user_model_id = Some("Contoso.Editor_abc!Main".into());
+        application.package_family_name = Some("Contoso.Editor_abc".into());
+        application.launch_target = PathBuf::from(r"shell:AppsFolder\Contoso.Editor_abc!Main");
+        application.launch_entries = vec![LaunchEntry {
+            source: source_ids::APPS_FOLDER.into(),
+            path: PathBuf::from(r"shell:AppsFolder\Contoso.Editor_abc!Main"),
+            target: PathBuf::from(r"C:\Apps\Editor.exe"),
+            arguments: String::new(),
+            working_directory: None,
+        }];
+
+        let source = crate::platform::AppProviderSource::StoreApps;
+        let mut sources = HashMap::new();
+        sources.insert(source, vec![application]);
+        let lookup = SourceLookup::from_sources(&sources);
+
+        assert_eq!(lookup.key_counts(), (1, 1, 1));
+        assert_eq!(
+            lookup.by_aumid["contoso.editor_abc!main"],
+            vec![(source, 0)]
+        );
+        assert_eq!(
+            lookup.by_package_family["contoso.editor_abc"],
+            vec![(source, 0)]
+        );
+        assert_eq!(
+            lookup.by_filesystem_target["c:\\apps\\editor.exe"],
+            vec![(source, 0)]
+        );
+    }
+
+    #[test]
+    fn source_lookup_reports_refresh_impact_keys() {
+        let mut first = item(
+            "aumid:contoso.editor_abc!main",
+            "Editor",
+            source_ids::APPS_FOLDER,
+        );
+        first.app_user_model_id = Some("Contoso.Editor_abc!Main".into());
+        first.package_family_name = Some("Contoso.Editor_abc".into());
+        first.launch_target = PathBuf::from(r"C:\Apps\Editor.exe");
+
+        let source = crate::platform::AppProviderSource::StoreApps;
+        let mut before_sources = HashMap::new();
+        before_sources.insert(source, vec![first.clone()]);
+
+        let mut second = first;
+        second.app_user_model_id = Some("Contoso.Editor_def!Main".into());
+        second.package_family_name = Some("Contoso.Editor_def".into());
+        second.launch_target = PathBuf::from(r"C:\Apps\Editor2.exe");
+        let mut after_sources = HashMap::new();
+        after_sources.insert(source, vec![second]);
+
+        let impact = SourceLookup::from_sources(&before_sources)
+            .diff(&SourceLookup::from_sources(&after_sources));
+        assert_eq!(impact.aumids.len(), 2);
+        assert_eq!(impact.package_families.len(), 2);
+        assert_eq!(impact.filesystem_targets.len(), 2);
+        assert!(impact.aumids.contains("contoso.editor_abc!main"));
+        assert!(impact.aumids.contains("contoso.editor_def!main"));
+    }
+
+    #[test]
+    fn store_metadata_refresh_reuses_merged_topology() {
+        let identity = "aumid:contoso.editor_abc!main";
+        let mut previous = item(identity, "Editor", source_ids::APPS_FOLDER);
+        previous.app_user_model_id = Some("Contoso.Editor_abc!Main".into());
+        previous.package_family_name = Some("Contoso.Editor_abc".into());
+        previous.launch_target = PathBuf::from(r"shell:AppsFolder\Contoso.Editor_abc!Main");
+        previous.launch_entries = vec![LaunchEntry {
+            source: source_ids::APPS_FOLDER.into(),
+            path: PathBuf::from(r"shell:AppsFolder\Contoso.Editor_abc!Main"),
+            target: PathBuf::from(r"C:\Apps\Editor.exe"),
+            arguments: String::new(),
+            working_directory: None,
+        }];
+
+        let mut refreshed = previous.clone();
+        refreshed.title = "Editor (中文)".into();
+        refreshed.description = Some("Localized description".into());
+
+        let source = crate::platform::AppProviderSource::StoreApps;
+        let mut sources = HashMap::new();
+        sources.insert(source, vec![previous.clone()]);
+        let current = merge_sources(&sources);
+        let result = try_merge_store_metadata_refresh(&[previous], &[refreshed], &current)
+            .expect("metadata-only refresh should be local");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].title, "Editor (中文)");
+        assert_eq!(
+            result[0].description.as_deref(),
+            Some("Localized description")
+        );
+    }
+
+    #[test]
+    fn store_refresh_falls_back_when_launch_topology_changes() {
+        let identity = "aumid:contoso.editor_abc!main";
+        let mut previous = item(identity, "Editor", source_ids::APPS_FOLDER);
+        previous.launch_entries = vec![LaunchEntry {
+            source: source_ids::APPS_FOLDER.into(),
+            path: PathBuf::from(r"shell:AppsFolder\Contoso.Editor_abc!Main"),
+            target: PathBuf::from(r"C:\Apps\Editor.exe"),
+            arguments: String::new(),
+            working_directory: None,
+        }];
+        let mut refreshed = previous.clone();
+        refreshed.launch_entries[0].arguments = "--new-profile".into();
+
+        assert!(try_merge_store_metadata_refresh(
+            &[previous],
+            &[refreshed],
+            &[item(identity, "Editor", source_ids::APPS_FOLDER)]
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn merge_sources_is_deterministic_when_source_record_order_changes() {
+        let first = item("exe:c:\\apps\\demo.exe", "Demo", source_ids::APPS_FOLDER);
+        let second = item("exe:c:\\apps\\other.exe", "Other", source_ids::APPS_FOLDER);
+        let source = crate::platform::AppProviderSource::StoreApps;
+
+        let mut left = HashMap::new();
+        left.insert(source, vec![first.clone(), second.clone()]);
+        let mut right = HashMap::new();
+        right.insert(source, vec![second, first]);
+
+        assert_eq!(merge_sources(&left), merge_sources(&right));
     }
 
     #[test]
@@ -488,6 +826,93 @@ mod tests {
             .expect("the conflicting package must remain separate");
         assert_eq!(conflicting.sources, vec![SourceId::AppsFolder]);
         assert_eq!(conflicting.launch_entries.len(), 1);
+    }
+
+    #[test]
+    fn merge_sources_covers_url_html_and_source_removal() {
+        fn launch(source: &str, path: &str, target: &str) -> LaunchEntry {
+            LaunchEntry {
+                source: source.into(),
+                path: PathBuf::from(path),
+                target: PathBuf::from(target),
+                arguments: String::new(),
+                working_directory: None,
+            }
+        }
+
+        let url_identity = "url:https://example.com/docs";
+        let mut url_app = item(url_identity, "Documentation", source_ids::APPS_FOLDER);
+        url_app.category = ResultCategory::Unclassified;
+        url_app.launch_entries = vec![launch(
+            source_ids::APPS_FOLDER,
+            "https://example.com/docs",
+            "https://example.com/docs",
+        )];
+
+        let mut url_shortcut = item(url_identity, "Documentation", source_ids::START_MENU);
+        url_shortcut.category = ResultCategory::Unclassified;
+        url_shortcut.launch_entries = vec![launch(
+            source_ids::START_MENU,
+            r"C:\Start Menu\Documentation.url",
+            "https://example.com/docs",
+        )];
+
+        let html_identity = r"shell:{6d809377-6af0-444b-8957-a3773f02200e}\git\releasenotes.html";
+        let mut html_app = item(html_identity, "Git Release Notes", source_ids::APPS_FOLDER);
+        html_app.category = ResultCategory::Unclassified;
+        html_app.launch_entries = vec![launch(
+            source_ids::APPS_FOLDER,
+            r"shell:AppsFolder\{6D809377-6AF0-444B-8957-A3773F02200E}\Git\ReleaseNotes.html",
+            r"shell:AppsFolder\{6D809377-6AF0-444B-8957-A3773F02200E}\Git\ReleaseNotes.html",
+        )];
+
+        let mut html_shortcut = item(
+            r"target:c:\program files\git\releasenotes.html",
+            "Git Release Notes",
+            source_ids::START_MENU,
+        );
+        html_shortcut.category = ResultCategory::Unclassified;
+        html_shortcut.launch_entries = vec![launch(
+            source_ids::START_MENU,
+            r"C:\Start Menu\Git Release Notes.lnk",
+            r"C:\Program Files\Git\ReleaseNotes.html",
+        )];
+
+        let mut sources = HashMap::new();
+        sources.insert(
+            crate::platform::AppProviderSource::StoreApps,
+            vec![url_app, html_app],
+        );
+        sources.insert(
+            crate::platform::AppProviderSource::StartMenu,
+            vec![url_shortcut, html_shortcut],
+        );
+
+        let results = merge_sources(&sources);
+        assert_eq!(results.len(), 2);
+        let documentation = results
+            .iter()
+            .find(|result| result.identity == url_identity)
+            .expect("URL application should remain indexed");
+        assert_eq!(documentation.category, ResultCategory::Website);
+        assert!(documentation
+            .sources
+            .contains(&crate::platform::SourceId::StartMenu));
+
+        let release_notes = results
+            .iter()
+            .find(|result| result.identity == html_identity)
+            .expect("local HTML application should remain indexed");
+        assert!(release_notes
+            .sources
+            .contains(&crate::platform::SourceId::StartMenu));
+
+        sources.remove(&crate::platform::AppProviderSource::StartMenu);
+        let refreshed = merge_sources(&sources);
+        assert_eq!(refreshed.len(), 2);
+        assert!(refreshed
+            .iter()
+            .all(|result| result.sources == vec![crate::platform::SourceId::AppsFolder]));
     }
 
     #[test]
@@ -1292,6 +1717,10 @@ mod tests {
             Path::new("file:///C:/Apps/Browser/browser.exe"),
             Path::new(r"C:\Apps\Browser\browser.exe")
         ));
+        assert_eq!(
+            normalize_path(Path::new("file://localhost/C:/Apps/Browser/browser.exe")),
+            r"c:\apps\browser\browser.exe"
+        );
     }
 
     #[test]

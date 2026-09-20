@@ -234,6 +234,18 @@ fn package_description(aumid: &str) -> Option<String> {
     None
 }
 
+fn package_install_location(aumid: &str) -> Option<PathBuf> {
+    use windows::core::HSTRING;
+    use windows::ApplicationModel::AppInfo;
+
+    let _winrt = WinRtScope::initialize()?;
+    let app_info = AppInfo::GetFromAppUserModelId(&HSTRING::from(aumid)).ok()?;
+    let package = app_info.Package().ok()?;
+    let location = package.InstalledLocation().ok()?;
+    let path = location.Path().ok()?.to_string();
+    (!path.trim().is_empty()).then(|| PathBuf::from(path))
+}
+
 fn resolve_package_description(value: &str, package_full_name: Option<&str>) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -848,13 +860,17 @@ fn collect_packaged_apps(applications: &mut Vec<super::StoreApplication>) {
             }
             let launch_target = PathBuf::from(format!("shell:AppsFolder\\{aumid}"));
             let description = application_description(&launch_target);
+            let mut metadata = package_metadata.clone();
+            if let Some(metadata) = metadata.as_mut() {
+                metadata.install_location = package_install_location(&aumid);
+            }
             push_store_application(
                 applications,
                 store_application_with_metadata(
                     &aumid,
                     title,
                     super::source_ids::PACKAGE,
-                    package_metadata.clone(),
+                    metadata,
                     description,
                 ),
             );
@@ -1589,6 +1605,33 @@ mod tests {
             None
         );
         assert_eq!(resolve_package_description("", None), None);
+    }
+
+    #[test]
+    fn package_description_resource_references_require_package_context() {
+        assert_eq!(
+            resolve_package_description("MS-RESOURCE://Contoso.Editor/Description", None),
+            None
+        );
+        assert_eq!(
+            resolve_package_description("@{Contoso.Editor_1.0.0.0_neutral__abc?Description}", None),
+            None
+        );
+    }
+
+    #[test]
+    fn package_description_resource_reference_with_package_context_is_safe() {
+        // The synthetic package does not exist on the test machine, so the
+        // expected result is the documented empty fallback. This still covers
+        // the ms-resource -> indirect-string construction path without
+        // depending on a particular installed Store package or UI language.
+        assert_eq!(
+            resolve_package_description(
+                "ms-resource://Contoso.Editor/Resources/Description",
+                Some("Contoso.Editor_1.0.0.0_neutral__abc")
+            ),
+            None
+        );
     }
 
     #[test]

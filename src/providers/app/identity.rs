@@ -5,6 +5,11 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
 };
+#[cfg(windows)]
+use std::{
+    ffi::OsString,
+    os::windows::ffi::{OsStrExt, OsStringExt},
+};
 use url::Url;
 
 use super::{
@@ -105,6 +110,7 @@ pub(super) fn looks_like_uri(path: &Path) -> bool {
 
 pub(super) fn normalize_path(path: &Path) -> String {
     let path = file_url_path(path).unwrap_or_else(|| path.to_owned());
+    let path = resolve_existing_path_aliases(&path);
     let raw = path.to_string_lossy().trim().replace('/', "\\");
     let is_unc = raw.starts_with("\\\\");
     let mut parts = Vec::new();
@@ -119,6 +125,64 @@ pub(super) fn normalize_path(path: &Path) -> String {
     }
     let prefix = if is_unc { "\\\\" } else { "" };
     format!("{prefix}{}", parts.join("\\")).to_lowercase()
+}
+
+fn resolve_existing_path_aliases(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let path = expand_short_path(path).unwrap_or_else(|| path.to_owned());
+        if std::env::var_os("WOWIE_RESOLVE_LINKS").is_some() {
+            return std::fs::canonicalize(&path).unwrap_or(path);
+        }
+        path
+    }
+
+    #[cfg(not(windows))]
+    {
+        path.to_owned()
+    }
+}
+
+#[cfg(windows)]
+fn expand_short_path(path: &Path) -> Option<PathBuf> {
+    // Avoid a filesystem call for the normal case. A short 8.3 component is
+    // the only form that can benefit from GetLongPathNameW here.
+    if !path
+        .components()
+        .any(|component| component.as_os_str().to_string_lossy().contains('~'))
+    {
+        return None;
+    }
+
+    let input = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let mut capacity = 260u32;
+    loop {
+        let mut output = vec![0u16; capacity as usize];
+        // SAFETY: both buffers are NUL-terminated UTF-16 buffers owned by us;
+        // the Windows API writes at most `capacity` UTF-16 code units.
+        let length = unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetLongPathNameW(
+                input.as_ptr(),
+                output.as_mut_ptr(),
+                capacity,
+            )
+        };
+        if length == 0 {
+            return None;
+        }
+        if length < capacity {
+            output.truncate(length as usize);
+            return Some(PathBuf::from(OsString::from_wide(&output)));
+        }
+        capacity = length.saturating_add(1);
+        if capacity <= length {
+            return None;
+        }
+    }
 }
 
 fn file_url_path(path: &Path) -> Option<PathBuf> {
