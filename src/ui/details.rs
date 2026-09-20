@@ -1,4 +1,7 @@
-use super::{results::icon_to_image, ContextActionRow, DetailBlock, Launcher};
+use super::{
+    results::{icon_to_image, static_icon_kind},
+    ContextActionRow, DetailBlock, Launcher,
+};
 use crate::{
     icon_service::IconService,
     result::{DetailBlock as ResultDetailBlock, DetailView, SearchResult},
@@ -87,7 +90,6 @@ pub(super) fn set_detail_view(
         window.set_detail_subtitle(view.subtitle.clone().into());
         window.set_detail_source(view.source.clone().into());
         window.set_detail_panel_preferred_width(view.preferred_width.unwrap_or(0));
-        window.set_detail_panel_minimum_height(view.minimum_height.unwrap_or(0));
         window.set_detail_panel_scrollable(view.scrollable);
         window.set_detail_blocks(detail_blocks_model(view, icon_service));
         window.set_detail_actions(detail_actions_model(view, icon_service));
@@ -96,7 +98,6 @@ pub(super) fn set_detail_view(
         window.set_detail_subtitle(String::new().into());
         window.set_detail_source(String::new().into());
         window.set_detail_panel_preferred_width(0);
-        window.set_detail_panel_minimum_height(0);
         window.set_detail_panel_scrollable(false);
         window.set_detail_blocks(ModelRc::from(Rc::new(VecModel::from(
             Vec::<DetailBlock>::new(),
@@ -137,7 +138,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 color: color.clone().into(),
                 icon: icon
                     .as_ref()
-                    .and_then(|icon| icon_service.resolve_spec(icon))
+                    .and_then(|icon| icon_service.resolve_spec_at(icon, 40))
                     .map(|icon| icon_to_image(icon.as_ref()))
                     .unwrap_or_default(),
             },
@@ -176,9 +177,11 @@ fn detail_actions_model(
             icon: action
                 .icon
                 .as_ref()
-                .and_then(|icon| icon_service.resolve_spec(icon))
+                .filter(|icon| static_icon_kind(Some(icon)).is_empty())
+                .and_then(|icon| icon_service.resolve_spec_at(icon, 16))
                 .map(|icon| icon_to_image(icon.as_ref()))
                 .unwrap_or_default(),
+            icon_kind: static_icon_kind(action.icon.as_ref()).into(),
         })
         .collect::<Vec<_>>();
     ModelRc::from(Rc::new(VecModel::from(actions)))

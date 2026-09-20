@@ -35,7 +35,7 @@ pub(super) fn configured(
 ) -> Option<SearchResult> {
     let argument = query.resolve_argument(&shortcut.prefix);
     let preview = argument.explicit && argument.value.is_empty();
-    let command = if shortcut.prefix == COMMAND_PREFIX {
+    let command = if shortcut.prefix.trim_end() == COMMAND_PREFIX.trim_end() {
         argument.value.to_owned()
     } else {
         join_command_and_arguments(
@@ -96,6 +96,13 @@ mod tests {
         let preview = builtin(query("> ")).expect("command preview");
         assert_eq!(preview.title, "Execute Command");
         assert!(preview.actions.is_empty());
+    }
+
+    #[test]
+    fn prefix_matching_does_not_add_a_separator_requirement() {
+        let compact = super::super::shortcut_argument(">ipconfig", ">")
+            .expect("prefix should be matched literally");
+        assert_eq!(compact, "ipconfig");
     }
 
     #[test]

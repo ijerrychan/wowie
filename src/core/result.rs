@@ -57,6 +57,15 @@ pub struct SearchResult {
     pub ranking_bias: i32,
 }
 
+/// Whether a result participates in shortcut-specific intent and UI rules.
+///
+/// The result category identifies shortcut-shaped results, while a detail-only
+/// result such as Weather must remain an ordinary searchable result even if it
+/// is generated dynamically.
+pub fn is_action_shortcut(item: &SearchResult) -> bool {
+    item.category == ResultCategory::Shortcut && (item.detail.is_none() || !item.actions.is_empty())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetailView {
     pub title: String,
@@ -65,10 +74,6 @@ pub struct DetailView {
     pub actions: Vec<DetailAction>,
     pub source: String,
     pub preferred_width: Option<i32>,
-    /// Optional lower bound for the detail card's content height, in logical
-    /// pixels. This is deliberately a minimum rather than a fixed height so
-    /// the surrounding result list keeps its own natural size.
-    pub minimum_height: Option<i32>,
     pub scrollable: bool,
 }
 

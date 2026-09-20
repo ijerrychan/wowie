@@ -1,7 +1,7 @@
 use super::{Launcher, ResultRow};
 use crate::{
     icon_service::IconService,
-    result::{ResultCategory, SearchResult},
+    result::{is_action_shortcut, IconSpec, ResultCategory, SearchResult},
 };
 use slint::Model;
 use std::{
@@ -18,12 +18,15 @@ pub(super) struct ResultRowPayload {
     location: String,
     location_kind: String,
     icon: Option<crate::platform::IconData>,
-    category: String,
+    icon_kind: String,
+    shortcut_prefix: String,
+    shortcut_prefix_width: i32,
 }
 
 impl ResultRowPayload {
-    pub(super) fn from(item: &SearchResult, show_advanced_details: bool) -> Self {
+    pub(super) fn from(item: &SearchResult, show_advanced_details: bool, query: &str) -> Self {
         let location = display_location(item, show_advanced_details);
+        let shortcut_prefix = shortcut_prefix(item, query);
         Self {
             id: item.id.clone(),
             title: item.title.clone(),
@@ -35,20 +38,82 @@ impl ResultRowPayload {
             }
             .into(),
             icon: None,
-            category: match item.category {
-                ResultCategory::Game => "game",
-                ResultCategory::Application => "application",
-                ResultCategory::Website => "website",
-                ResultCategory::Shortcut => "shortcut",
-                ResultCategory::Calculator => "calculator",
-                ResultCategory::ControlPanel => "control-panel",
-                ResultCategory::Document => "document",
-                ResultCategory::Other => "other",
-                ResultCategory::Unclassified => "application",
-            }
-            .into(),
+            icon_kind: static_icon_kind(item.icon.as_ref()).into(),
+            shortcut_prefix_width: shortcut_prefix_width(&shortcut_prefix),
+            shortcut_prefix,
         }
     }
+}
+
+pub(super) fn static_icon_kind(icon: Option<&IconSpec>) -> &'static str {
+    match icon {
+        Some(IconSpec::Weather) => "weather",
+        Some(IconSpec::Calculator) => "calculator",
+        Some(IconSpec::Named(name)) => match name.as_str() {
+            "book" | "wowie" => "book",
+            "checklist" => "checklist",
+            "folder-open" => "folder-open",
+            "shield-account" => "shield-account",
+            "weather" => "weather",
+            "calculator" => "calculator",
+            _ => "",
+        },
+        _ => "",
+    }
+}
+
+fn shortcut_prefix(item: &SearchResult, query: &str) -> String {
+    if !is_action_shortcut(item) {
+        return String::new();
+    }
+    let query_prefix = query.trim_start().split_whitespace().next();
+    item.aliases
+        .iter()
+        .find_map(|alias| {
+            let prefix = alias.split_whitespace().next()?;
+            query_prefix
+                .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
+                .then_some(prefix)
+        })
+        .or_else(|| {
+            item.aliases
+                .iter()
+                .find_map(|alias| alias.split_whitespace().next())
+        })
+        .or_else(|| query.trim_start().split_whitespace().next())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn shortcut_prefix_width(prefix: &str) -> i32 {
+    if prefix.is_empty() {
+        return 44;
+    }
+    (16 + prefix.chars().count() as i32 * 7).clamp(44, 120)
+}
+
+pub(super) fn isolate_shortcut_results(
+    query: &str,
+    results: &[SearchResult],
+) -> Option<Vec<SearchResult>> {
+    let mut parts = query.trim_start().splitn(2, char::is_whitespace);
+    let prefix = parts.next()?;
+    parts.next()?;
+
+    let matching = results
+        .iter()
+        .filter(|item| {
+            is_action_shortcut(item)
+                && item.aliases.iter().any(|alias| {
+                    alias
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
+                })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    (!matching.is_empty()).then_some(matching)
 }
 
 fn display_location(item: &SearchResult, show_advanced_details: bool) -> String {
@@ -115,7 +180,9 @@ pub(super) fn request_icons(
         }
         for index in start..end {
             if state.1.insert(index) {
-                pending.push((index, items[index].clone()));
+                if static_icon_kind(items[index].icon.as_ref()).is_empty() {
+                    pending.push((index, items[index].clone()));
+                }
             }
         }
     }
@@ -131,7 +198,7 @@ pub(super) fn request_icons(
             if query_generation.load(Ordering::Acquire) != query_id {
                 return;
             }
-            let Some(icon) = icon_service.resolve(&item) else {
+            let Some(icon) = icon_service.resolve_at(&item, 24) else {
                 continue;
             };
             resolved.push((index, icon));
@@ -176,7 +243,9 @@ impl From<ResultRowPayload> for ResultRow {
             location: payload.location.into(),
             location_kind: payload.location_kind.into(),
             icon,
-            category: payload.category.into(),
+            icon_kind: payload.icon_kind.into(),
+            shortcut_prefix: payload.shortcut_prefix.into(),
+            shortcut_prefix_width: payload.shortcut_prefix_width,
         }
     }
 }

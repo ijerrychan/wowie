@@ -36,7 +36,7 @@ impl PlatformIntegration for UnsupportedPlatform {
         }
     }
 
-    fn position_palette(&self, _window: &slint::Window) {}
+    fn position_palette(&self, _window: &slint::Window, _result_mode: bool, _result_height: f32) {}
     fn position_context_menu(&self, _window: &slint::Window) {}
     fn activate_context_menu(&self, _window: &slint::Window) {}
     fn is_window_focused(&self, _window: &slint::Window) -> bool {

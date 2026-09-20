@@ -848,14 +848,15 @@ impl PlatformIntegration for WindowsPlatform {
         tray::start(exit_label)
     }
 
-    fn position_palette(&self, window: &slint::Window) {
+    fn position_palette(&self, window: &slint::Window, result_mode: bool, result_height: f32) {
         let size = window.size();
         let scale = window.scale_factor();
-        let window_width = (size.width as f32 * scale).round() as i32;
-        // Keep the search field at a stable screen position even though the
-        // compact palette changes its native window height with the result set.
-        const PALETTE_ANCHOR_HEIGHT: f32 = 538.0;
-        const PALETTE_VERTICAL_OFFSET: f32 = 160.0;
+        let window_width = size.width as i32;
+        let window_height = if result_mode {
+            size.height as i32
+        } else {
+            (result_height * scale).round() as i32
+        };
         use windows_sys::Win32::Graphics::Gdi::{
             GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
         };
@@ -882,8 +883,7 @@ impl PlatformIntegration for WindowsPlatform {
             };
         window.set_position(slint::PhysicalPosition::new(
             left + ((right - left - window_width).max(0)) / 2,
-            top + (((bottom - top) as f32 - PALETTE_ANCHOR_HEIGHT * scale).max(0.0) / 3.0
-                + PALETTE_VERTICAL_OFFSET * scale) as i32,
+            top + ((bottom - top - window_height).max(0)) / 2,
         ));
     }
 

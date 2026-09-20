@@ -279,7 +279,7 @@ pub trait PlatformIntegration: Send + Sync {
     fn start_tray(&self, exit_label: String) -> TrayRegistration;
     fn system_prefers_dark_theme(&self) -> bool;
     fn system_accent_color(&self) -> u32;
-    fn position_palette(&self, window: &slint::Window);
+    fn position_palette(&self, window: &slint::Window, result_mode: bool, result_height: f32);
     fn position_context_menu(&self, window: &slint::Window);
     fn activate_context_menu(&self, window: &slint::Window);
     fn is_window_focused(&self, window: &slint::Window) -> bool;

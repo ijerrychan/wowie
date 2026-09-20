@@ -10,11 +10,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-// Result rows render icons at 24px. Keep up to a 2x source for HiDPI displays,
-// but never enlarge a low-resolution icon before it reaches the renderer.
-const MAX_ICON_DIMENSION: u32 = 64;
+// Keep decoded raster icons bounded, while rendering vector icons at the size
+// requested by their UI surface.
+const MAX_ICON_DIMENSION: u32 = 128;
 const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
-const ICON_SIZE: u32 = 64;
+const DEFAULT_ICON_SIZE: u32 = 24;
 const MAX_CACHED_ICON_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Default)]
@@ -43,12 +43,22 @@ impl IconService {
     /// Resolve an icon off the UI thread and reuse successful lookups. Failed
     /// lookups are not retained because they carry no pixel data and would
     /// otherwise bypass the byte-based cache bound.
-    pub fn resolve(&self, item: &SearchResult) -> Option<Arc<IconData>> {
-        self.resolve_cached(icon_source_key(item), || resolve_uncached(item))
+    pub fn resolve_at(&self, item: &SearchResult, size: u32) -> Option<Arc<IconData>> {
+        let size = normalize_icon_size(size);
+        self.resolve_cached(format!("{}@{size}", icon_source_key(item)), || {
+            resolve_uncached(item, size)
+        })
     }
 
     pub fn resolve_spec(&self, spec: &IconSpec) -> Option<Arc<IconData>> {
-        self.resolve_cached(icon_spec_key(spec), || resolve_spec(spec))
+        self.resolve_spec_at(spec, DEFAULT_ICON_SIZE)
+    }
+
+    pub fn resolve_spec_at(&self, spec: &IconSpec, size: u32) -> Option<Arc<IconData>> {
+        let size = normalize_icon_size(size);
+        self.resolve_cached(format!("{}@{size}", icon_spec_key(spec)), || {
+            resolve_spec(spec, size)
+        })
     }
 
     fn resolve_cached<F>(&self, key: String, resolve: F) -> Option<Arc<IconData>>
@@ -107,8 +117,8 @@ fn icon_bytes(icon: &IconData) -> usize {
     icon.rgba.len()
 }
 
-fn resolve_uncached(item: &SearchResult) -> Option<IconData> {
-    if let Some(icon) = item.icon.as_ref().and_then(resolve_spec) {
+fn resolve_uncached(item: &SearchResult, size: u32) -> Option<IconData> {
+    if let Some(icon) = item.icon.as_ref().and_then(|spec| resolve_spec(spec, size)) {
         return Some(icon);
     }
 
@@ -117,7 +127,7 @@ fn resolve_uncached(item: &SearchResult) -> Option<IconData> {
         .unwrap_or(&item.launch_target);
 
     if matches!(item.source, crate::platform::SourceId::Shortcut) {
-        if let Some(icon) = fetch_favicon(&item.launch_target) {
+        if let Some(icon) = fetch_favicon(&item.launch_target, size) {
             return Some(icon);
         }
     }
@@ -149,18 +159,17 @@ fn application_icon_with_path_lookup(target: &Path) -> Option<IconData> {
     })
 }
 
-fn fetch_favicon(target: &Path) -> Option<IconData> {
+fn fetch_favicon(target: &Path, size: u32) -> Option<IconData> {
     let origin = favicon_origin(target)?;
     let favicon = format!("{origin}/favicon.ico");
     let bytes = crate::utils::http::get_bytes(&favicon, 1_048_576).ok()?;
-    decode_image(&bytes)
+    decode_image(&bytes, size)
 }
 
-fn decode_image(bytes: &[u8]) -> Option<IconData> {
+fn decode_image(bytes: &[u8], size: u32) -> Option<IconData> {
     let image = image::load_from_memory(bytes).ok()?;
-    let image = image
-        .thumbnail(MAX_ICON_DIMENSION, MAX_ICON_DIMENSION)
-        .to_rgba8();
+    let size = normalize_icon_size(size).min(MAX_ICON_DIMENSION);
+    let image = image.thumbnail(size, size).to_rgba8();
     let (width, height) = image.dimensions();
     Some(IconData {
         width,
@@ -169,10 +178,12 @@ fn decode_image(bytes: &[u8]) -> Option<IconData> {
     })
 }
 
-fn resolve_spec(spec: &IconSpec) -> Option<IconData> {
+fn resolve_spec(spec: &IconSpec, size: u32) -> Option<IconData> {
     match spec {
-        IconSpec::Weather => load_svg_bytes(include_bytes!("../../assets/icons/weather.svg")),
-        IconSpec::Calculator => load_svg_bytes(include_bytes!("../../assets/icons/calculator.svg")),
+        IconSpec::Weather => load_svg_bytes(include_bytes!("../../assets/icons/weather.svg"), size),
+        IconSpec::Calculator => {
+            load_svg_bytes(include_bytes!("../../assets/icons/calculator.svg"), size)
+        }
         IconSpec::System(target) => crate::platform::application_icon(target),
         IconSpec::SystemIndexed { path, index } => {
             crate::platform::indexed_application_icon(path, *index)
@@ -180,29 +191,39 @@ fn resolve_spec(spec: &IconSpec) -> Option<IconData> {
         IconSpec::DefaultOpen(target) => crate::platform::default_open_icon(target),
         IconSpec::Resource(path) => match path.extension().and_then(|extension| extension.to_str())
         {
-            Some(extension) if extension.eq_ignore_ascii_case("svg") => load_svg_icon(path),
-            _ => load_png_icon(path),
+            Some(extension) if extension.eq_ignore_ascii_case("svg") => load_svg_icon(path, size),
+            _ => load_png_icon(path, size),
         },
-        IconSpec::Named(name) => named_icon(name),
+        IconSpec::Named(name) => named_icon(name, size),
     }
 }
 
-fn named_icon(name: &str) -> Option<IconData> {
+fn named_icon(name: &str, size: u32) -> Option<IconData> {
     match name {
-        "weather" => load_svg_bytes(include_bytes!("../../assets/icons/weather.svg")),
-        "calculator" => load_svg_bytes(include_bytes!("../../assets/icons/calculator.svg")),
-        "book" | "wowie" => load_svg_bytes(include_bytes!("../../assets/icons/book-open.svg")),
-        "checklist" => load_svg_bytes(include_bytes!("../../assets/icons/list-checks.svg")),
+        "weather" => load_svg_bytes(include_bytes!("../../assets/icons/weather.svg"), size),
+        "calculator" => load_svg_bytes(include_bytes!("../../assets/icons/calculator.svg"), size),
+        "book" | "wowie" => {
+            load_svg_bytes(include_bytes!("../../assets/icons/book-open.svg"), size)
+        }
+        "checklist" => load_svg_bytes(include_bytes!("../../assets/icons/list-checks.svg"), size),
+        "folder-open" => load_svg_bytes(
+            include_bytes!("../../assets/icons/folder-open-outline.svg"),
+            size,
+        ),
+        "shield-account" => load_svg_bytes(
+            include_bytes!("../../assets/icons/shield-account-outline.svg"),
+            size,
+        ),
         _ => None,
     }
 }
 
-fn load_png_icon(path: &Path) -> Option<IconData> {
-    decode_image(&read_icon_bytes(path)?)
+fn load_png_icon(path: &Path, size: u32) -> Option<IconData> {
+    decode_image(&read_icon_bytes(path)?, size)
 }
 
-fn load_svg_icon(path: &Path) -> Option<IconData> {
-    load_svg_bytes(&read_icon_bytes(path)?)
+fn load_svg_icon(path: &Path, size: u32) -> Option<IconData> {
+    load_svg_bytes(&read_icon_bytes(path)?, size)
 }
 
 fn read_icon_bytes(path: &Path) -> Option<Vec<u8>> {
@@ -212,25 +233,30 @@ fn read_icon_bytes(path: &Path) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
 }
 
-fn load_svg_bytes(bytes: &[u8]) -> Option<IconData> {
+fn load_svg_bytes(bytes: &[u8], size: u32) -> Option<IconData> {
     let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?;
     let source = tree.size();
-    let scale = (ICON_SIZE as f32 / source.width()).min(ICON_SIZE as f32 / source.height());
+    let size = normalize_icon_size(size);
+    let scale = (size as f32 / source.width()).min(size as f32 / source.height());
     let width = (source.width() * scale).round().max(1.0) as u32;
     let height = (source.height() * scale).round().max(1.0) as u32;
-    let mut pixmap = tiny_skia::Pixmap::new(ICON_SIZE, ICON_SIZE)?;
-    let offset_x = (ICON_SIZE - width) as f32 / 2.0;
-    let offset_y = (ICON_SIZE - height) as f32 / 2.0;
+    let mut pixmap = tiny_skia::Pixmap::new(size, size)?;
+    let offset_x = (size - width) as f32 / 2.0;
+    let offset_y = (size - height) as f32 / 2.0;
     resvg::render(
         &tree,
         tiny_skia::Transform::from_scale(scale, scale).post_translate(offset_x, offset_y),
         &mut pixmap.as_mut(),
     );
     Some(IconData {
-        width: ICON_SIZE,
-        height: ICON_SIZE,
+        width: size,
+        height: size,
         rgba: pixmap.take(),
     })
+}
+
+fn normalize_icon_size(size: u32) -> u32 {
+    size.clamp(1, MAX_ICON_DIMENSION)
 }
 
 fn icon_source_key(item: &SearchResult) -> String {
@@ -337,15 +363,15 @@ mod tests {
     #[test]
     fn named_plugin_icons_are_resolvable() {
         for name in ["book", "checklist", "wowie"] {
-            assert!(resolve_spec(&IconSpec::Named(name.into())).is_some());
+            assert!(resolve_spec(&IconSpec::Named(name.into()), DEFAULT_ICON_SIZE).is_some());
         }
     }
 
     #[test]
     fn bundled_svg_icons_render_to_icon_data() {
         for spec in [IconSpec::Calculator, IconSpec::Weather] {
-            let icon = resolve_spec(&spec).unwrap();
-            assert_eq!((icon.width, icon.height), (64, 64));
+            let icon = resolve_spec(&spec, 40).unwrap();
+            assert_eq!((icon.width, icon.height), (40, 40));
             assert!(icon.rgba.iter().any(|channel| *channel != 0));
         }
     }
@@ -360,6 +386,25 @@ mod tests {
             .resolve_spec(&IconSpec::Calculator)
             .expect("cached icon");
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn service_keeps_size_specific_icon_results() {
+        let service = IconService::new();
+        let small = service
+            .resolve_spec_at(&IconSpec::Calculator, 16)
+            .expect("small icon");
+        let large = service
+            .resolve_spec_at(&IconSpec::Calculator, 40)
+            .expect("large icon");
+        let small_again = service
+            .resolve_spec_at(&IconSpec::Calculator, 16)
+            .expect("cached small icon");
+
+        assert_eq!((small.width, small.height), (16, 16));
+        assert_eq!((large.width, large.height), (40, 40));
+        assert!(Arc::ptr_eq(&small, &small_again));
+        assert!(!Arc::ptr_eq(&small, &large));
     }
 
     #[test]

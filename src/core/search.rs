@@ -258,7 +258,7 @@ struct RankKey {
 /// Explicit shortcut syntax expresses direct intent. An unprefixed shortcut
 /// is only a fallback and must not outrank ordinary indexed results.
 fn intent_priority(item: &SearchResult, query: &str) -> u8 {
-    if item.category != crate::result::ResultCategory::Shortcut {
+    if !crate::result::is_action_shortcut(item) {
         return 1;
     }
     if item

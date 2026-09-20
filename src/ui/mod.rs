@@ -18,7 +18,7 @@ use crate::{
 use actions::context_actions;
 use anyhow::Result;
 use details::{request_dynamic_detail, request_dynamic_detail_with_id, set_detail_view};
-use results::{request_icons, ResultRowPayload};
+use results::{isolate_shortcut_results, request_icons, static_icon_kind, ResultRowPayload};
 use slint::{ComponentHandle, Model, ModelRc, Timer, VecModel};
 use std::{
     collections::HashSet,
@@ -30,7 +30,7 @@ use std::{
     },
     time::Duration,
 };
-use window::{create_window, hide_context_menu, toggle_palette};
+use window::{create_window, hide_context_menu, save_window_size, toggle_palette};
 
 pub fn run() -> Result<()> {
     #[cfg(not(debug_assertions))]
@@ -96,6 +96,7 @@ pub fn run() -> Result<()> {
 
     window.set_results(ModelRc::from(results.clone()));
     window.set_window_width(config.window_width as i32);
+    window.set_result_window_height(config.window_height as f32);
     window.set_dark_mode(dark_mode);
     let accent = platform.system_accent_color();
     window.set_accent_color(slint::Color::from_rgb_u8(
@@ -109,7 +110,7 @@ pub fn run() -> Result<()> {
         ((accent >> 8) & 0xff) as u8,
         (accent & 0xff) as u8,
     ));
-    window.set_result_count(0);
+    window.set_search_icon(slint::Image::default());
     window.set_launch_error(String::new().into());
     context_window.set_dark_mode(dark_mode);
     context_window.set_accent_color(slint::Color::from_rgb_u8(
@@ -203,6 +204,26 @@ pub fn run() -> Result<()> {
                 *current = query.to_string();
             }
             if let Some(window) = weak.upgrade() {
+                let native_window = window.window();
+                let current_height = native_window
+                    .size()
+                    .to_logical(native_window.scale_factor())
+                    .height;
+                let result_height = if current_height >= config::MIN_WINDOW_HEIGHT as f32 {
+                    current_height
+                } else {
+                    window
+                        .get_result_window_height()
+                        .max(config::MIN_WINDOW_HEIGHT as f32)
+                };
+                window.set_result_window_height(result_height);
+                if !query.trim().is_empty() {
+                    let logical_size = native_window
+                        .size()
+                        .to_logical(native_window.scale_factor());
+                    native_window
+                        .set_size(slint::LogicalSize::new(logical_size.width, result_height));
+                }
                 window.set_last_action_id(String::new().into());
                 window.set_last_action_result(String::new().into());
                 window.set_last_action_subtitle(String::new().into());
@@ -226,12 +247,25 @@ pub fn run() -> Result<()> {
                 } else {
                     engine.search(query.as_str())
                 };
+                let shortcut_results = isolate_shortcut_results(query.as_str(), &found);
+                let shortcut_icon = shortcut_results
+                    .as_ref()
+                    .and_then(|results| results.first())
+                    .filter(|item| static_icon_kind(item.icon.as_ref()).is_empty())
+                    .and_then(|item| icon_service.resolve_at(item, 20));
+                let shortcut_icon_kind = shortcut_results
+                    .as_ref()
+                    .and_then(|results| results.first())
+                    .map(|item| static_icon_kind(item.icon.as_ref()).to_owned())
+                    .unwrap_or_default();
+                let found = shortcut_results.unwrap_or(found);
                 let rows = found
                     .iter()
                     .map(|item| {
                         ResultRowPayload::from(
                             item,
                             show_advanced_details_for_query.load(Ordering::Acquire),
+                            query.as_str(),
                         )
                     })
                     .collect::<Vec<_>>();
@@ -254,7 +288,13 @@ pub fn run() -> Result<()> {
                         ));
                         let count = model.row_count();
                         window.set_results(ModelRc::from(model));
-                        window.set_result_count(count as i32);
+                        window.set_search_icon(
+                            shortcut_icon
+                                .as_ref()
+                                .map(|icon| results::icon_to_image(icon.as_ref()))
+                                .unwrap_or_default(),
+                        );
+                        window.set_search_icon_kind(shortcut_icon_kind.into());
                         let cached_detail = found_for_icons
                             .first()
                             .and_then(|item| detail_registry_for_query.provider_for(item))
@@ -339,7 +379,7 @@ pub fn run() -> Result<()> {
                     .and_then(|row| engine.by_id(row.id.as_str()))
             });
             if let Some(item) = item {
-                if item.category == ResultCategory::Shortcut && item.actions.is_empty() {
+                if item.actions.is_empty() && item.detail.is_some() {
                     return;
                 }
                 if matches!(item.actions.first(), Some(result::Action::Plugin { .. })) {
@@ -679,12 +719,25 @@ pub fn run() -> Result<()> {
                     } else {
                         engine.search(&query)
                     };
+                    let shortcut_results = isolate_shortcut_results(&query, &found);
+                    let shortcut_icon = shortcut_results
+                        .as_ref()
+                        .and_then(|results| results.first())
+                        .filter(|item| static_icon_kind(item.icon.as_ref()).is_empty())
+                        .and_then(|item| icon_service.resolve_at(item, 20));
+                    let shortcut_icon_kind = shortcut_results
+                        .as_ref()
+                        .and_then(|results| results.first())
+                        .map(|item| static_icon_kind(item.icon.as_ref()).to_owned())
+                        .unwrap_or_default();
+                    let found = shortcut_results.unwrap_or(found);
                     let rows = found
                         .iter()
                         .map(|item| {
                             ResultRowPayload::from(
                                 item,
                                 show_advanced_details.load(Ordering::Acquire),
+                                &query,
                             )
                         })
                         .collect::<Vec<_>>();
@@ -713,7 +766,13 @@ pub fn run() -> Result<()> {
                             ));
                             let count = model.row_count();
                             window.set_results(ModelRc::from(model));
-                            window.set_result_count(count as i32);
+                            window.set_search_icon(
+                                shortcut_icon
+                                    .as_ref()
+                                    .map(|icon| results::icon_to_image(icon.as_ref()))
+                                    .unwrap_or_default(),
+                            );
+                            window.set_search_icon_kind(shortcut_icon_kind.into());
                             set_detail_view(&window, first_detail.as_ref(), &icon_service_for_ui);
                             window.set_detail_panel_visible(detail_panel);
                             window.set_selected_index(-1);
@@ -798,9 +857,19 @@ pub fn run() -> Result<()> {
     if config.show_on_startup {
         platform.disable_window_transitions(window.window());
         window.show()?;
-        platform.position_palette(window.window());
-        platform.activate_palette(window.window());
         visible.store(true, Ordering::Release);
+        let weak = window.as_weak();
+        let platform = Arc::clone(&platform);
+        Timer::single_shot(Duration::from_millis(10), move || {
+            if let Some(window) = weak.upgrade() {
+                platform.position_palette(
+                    window.window(),
+                    window.get_result_mode(),
+                    window.get_result_window_height(),
+                );
+                platform.activate_palette(window.window());
+            }
+        });
     }
 
     let (platform_event_sender, platform_event_receiver) = std::sync::mpsc::channel();
@@ -865,6 +934,7 @@ pub fn run() -> Result<()> {
                 platform::PlatformEvent::SystemThemeChanged => {}
                 platform::PlatformEvent::Quit => {
                     if let Some(window) = weak.upgrade() {
+                        save_window_size(&window);
                         let _ = window.hide();
                     }
                     let _ = slint::quit_event_loop();

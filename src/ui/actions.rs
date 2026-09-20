@@ -1,4 +1,7 @@
-use super::{results::icon_to_image, ContextActionRow};
+use super::{
+    results::{icon_to_image, static_icon_kind},
+    ContextActionRow,
+};
 use crate::{
     icon_service::IconService,
     result::{self, SearchResult},
@@ -19,6 +22,7 @@ pub(super) fn context_actions(
             subtitle: "".into(),
             kind: "common".into(),
             icon: slint::Image::default(),
+            icon_kind: "folder-open".into(),
         });
     }
     if is_filesystem_target || is_store_shell_target {
@@ -28,6 +32,7 @@ pub(super) fn context_actions(
             subtitle: "".into(),
             kind: "common".into(),
             icon: slint::Image::default(),
+            icon_kind: "shield-account".into(),
         });
     }
     for action in &item.actions {
@@ -35,6 +40,7 @@ pub(super) fn context_actions(
             action_id, icon, ..
         } = action
         {
+            let icon_kind = static_icon_kind(icon.as_ref()).to_owned();
             actions.push(ContextActionRow {
                 id: format!("plugin-action:{action_id}").into(),
                 title: action_id.clone().into(),
@@ -42,9 +48,11 @@ pub(super) fn context_actions(
                 kind: "plugin".into(),
                 icon: icon
                     .as_ref()
-                    .and_then(|icon| icon_service.resolve_spec(icon))
+                    .filter(|_| icon_kind.is_empty())
+                    .and_then(|icon| icon_service.resolve_spec_at(icon, 16))
                     .map(|icon| icon_to_image(icon.as_ref()))
                     .unwrap_or_default(),
+                icon_kind: icon_kind.into(),
             });
         }
     }
@@ -59,6 +67,7 @@ pub(super) fn context_actions(
             subtitle: "".into(),
             kind: "section".into(),
             icon: slint::Image::default(),
+            icon_kind: "".into(),
         });
         for (index, entry) in other_launches {
             actions.push(ContextActionRow {
@@ -67,6 +76,7 @@ pub(super) fn context_actions(
                 subtitle: "".into(),
                 kind: "launch".into(),
                 icon: slint::Image::default(),
+                icon_kind: "".into(),
             });
         }
     }

@@ -2,9 +2,12 @@ Bundled SVG icons are sourced from Iconify.
 
 - flat-color-icons:calculator, flat-color-icons:reading, and flat-color-icons:todo-list
 - fluent-emoji-flat:sun-behind-small-cloud
+- mdi:folder-open-outline and mdi:shield-account-outline
 
 Iconify source: https://iconify.design/
 Both source icon sets are licensed under the MIT License.
+
+Material Design Icons are licensed under Apache 2.0.
 
 Flat Color Icons: https://github.com/icons8/flat-color-icons
 Fluent Emoji: https://github.com/microsoft/fluentui-emoji

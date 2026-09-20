@@ -26,6 +26,23 @@ pub(super) fn create_window(config: &config::Config) -> Result<Launcher> {
     }
 }
 
+pub(super) fn save_window_size(window: &Launcher) {
+    let (mut config, _) = config::Config::load();
+    let native_window = window.window();
+    let logical_size = native_window
+        .size()
+        .to_logical(native_window.scale_factor());
+    config.window_width = logical_size.width.round().max(0.0) as u32;
+    config.window_height = if window.get_result_mode() {
+        logical_size.height.round().max(0.0) as u32
+    } else {
+        window.get_result_window_height().round().max(0.0) as u32
+    };
+    if let Err(error) = config.save() {
+        eprintln!("could not save window size: {error:#}");
+    }
+}
+
 fn select_renderer(renderer: &str) -> Result<()> {
     let renderer = match renderer {
         // Keep the old config value working while selecting the explicit
@@ -37,6 +54,7 @@ fn select_renderer(renderer: &str) -> Result<()> {
         .with_winit_window_attributes_hook(|attributes| {
             attributes
                 .with_visible(false)
+                .with_resizable(true)
                 .with_window_icon(launcher_window_icon())
         })
         .renderer_name(renderer.into())
@@ -66,7 +84,11 @@ pub(super) fn toggle_palette(
         let weak = window.as_weak();
         Timer::single_shot(Duration::from_millis(10), move || {
             if let Some(window) = weak.upgrade() {
-                platform.position_palette(window.window());
+                platform.position_palette(
+                    window.window(),
+                    window.get_result_mode(),
+                    window.get_result_window_height(),
+                );
                 platform.activate_palette(window.window());
                 window.window().request_redraw();
             }

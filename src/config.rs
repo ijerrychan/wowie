@@ -9,7 +9,9 @@ use std::{
 const DEFAULT_HOTKEY: &str = "Alt+Space";
 const DEFAULT_RENDERER: &str = "femtovg";
 const DEFAULT_WINDOW_WIDTH: u32 = 780;
+const DEFAULT_WINDOW_HEIGHT: u32 = 350;
 const MIN_WINDOW_WIDTH: u32 = 420;
+pub(crate) const MIN_WINDOW_HEIGHT: u32 = 350;
 const MAX_WINDOW_WIDTH: u32 = 1200;
 const DEFAULT_THEME: &str = "system";
 const DEFAULT_LANGUAGE: &str = "system";
@@ -20,6 +22,7 @@ pub struct Config {
     pub hotkey: String,
     pub renderer: String,
     pub window_width: u32,
+    pub window_height: u32,
     pub theme: String,
     pub language: String,
     pub show_on_startup: bool,
@@ -99,6 +102,7 @@ impl Default for Config {
             hotkey: DEFAULT_HOTKEY.into(),
             renderer: DEFAULT_RENDERER.into(),
             window_width: DEFAULT_WINDOW_WIDTH,
+            window_height: DEFAULT_WINDOW_HEIGHT,
             theme: DEFAULT_THEME.into(),
             language: DEFAULT_LANGUAGE.into(),
             show_on_startup: true,
@@ -108,7 +112,7 @@ impl Default for Config {
             fuzzy_search: true,
             shortcuts: vec![ShortcutConfig {
                 name: "Search with Google".into(),
-                prefix: "g".into(),
+                prefix: "g ".into(),
                 shortcut_type: "url".into(),
                 template: "https://www.google.com/search?q={query}".into(),
                 target: String::new(),
@@ -153,6 +157,7 @@ impl Config {
             self.renderer = DEFAULT_RENDERER.into();
         }
         self.window_width = self.window_width.clamp(MIN_WINDOW_WIDTH, MAX_WINDOW_WIDTH);
+        self.window_height = self.window_height.max(MIN_WINDOW_HEIGHT);
         if self.theme != "system" && self.theme != "light" && self.theme != "dark" {
             self.theme = DEFAULT_THEME.into();
         }
@@ -161,7 +166,7 @@ impl Config {
         }
         for shortcut in &mut self.shortcuts {
             shortcut.name = shortcut.name.trim().to_string();
-            shortcut.prefix = shortcut.prefix.trim().to_string();
+            shortcut.prefix = normalize_shortcut_prefix(&shortcut.prefix);
             shortcut.shortcut_type = shortcut.shortcut_type.trim().to_ascii_lowercase();
             if shortcut.shortcut_type.is_empty() {
                 shortcut.shortcut_type = "url".into();
@@ -230,6 +235,18 @@ impl Config {
     }
 }
 
+/// Shortcut prefixes are matched literally by the provider. Keep a trailing
+/// space in configured prefixes so a prefix such as `g` does not accidentally
+/// match the beginning of a regular word such as `git`.
+fn normalize_shortcut_prefix(prefix: &str) -> String {
+    let prefix = prefix.trim();
+    if prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{prefix} ")
+    }
+}
+
 pub fn config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -273,6 +290,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.hotkey, "Alt+Space");
         assert_eq!(config.renderer, "femtovg");
+        assert_eq!(config.window_height, DEFAULT_WINDOW_HEIGHT);
         assert!(config.show_on_startup);
         assert!(config.hide_on_focus_loss);
         assert!(!config.show_advanced_details);
@@ -281,7 +299,7 @@ mod tests {
         assert!(config
             .shortcuts
             .iter()
-            .any(|shortcut| { shortcut.prefix == "g" && shortcut.name == "Search with Google" }));
+            .any(|shortcut| { shortcut.prefix == "g " && shortcut.name == "Search with Google" }));
         assert!(config.providers.steam);
         assert!(config.providers.desktop);
         assert!(config.providers.indexed_directories.is_empty());
@@ -308,5 +326,22 @@ mod tests {
         let settings = config.plugins.get("github").unwrap();
         assert!(!settings.enabled);
         assert_eq!(settings.weight, 1000);
+    }
+
+    #[test]
+    fn shortcut_prefixes_are_normalized_with_one_trailing_space() {
+        let mut config = Config::default();
+        config.shortcuts = vec![ShortcutConfig {
+            name: "Search".into(),
+            prefix: "  g  ".into(),
+            shortcut_type: "url".into(),
+            template: "https://example.com/?q={query}".into(),
+            target: String::new(),
+            arguments: String::new(),
+        }];
+
+        config.normalize();
+
+        assert_eq!(config.shortcuts[0].prefix, "g ");
     }
 }

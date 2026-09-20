@@ -313,8 +313,6 @@ struct PluginDetailView {
     #[serde(default)]
     width: Option<PluginDetailWidth>,
     #[serde(default)]
-    height: Option<PluginDetailHeight>,
-    #[serde(default)]
     scrollable: bool,
 }
 
@@ -333,11 +331,6 @@ fn default_detail_min_width() -> i32 {
 
 fn default_detail_max_width() -> i32 {
     640
-}
-
-#[derive(Debug, Deserialize)]
-struct PluginDetailHeight {
-    min: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -556,7 +549,7 @@ impl PluginManager {
             .filter(|plugin| plugin.enabled.load(Ordering::Acquire))
             .flat_map(|plugin| {
                 let (plugin_query, command_id) = action_word_query(plugin, query);
-                match query_plugin(plugin, &plugin_query, &locale, command_id.as_deref()) {
+                match query_plugin(plugin, &plugin_query, &locale, command_id.as_deref(), query) {
                     Ok(items) => {
                         mark_success(plugin, "query");
                         items
@@ -653,6 +646,7 @@ fn query_plugin(
     query: &str,
     locale: &str,
     command_id: Option<&str>,
+    requested_query: &str,
 ) -> Result<Vec<SearchResult>> {
     let request_id = next_request_id("query");
     let request = serde_json::json!({
@@ -679,7 +673,7 @@ fn query_plugin(
     Ok(response
         .items
         .into_iter()
-        .map(|item| to_result(plugin, item, command_id))
+        .map(|item| to_result(plugin, item, command_id, requested_query))
         .collect())
 }
 
@@ -737,6 +731,7 @@ fn to_result(
     plugin: &InstalledPlugin,
     item: PluginItem,
     requested_command_id: Option<&str>,
+    requested_query: &str,
 ) -> SearchResult {
     let item_command_id = item.command_id.as_deref().or(requested_command_id);
     let command = item_command_id.and_then(|command_id| {
@@ -749,6 +744,10 @@ fn to_result(
     let command_keywords = command
         .map(|command| command.keywords.clone())
         .unwrap_or_default();
+    let command_action_words = command
+        .map(|command| command.action_words.clone())
+        .unwrap_or_default();
+    let command_query_alias = command.is_some().then(|| requested_query.to_owned());
     let icon = item
         .icon
         .or_else(|| command.and_then(|command| command.icon.clone()));
@@ -768,12 +767,18 @@ fn to_result(
         id: format!("plugin:{}:{}", plugin.manifest.id, item.id),
         identity: format!("plugin:{}:{}", plugin.manifest.id, item.id),
         title: item.title,
-        category: ResultCategory::Application,
+        category: if command.is_some() {
+            ResultCategory::Shortcut
+        } else {
+            ResultCategory::Application
+        },
         aliases: item
             .aliases
             .into_iter()
             .chain(plugin.manifest.keywords.clone())
             .chain(command_keywords)
+            .chain(command_action_words)
+            .chain(command_query_alias)
             .collect(),
         location: item.subtitle,
         launch_target: target,
@@ -867,7 +872,6 @@ fn to_detail_view(root: &Path, view: PluginDetailView) -> crate::result::DetailV
                 .preferred
                 .clamp(width.min.min(width.max), width.max.max(width.min))
         }),
-        minimum_height: view.height.map(|height| height.min.max(0)),
         scrollable: view.scrollable,
     }
 }
@@ -1088,7 +1092,6 @@ mod tests {
                     {"type":"text","text":"ignored","color":"invalid"}
                 ],
                 "actions":[{"id":"open","title":"Open"}]
-                ,"height":{"min":280}
             }"#,
         )
         .unwrap();
@@ -1096,7 +1099,6 @@ mod tests {
         assert_eq!(detail.title, "Repository");
         assert_eq!(detail.blocks.len(), 3);
         assert_eq!(detail.actions[0].title, "Open");
-        assert_eq!(detail.minimum_height, Some(280));
         assert!(matches!(
             detail.blocks[1],
             crate::result::DetailBlock::Weather { .. }

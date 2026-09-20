@@ -8,8 +8,6 @@
 mod application;
 #[path = "shortcut/command.rs"]
 mod command;
-#[path = "shortcut/weather.rs"]
-mod weather;
 #[path = "shortcut/web.rs"]
 mod web;
 
@@ -21,8 +19,8 @@ use crate::{
 };
 use std::path::PathBuf;
 
-pub(super) const COMMAND_PREFIX: &str = ">";
-pub(super) const WEB_PREFIX: &str = "w";
+pub(super) const COMMAND_PREFIX: &str = "> ";
+pub(super) const WEB_PREFIX: &str = "w ";
 
 /// The common query state shared by every shortcut implementation.
 #[derive(Clone, Copy)]
@@ -81,12 +79,20 @@ pub(super) struct ShortcutSpec {
 }
 
 pub(super) fn build_result(query: ShortcutQuery<'_>, spec: ShortcutSpec) -> SearchResult {
+    let icon = spec
+        .icon
+        .or_else(|| Some(IconSpec::System(spec.target.clone())));
     let title = if spec.preview {
         spec.name.clone()
     } else {
         format!("{} \"{}\"", spec.name, spec.display_argument)
     };
-    let mut aliases = vec![format!("{} {}", spec.prefix, spec.argument)];
+    let alias = if spec.prefix.ends_with(char::is_whitespace) {
+        format!("{}{}", spec.prefix, spec.argument)
+    } else {
+        format!("{} {}", spec.prefix, spec.argument)
+    };
+    let mut aliases = vec![alias];
     if spec.include_query_alias {
         aliases.push(query.text.to_owned());
     }
@@ -118,19 +124,19 @@ pub(super) fn build_result(query: ShortcutQuery<'_>, spec: ShortcutSpec) -> Sear
         launch_entries: Vec::new(),
         actions,
         detail: None,
-        icon: spec.icon,
+        icon,
         ranking_bias: 0,
     }
 }
 
 pub(super) fn result_id(index: usize, prefix: &str) -> String {
-    format!("shortcut:{index}:{prefix}")
+    format!("shortcut:{index}:{}", prefix.trim_end())
 }
 
 pub(super) fn effective_type(shortcut: &ShortcutConfig) -> &str {
-    match shortcut.prefix.as_str() {
-        COMMAND_PREFIX => "command",
-        WEB_PREFIX => "url",
+    match shortcut.prefix.trim_end() {
+        prefix if prefix == COMMAND_PREFIX.trim_end() => "command",
+        prefix if prefix == WEB_PREFIX.trim_end() => "url",
         _ => shortcut.shortcut_type.as_str(),
     }
 }
@@ -140,12 +146,6 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
     let Some(query) = ShortcutQuery::new(query, language) else {
         return Vec::new();
     };
-
-    // The shortcut owns the searchable preview; the matching detail provider
-    // performs the network request after the result is selected.
-    if weather::matches(query) {
-        return vec![weather::result(query.language)];
-    }
 
     let mut results = Vec::with_capacity(configured.len() + 2);
     if let Some(result) = command::builtin(query) {
@@ -218,9 +218,7 @@ impl DynamicProvider for ShortcutProvider {
 }
 
 pub(super) fn shortcut_argument<'a>(query: &'a str, prefix: &str) -> Option<&'a str> {
-    let rest = query.strip_prefix(prefix)?;
-    let trimmed = rest.trim_start();
-    (trimmed.len() < rest.len()).then_some(trimmed)
+    query.strip_prefix(prefix).map(str::trim_start)
 }
 
 pub(super) fn expand_url_template(template: &str, query: &str) -> String {

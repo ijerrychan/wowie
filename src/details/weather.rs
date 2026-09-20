@@ -173,7 +173,6 @@ pub fn detail_view(data: &WeatherData, language: &str) -> crate::result::DetailV
             },
         ],
         preferred_width: None,
-        minimum_height: Some(340),
         scrollable: false,
     }
 }
@@ -193,7 +192,6 @@ pub fn error_detail_view(language: &str) -> crate::result::DetailView {
             color: "secondary".into(),
         }],
         preferred_width: None,
-        minimum_height: None,
         scrollable: false,
     }
 }

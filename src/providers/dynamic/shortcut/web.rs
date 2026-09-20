@@ -43,7 +43,7 @@ fn render(
 ) -> Option<SearchResult> {
     let argument = query.resolve_argument(prefix);
     let preview = argument.explicit && argument.value.is_empty();
-    let is_builtin_web = prefix == WEB_PREFIX;
+    let is_builtin_web = prefix.trim_end() == WEB_PREFIX.trim_end();
     let web_target = if is_builtin_web {
         web_url(argument.value)
             .or_else(|| (argument.explicit && !preview).then(|| fallback_web_url(argument.value)))
