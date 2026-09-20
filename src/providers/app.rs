@@ -6,7 +6,12 @@
 //! by their resolved target.
 
 use crate::result::{IconSpec, ResultCategory, SearchResult};
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+    time::Instant,
+};
 
 #[cfg(test)]
 use crate::{
@@ -25,20 +30,20 @@ mod identity;
 
 use association::{
     associate_file_entries, dedup_launch_entries_by_behavior, merge_launch_entries,
-    refresh_application_location,
+    refresh_application_location, AssociationStats,
 };
 pub(crate) use association::{preferred_launch_entry, same_launch_behavior};
 use discovery::{
-    debug_records, discover_custom_directories, discover_desktop_source,
-    discover_start_menu_source, discover_store_source, expand_windows_variables, normalize_url,
-    website_url,
+    debug_enabled, debug_record_matches, debug_records, discover_custom_directories,
+    discover_desktop_source, discover_start_menu_source, discover_store_source,
+    expand_windows_variables, normalize_url, website_url,
 };
 #[cfg(test)]
 use discovery::{generic_file_result, is_website_shortcut, read_url_target};
 use identity::{
     apps_folder_identity, executable_identity, filesystem_target_key, looks_like_uri,
     merge_by_identity, normalize_path, packaged_identity_fields, same_filesystem_target,
-    shortcut_icon_target, source_priority, target_identity, target_stem_alias,
+    shortcut_icon_target, source_priority, target_identity, target_stem_alias, IdentityMergeStats,
 };
 
 pub struct AppProvider {
@@ -100,11 +105,7 @@ impl AppProvider {
     /// Populate the initial index. This is intentionally separate from
     /// construction so callers can run it on the provider worker thread.
     pub fn discover_initial(&mut self) {
-        self.sources = PROVIDER_DEFINITIONS
-            .into_iter()
-            .filter(|provider| (provider.enabled)(&self.config))
-            .map(|provider| (provider.source, (provider.discover)(&self.config)))
-            .collect();
+        self.sources = discover_sources(&self.config);
         self.items = Arc::new(merge_sources(&self.sources));
     }
 
@@ -121,7 +122,16 @@ impl AppProvider {
         else {
             return false;
         };
+        let started = Instant::now();
         let refreshed = (provider.discover)(&self.config);
+        if debug_enabled() {
+            eprintln!(
+                "[provider] discovery stats source={:?} records={} elapsed_ms={}",
+                source,
+                refreshed.len(),
+                started.elapsed().as_millis(),
+            );
+        }
         if self.sources.get(&source) == Some(&refreshed) {
             return false;
         }
@@ -134,11 +144,7 @@ impl AppProvider {
         if self.config == *config {
             return false;
         }
-        let sources = PROVIDER_DEFINITIONS
-            .into_iter()
-            .filter(|provider| (provider.enabled)(config))
-            .map(|provider| (provider.source, (provider.discover)(config)))
-            .collect();
+        let sources = discover_sources(config);
         self.config = config.clone();
         self.sources = sources;
         self.items = Arc::new(merge_sources(&self.sources));
@@ -156,17 +162,49 @@ impl AppProvider {
     }
 }
 
+fn discover_sources(
+    config: &crate::config::ProviderConfig,
+) -> HashMap<crate::platform::AppProviderSource, Vec<SearchResult>> {
+    let mut sources = HashMap::new();
+    for provider in PROVIDER_DEFINITIONS {
+        if !(provider.enabled)(config) {
+            continue;
+        }
+        let started = Instant::now();
+        let records = (provider.discover)(config);
+        if debug_enabled() {
+            eprintln!(
+                "[provider] discovery stats source={:?} records={} elapsed_ms={}",
+                provider.source,
+                records.len(),
+                started.elapsed().as_millis(),
+            );
+        }
+        sources.insert(provider.source, records);
+    }
+    sources
+}
+
 fn merge_sources(
     sources: &HashMap<crate::platform::AppProviderSource, Vec<SearchResult>>,
 ) -> Vec<SearchResult> {
+    let started = Instant::now();
     let mut items = Vec::new();
+    let source_counts = PROVIDER_DEFINITIONS
+        .iter()
+        .filter_map(|provider| {
+            sources
+                .get(&provider.source)
+                .map(|records| (provider.source, records.len()))
+        })
+        .collect::<Vec<_>>();
     for provider in PROVIDER_DEFINITIONS {
         if let Some(records) = sources.get(&provider.source) {
             items.extend(records.iter().cloned());
         }
     }
     debug_records("before file association", &items);
-    associate_file_entries(&mut items);
+    let association_stats = associate_file_entries(&mut items);
     debug_records("after file association", &items);
     items.sort_by_cached_key(|item| {
         (
@@ -176,10 +214,67 @@ fn merge_sources(
             item.location.clone(),
         )
     });
-    merge_by_identity(&mut items);
+    let identity_stats = merge_by_identity(&mut items);
     classify_unclassified_items(&mut items);
     debug_records("final merged records", &items);
+    log_index_stats(
+        &source_counts,
+        association_stats,
+        identity_stats,
+        &items,
+        started.elapsed(),
+    );
     items
+}
+
+fn log_index_stats(
+    source_counts: &[(crate::platform::AppProviderSource, usize)],
+    association: AssociationStats,
+    identity: IdentityMergeStats,
+    records: &[SearchResult],
+    elapsed: std::time::Duration,
+) {
+    if !debug_enabled() {
+        return;
+    }
+
+    let mut title_identities = HashMap::<String, HashSet<String>>::new();
+    for record in records {
+        let title = record.title.trim().to_lowercase();
+        if !title.is_empty() {
+            title_identities
+                .entry(title)
+                .or_default()
+                .insert(record.identity.clone());
+        }
+    }
+    let same_title_distinct_identities = title_identities
+        .values()
+        .filter(|identities| identities.len() > 1)
+        .count();
+    let missing_package_descriptions = records
+        .iter()
+        .filter(|record| {
+            record.source.is_store_application()
+                && record
+                    .description
+                    .as_deref()
+                    .is_none_or(|description| description.trim().is_empty())
+        })
+        .count();
+
+    eprintln!(
+        "[provider] index stats sources={:?} associated={} ambiguous_rejections={} identity_merges={} launch_entries_removed={} final_records={} missing_package_descriptions={} same_title_distinct_identities={} elapsed_ms={}",
+        source_counts,
+        association.associated,
+        association.ambiguous_rejections,
+        identity.merged_records,
+        identity.launch_entries_removed,
+        records.len(),
+        missing_package_descriptions,
+        same_title_distinct_identities,
+        elapsed.as_millis(),
+    );
 }
 
 fn classify_unclassified_items(items: &mut [SearchResult]) {
@@ -259,6 +354,140 @@ mod tests {
             icon: None,
             ranking_bias: 0,
         }
+    }
+
+    #[test]
+    fn merge_sources_runs_full_index_pipeline() {
+        use crate::platform::{PackageMetadata, SourceId};
+
+        fn launch(
+            source: SourceId,
+            path: &str,
+            target: &str,
+            arguments: &str,
+            working_directory: Option<&str>,
+        ) -> LaunchEntry {
+            LaunchEntry {
+                source,
+                path: PathBuf::from(path),
+                target: PathBuf::from(target),
+                arguments: arguments.into(),
+                working_directory: working_directory.map(PathBuf::from),
+            }
+        }
+
+        let editor_identity = "aumid:vendor.editor_abc!main";
+        let mut apps_folder = item(editor_identity, "Editor", source_ids::APPS_FOLDER);
+        apps_folder.category = ResultCategory::Unclassified;
+        apps_folder.description = Some("Code editor".into());
+        apps_folder.app_user_model_id = Some("vendor.editor_abc!main".into());
+        apps_folder.package_family_name = Some("vendor.editor_abc".into());
+        apps_folder.launch_target = PathBuf::from(r"shell:AppsFolder\vendor.editor_abc!main");
+        apps_folder.launch_entries = vec![launch(
+            SourceId::AppsFolder,
+            r"shell:AppsFolder\vendor.editor_abc!main",
+            r"C:\Apps\Editor.exe",
+            "",
+            None,
+        )];
+
+        let mut package = item(editor_identity, "Editor", source_ids::PACKAGE);
+        package.category = ResultCategory::Unclassified;
+        package.package_metadata = Some(PackageMetadata {
+            full_name: Some("Vendor.Editor_1.0.0.0_x64__abc".into()),
+            install_location: Some(PathBuf::from(r"C:\Program Files\WindowsApps\Vendor.Editor")),
+            identity_name: Some("Vendor.Editor".into()),
+        });
+
+        let mut conflicting_package = item(
+            "aumid:other.editor_xyz!main",
+            "Editor",
+            source_ids::APPS_FOLDER,
+        );
+        conflicting_package.category = ResultCategory::Unclassified;
+        conflicting_package.app_user_model_id = Some("other.editor_xyz!main".into());
+        conflicting_package.package_family_name = Some("other.editor_xyz".into());
+        conflicting_package.launch_entries = vec![launch(
+            SourceId::AppsFolder,
+            r"shell:AppsFolder\other.editor_xyz!main",
+            r"C:\Apps\Editor.exe",
+            "",
+            None,
+        )];
+
+        let mut start_menu = item("exe:c:\\apps\\editor.exe", "Editor", source_ids::START_MENU);
+        start_menu.category = ResultCategory::Unclassified;
+        start_menu.app_user_model_id = Some("vendor.editor_abc!main".into());
+        start_menu.package_family_name = Some("vendor.editor_abc".into());
+        start_menu.launch_entries = vec![launch(
+            SourceId::StartMenu,
+            r"C:\Users\Test\Start Menu\Editor.lnk",
+            r"C:\Apps\Editor.exe",
+            "--profile work",
+            None,
+        )];
+
+        let mut desktop = item("exe:c:\\apps\\editor.exe", "Editor", source_ids::DESKTOP);
+        desktop.category = ResultCategory::Unclassified;
+        desktop.app_user_model_id = Some("vendor.editor_abc!main".into());
+        desktop.package_family_name = Some("vendor.editor_abc".into());
+        desktop.launch_entries = vec![launch(
+            SourceId::Desktop,
+            r"C:\Users\Test\Desktop\Editor.lnk",
+            r"C:\Apps\Editor.exe",
+            "--profile default",
+            Some(r"C:\Apps"),
+        )];
+
+        let mut sources = HashMap::new();
+        sources.insert(
+            crate::platform::AppProviderSource::StoreApps,
+            vec![apps_folder, package, conflicting_package],
+        );
+        sources.insert(
+            crate::platform::AppProviderSource::StartMenu,
+            vec![start_menu],
+        );
+        sources.insert(crate::platform::AppProviderSource::Desktop, vec![desktop]);
+
+        let results = merge_sources(&sources);
+
+        assert_eq!(results.len(), 2);
+        let editor = results
+            .iter()
+            .find(|result| result.app_user_model_id.as_deref() == Some("vendor.editor_abc!main"))
+            .expect("the package-backed editor should be indexed");
+        assert_eq!(editor.source, SourceId::AppsFolder);
+        assert_eq!(editor.category, ResultCategory::Application);
+        assert_eq!(editor.description.as_deref(), Some("Code editor"));
+        assert_eq!(
+            editor
+                .package_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.full_name.as_deref()),
+            Some("Vendor.Editor_1.0.0.0_x64__abc")
+        );
+        assert_eq!(editor.launch_target, PathBuf::from(r"C:\Apps\Editor.exe"));
+        assert!(editor.sources.contains(&SourceId::AppsFolder));
+        assert!(editor.sources.contains(&SourceId::Package));
+        assert!(editor.sources.contains(&SourceId::StartMenu));
+        assert!(editor.sources.contains(&SourceId::Desktop));
+        assert_eq!(editor.launch_entries.len(), 3);
+        assert!(editor
+            .launch_entries
+            .iter()
+            .any(|entry| entry.arguments == "--profile work"));
+        assert!(editor
+            .launch_entries
+            .iter()
+            .any(|entry| entry.arguments == "--profile default"));
+
+        let conflicting = results
+            .iter()
+            .find(|result| result.app_user_model_id.as_deref() == Some("other.editor_xyz!main"))
+            .expect("the conflicting package must remain separate");
+        assert_eq!(conflicting.sources, vec![SourceId::AppsFolder]);
+        assert_eq!(conflicting.launch_entries.len(), 1);
     }
 
     #[test]

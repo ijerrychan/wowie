@@ -6,22 +6,30 @@ use std::{
 use url::Url;
 
 use super::{
-    filesystem_target_key, looks_like_uri, normalize_path, normalize_url, same_filesystem_target,
-    source_priority, website_url,
+    debug_enabled, debug_record_matches, filesystem_target_key, looks_like_uri, normalize_path,
+    normalize_url, same_filesystem_target, source_priority, website_url,
 };
 
-pub(super) fn associate_file_entries(items: &mut Vec<SearchResult>) {
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct AssociationStats {
+    pub associated: usize,
+    pub ambiguous_rejections: usize,
+}
+
+pub(super) fn associate_file_entries(items: &mut Vec<SearchResult>) -> AssociationStats {
     let mut unified = Vec::with_capacity(items.len());
     let mut application_targets: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut stats = AssociationStats::default();
     for item in std::mem::take(items) {
         let is_file_entry = is_file_source(&item.source);
-        let match_index = if is_file_entry && !is_remote_website(&item) {
+        let (match_index, candidate_count) = if is_file_entry && !is_remote_website(&item) {
             select_file_association(&item, &unified, &application_targets)
         } else {
-            None
+            (None, 0)
         };
 
         if let Some(index) = match_index {
+            stats.associated += 1;
             let application = &mut unified[index];
             if application.icon.is_none() {
                 application.icon = item.icon.clone();
@@ -42,12 +50,16 @@ pub(super) fn associate_file_entries(items: &mut Vec<SearchResult>) {
                 }
             }
             unified.push(item);
+            if candidate_count > 0 {
+                stats.ambiguous_rejections += 1;
+            }
         }
     }
     for item in &mut unified {
         refresh_application_location(item);
     }
     *items = unified;
+    stats
 }
 
 fn is_store_application(item: &SearchResult) -> bool {
@@ -71,7 +83,7 @@ fn select_file_association(
     item: &SearchResult,
     applications: &[SearchResult],
     application_targets: &HashMap<String, Vec<usize>>,
-) -> Option<usize> {
+) -> (Option<usize>, usize) {
     let mut candidates = HashMap::<usize, MatchStrength>::new();
     for entry in &item.launch_entries {
         let strong_matches = filesystem_target_key(&entry.target)
@@ -81,7 +93,7 @@ fn select_file_association(
         if !strong_matches.is_empty() {
             for index in strong_matches {
                 if !package_identity_conflicts(item, &applications[index]) {
-                    candidates.insert(index, MatchStrength::Strong);
+                    candidates.insert(index, MatchStrength::FilesystemTarget);
                 }
             }
             continue;
@@ -98,15 +110,42 @@ fn select_file_association(
                 candidates
                     .entry(index)
                     .and_modify(|current| {
-                        if matches!(strength, MatchStrength::Strong) {
-                            *current = MatchStrength::Strong;
+                        if strength.is_strong() {
+                            *current = strength;
                         }
                     })
                     .or_insert(strength);
             }
         }
     }
-    select_association_candidate(candidates.into_iter())
+    let selected = select_association_candidate(
+        candidates
+            .iter()
+            .map(|(&index, &strength)| (index, strength)),
+    );
+    let debug_association = (debug_enabled() || std::env::var_os("WOWIE_PROVIDER_DEBUG").is_some())
+        && (debug_record_matches(item)
+            || candidates
+                .keys()
+                .any(|&index| debug_record_matches(&applications[index])));
+    if debug_association {
+        match selected {
+            Some(index) => eprintln!(
+                "[provider] association item={:?} application={:?} evidence={:?} candidates={}",
+                item.title,
+                applications[index].title,
+                candidates[&index],
+                candidates.len(),
+            ),
+            None if !candidates.is_empty() => eprintln!(
+                "[provider] association rejected item={:?} candidates={}",
+                item.title,
+                candidates.len()
+            ),
+            None => {}
+        }
+    }
+    (selected, candidates.len())
 }
 
 fn supports_exact_title_association(target: &Path) -> bool {
@@ -132,10 +171,22 @@ fn package_identity_conflicts(shortcut: &SearchResult, application: &SearchResul
     aumid_conflicts || family_conflicts
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MatchStrength {
-    Strong,
+    /// The shortcut and application expose the same authoritative AUMID.
+    Aumid,
+    /// The normalized identity strings are exactly equal.
+    ExactIdentity,
+    /// The resolved filesystem targets are equal.
+    FilesystemTarget,
+    /// A constrained title/virtual identity fallback.
     TitleFallback,
+}
+
+impl MatchStrength {
+    fn is_strong(self) -> bool {
+        !matches!(self, Self::TitleFallback)
+    }
 }
 
 fn shortcut_match_strength(
@@ -149,17 +200,17 @@ fn shortcut_match_strength(
     // AUMID is authoritative when the shortcut exposes one. Conflicting
     // AUMIDs must never be merged through a weaker executable match.
     if shortcut.identity.starts_with("aumid:") {
-        return (shortcut.identity == application.identity).then_some(MatchStrength::Strong);
+        return (shortcut.identity == application.identity).then_some(MatchStrength::Aumid);
     }
     if shortcut.identity == application.identity {
-        return Some(MatchStrength::Strong);
+        return Some(MatchStrength::ExactIdentity);
     }
     if application.identity.starts_with("aumid:") {
         return application
             .launch_entries
             .iter()
             .any(|app_entry| same_filesystem_target(&app_entry.target, &entry.target))
-            .then_some(MatchStrength::Strong);
+            .then_some(MatchStrength::FilesystemTarget);
     }
     // Some Windows AppsFolder entries expose a virtual shell identity while
     // their Start Menu shortcut points at a real executable. WSL is a notable
@@ -232,7 +283,7 @@ fn shortcut_match_strength(
         .launch_entries
         .iter()
         .any(|app_entry| same_filesystem_target(&app_entry.target, &entry.target))
-        .then_some(MatchStrength::Strong)
+        .then_some(MatchStrength::FilesystemTarget)
 }
 
 fn select_association_candidate(
@@ -245,7 +296,9 @@ fn select_association_candidate(
 
     for (index, strength) in candidates {
         match strength {
-            MatchStrength::Strong => {
+            MatchStrength::Aumid
+            | MatchStrength::ExactIdentity
+            | MatchStrength::FilesystemTarget => {
                 strong = Some(index);
                 strong_count += 1;
             }

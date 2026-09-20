@@ -8,8 +8,8 @@ use std::{
 use url::Url;
 
 use super::{
-    dedup_launch_entries_by_behavior, expand_windows_variables, merge_launch_entries,
-    refresh_application_location,
+    debug_enabled, debug_record_matches, dedup_launch_entries_by_behavior,
+    expand_windows_variables, merge_launch_entries, refresh_application_location,
 };
 
 pub(super) fn target_stem_alias(title: &str, target: &Path) -> Vec<String> {
@@ -170,7 +170,14 @@ pub(super) fn packaged_identity_fields(identity: &str) -> (Option<String>, Optio
     (Some(aumid), family_name)
 }
 
-pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) {
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct IdentityMergeStats {
+    pub merged_records: usize,
+    pub launch_entries_removed: usize,
+}
+
+pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) -> IdentityMergeStats {
+    let input_count = items.len();
     let mut grouped = HashMap::<String, SearchResult>::with_capacity(items.len());
     for mut item in std::mem::take(items) {
         let mut aliases = std::mem::take(&mut item.aliases);
@@ -199,6 +206,24 @@ pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) {
             Some(existing) => {
                 let incoming_is_preferred =
                     source_priority(&item.source) < source_priority(&existing.source);
+                let debug_merge = debug_enabled()
+                    && (debug_record_matches(existing) || debug_record_matches(&item));
+                if debug_merge {
+                    eprintln!(
+                        "[provider] identity merge identity={:?} existing_source={} incoming_source={} canonical_source={} canonical_replaced={} existing_launch_entries={} incoming_launch_entries={}",
+                        item.identity,
+                        existing.source,
+                        item.source,
+                        if incoming_is_preferred {
+                            &item.source
+                        } else {
+                            &existing.source
+                        },
+                        incoming_is_preferred,
+                        existing.launch_entries.len(),
+                        item.launch_entries.len(),
+                    );
+                }
                 existing.aliases.extend(aliases);
                 existing.sources.extend(item.sources.iter().cloned());
                 merge_launch_entries(existing, item.launch_entries.clone());
@@ -223,11 +248,27 @@ pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) {
         }
     }
     let mut merged: Vec<_> = grouped.into_values().collect();
+    let merged_records = input_count.saturating_sub(merged.len());
+    let mut launch_entries_removed = 0;
     for item in &mut merged {
         // Deduplicate only after all records with this identity have been
         // merged. Doing it earlier repeats the same normalization work for
         // every intermediate merge.
+        let launch_entries_before = item.launch_entries.len();
         dedup_launch_entries_by_behavior(&mut item.launch_entries);
+        let removed = launch_entries_before - item.launch_entries.len();
+        launch_entries_removed += removed;
+        if removed > 0 && debug_enabled() && debug_record_matches(item) {
+            eprintln!(
+                "[provider] launch behavior dedup identity={:?} title={:?} source={} before={} after={} removed={}",
+                item.identity,
+                item.title,
+                item.source,
+                launch_entries_before,
+                item.launch_entries.len(),
+                removed,
+            );
+        }
         item.aliases
             .sort_by_cached_key(|alias| alias.to_lowercase());
         item.aliases
@@ -239,6 +280,10 @@ pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) {
     }
     merged.sort_by_cached_key(|item| item.title.to_lowercase());
     *items = merged;
+    IdentityMergeStats {
+        merged_records,
+        launch_entries_removed,
+    }
 }
 
 pub(super) fn source_priority(source: &crate::platform::SourceId) -> u8 {
