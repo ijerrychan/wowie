@@ -167,18 +167,30 @@ fn package_description(aumid: &str) -> Option<String> {
     // object, whose manifest description is populated for packages that leave
     // AppListEntry.DisplayInfo.Description empty.
     if let Ok(app_info) = AppInfo::GetFromAppUserModelId(&HSTRING::from(aumid)) {
+        let package = app_info.Package().ok();
+        let package_full_name = package.as_ref().and_then(|package| {
+            package
+                .Id()
+                .ok()
+                .and_then(|id| id.FullName().ok())
+                .map(|value| value.to_string())
+        });
         if let Ok(display) = app_info.DisplayInfo() {
             if let Ok(description) = display.Description() {
-                let description = description.to_string();
-                if !description.trim().is_empty() {
+                if let Some(description) = resolve_package_description(
+                    &description.to_string(),
+                    package_full_name.as_deref(),
+                ) {
                     return Some(description);
                 }
             }
         }
-        if let Ok(package) = app_info.Package() {
+        if let Some(package) = package {
             if let Ok(description) = package.Description() {
-                let description = description.to_string();
-                if !description.trim().is_empty() {
+                if let Some(description) = resolve_package_description(
+                    &description.to_string(),
+                    package_full_name.as_deref(),
+                ) {
                     return Some(description);
                 }
             }
@@ -192,6 +204,11 @@ fn package_description(aumid: &str) -> Option<String> {
         .FindPackagesWithPackageTypes(PackageTypes::Main | PackageTypes::Optional)
         .ok()?;
     for package in packages {
+        let package_full_name = package
+            .Id()
+            .ok()
+            .and_then(|id| id.FullName().ok())
+            .map(|value| value.to_string());
         let Ok(entries) = package.GetAppListEntries() else {
             continue;
         };
@@ -208,11 +225,55 @@ fn package_description(aumid: &str) -> Option<String> {
             let Ok(description) = display.Description() else {
                 return None;
             };
-            let description = description.to_string();
-            return (!description.trim().is_empty()).then_some(description);
+            return resolve_package_description(
+                &description.to_string(),
+                package_full_name.as_deref(),
+            );
         }
     }
     None
+}
+
+fn resolve_package_description(value: &str, package_full_name: Option<&str>) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let value_lowercase = value.to_ascii_lowercase();
+    let is_resource_reference = value_lowercase.starts_with("ms-resource:");
+    let indirect = if value.starts_with("@{") {
+        Some(value.to_owned())
+    } else if is_resource_reference {
+        package_full_name.map(|full_name| format!("@{{{full_name}?{value}}}"))
+    } else {
+        return Some(value.to_owned());
+    }?;
+
+    let wide_source = indirect
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut output = vec![0_u16; 4096];
+    unsafe {
+        windows::Win32::UI::Shell::SHLoadIndirectString(
+            windows::core::PCWSTR(wide_source.as_ptr()),
+            &mut output,
+            None,
+        )
+        .ok()?;
+    }
+    let end = output
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(output.len());
+    let resolved = String::from_utf16_lossy(&output[..end]);
+    (!resolved.trim().is_empty()
+        && !resolved
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with("ms-resource:"))
+    .then_some(resolved.trim().to_owned())
 }
 
 #[cfg(not(debug_assertions))]
@@ -785,6 +846,8 @@ fn collect_packaged_apps(applications: &mut Vec<super::StoreApplication>) {
             if title.trim().is_empty() || aumid.is_empty() {
                 continue;
             }
+            let launch_target = PathBuf::from(format!("shell:AppsFolder\\{aumid}"));
+            let description = application_description(&launch_target);
             push_store_application(
                 applications,
                 store_application_with_metadata(
@@ -792,6 +855,7 @@ fn collect_packaged_apps(applications: &mut Vec<super::StoreApplication>) {
                     title,
                     super::source_ids::PACKAGE,
                     package_metadata.clone(),
+                    description,
                 ),
             );
         }
@@ -943,7 +1007,9 @@ fn parse_guid(value: &str) -> Option<windows::core::GUID> {
 }
 
 fn store_application(aumid: &str, title: String, source: &'static str) -> super::StoreApplication {
-    store_application_with_metadata(aumid, title, source, None)
+    let launch_target = PathBuf::from(format!("shell:AppsFolder\\{aumid}"));
+    let description = application_description(&launch_target);
+    store_application_with_metadata(aumid, title, source, None, description)
 }
 
 fn store_application_with_metadata(
@@ -951,6 +1017,7 @@ fn store_application_with_metadata(
     title: String,
     source: &'static str,
     package_metadata: Option<super::PackageMetadata>,
+    description: Option<String>,
 ) -> super::StoreApplication {
     let mut aliases = Vec::new();
     if let Some(product) = aumid
@@ -964,7 +1031,6 @@ fn store_application_with_metadata(
         }
     }
     let launch_target = PathBuf::from(format!("shell:AppsFolder\\{aumid}"));
-    let description = application_description(&launch_target);
     let app_user_model_id = Some(aumid.to_owned());
     let package_family_name = aumid
         .split('!')
@@ -1493,6 +1559,7 @@ mod tests {
                 install_location: None,
                 identity_name: Some("Contoso.Editor".into()),
             }),
+            None,
         );
 
         assert_eq!(
@@ -1509,6 +1576,19 @@ mod tests {
                 .and_then(|metadata| metadata.identity_name.as_deref()),
             Some("Contoso.Editor")
         );
+    }
+
+    #[test]
+    fn package_description_resolves_only_usable_values() {
+        assert_eq!(
+            resolve_package_description("  A useful editor  ", None),
+            Some("A useful editor".into())
+        );
+        assert_eq!(
+            resolve_package_description("ms-resource://Contoso.Editor/Description", None),
+            None
+        );
+        assert_eq!(resolve_package_description("", None), None);
     }
 
     #[test]

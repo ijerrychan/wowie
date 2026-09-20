@@ -80,7 +80,7 @@ AppsFolder / Package / StartMenu / Desktop / 其他来源
 - 相同字段重复合并不会产生重复值。
 - 合并顺序改变时，最终结果仍保持确定性。
 
-### [ ] 增加 identity 证据等级和歧义保护
+### [x] 增加 identity 证据等级和歧义保护
 
 当前 identity 规则已经区分 AUMID、文件路径、Shell path 和 URL，但后续规则仍容易随着特殊快捷方式不断增加条件分支。
 
@@ -103,7 +103,7 @@ AppsFolder / Package / StartMenu / Desktop / 其他来源
 
 - [x] 入口关联会拒绝冲突的 AppUserModelId / PackageFamilyName。
 - [x] 文件目标强匹配也会经过包身份冲突检查，不能绕过身份保护。
-- [ ] 将匹配证据正式类型化，并输出可解释的去重决策诊断。
+- [x] 将匹配证据正式类型化，并输出可解释的去重决策诊断。
 
 ## P1：完善索引质量和包应用处理
 
@@ -162,6 +162,13 @@ EXE FileDescription / 快捷方式 Description
 
 描述最好在索引阶段保存到结果模型中，而不是首次 UI 展示时才查询。这样搜索、排序、详情面板和调试信息可以共享同一份数据。
 
+当前进度：
+
+- [x] 优先读取 `AppInfo.DisplayInfo.Description`，并回退到 `Package.Description`。
+- [x] 对 `ms-resource:` 描述引用使用包 FullName 通过 Windows Shell 解析。
+- [x] 解析失败或缺少包身份时返回空值，继续使用类别名称回退。
+- [ ] 补充不同 Windows 版本、资源命名空间和多语言包的实机覆盖测试。
+
 ### [ ] 扩展 Windows 目标规范化
 
 在不强制解析真实文件、避免启动阶段明显变慢的前提下，补充以下等价形式的处理：
@@ -174,6 +181,13 @@ EXE FileDescription / 快捷方式 Description
 - Shell namespace path 与 filesystem path 的继续隔离。
 
 每种规范化都必须保留原始路径，不能影响实际启动行为和展示位置。
+
+当前进度：
+
+- [x] 保持 UNC、本地路径和 Shell namespace 的边界隔离。
+- [x] 将标准 `file:` URL 规范化为本地文件路径参与目标比较。
+- [x] 保留原始启动目标，不改变实际启动入口。
+- [ ] 补充 8.3 路径、junction/symbolic link 和更多 file URL 变体。
 
 ## P1：完善测试和诊断能力
 

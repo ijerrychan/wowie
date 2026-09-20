@@ -104,6 +104,7 @@ pub(super) fn looks_like_uri(path: &Path) -> bool {
 }
 
 pub(super) fn normalize_path(path: &Path) -> String {
+    let path = file_url_path(path).unwrap_or_else(|| path.to_owned());
     let raw = path.to_string_lossy().trim().replace('/', "\\");
     let is_unc = raw.starts_with("\\\\");
     let mut parts = Vec::new();
@@ -118,6 +119,15 @@ pub(super) fn normalize_path(path: &Path) -> String {
     }
     let prefix = if is_unc { "\\\\" } else { "" };
     format!("{prefix}{}", parts.join("\\")).to_lowercase()
+}
+
+fn file_url_path(path: &Path) -> Option<PathBuf> {
+    let value = path.to_string_lossy();
+    let url = Url::parse(value.trim()).ok()?;
+    url.scheme()
+        .eq_ignore_ascii_case("file")
+        .then(|| url.to_file_path().ok())
+        .flatten()
 }
 
 pub(super) fn executable_identity(path: &Path) -> String {

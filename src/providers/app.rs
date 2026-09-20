@@ -1284,6 +1284,14 @@ mod tests {
             normalize_path(Path::new(r"C:/Apps/Browser/../Browser/./browser.exe")),
             r"c:\apps\browser\browser.exe"
         );
+        assert_eq!(
+            normalize_path(Path::new("file:///C:/Apps/Browser/browser.exe")),
+            r"c:\apps\browser\browser.exe"
+        );
+        assert!(same_filesystem_target(
+            Path::new("file:///C:/Apps/Browser/browser.exe"),
+            Path::new(r"C:\Apps\Browser\browser.exe")
+        ));
     }
 
     #[test]
