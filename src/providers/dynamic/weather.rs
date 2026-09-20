@@ -46,15 +46,24 @@ impl DynamicProvider for WeatherProvider {
         self.results(query)
     }
 
+    fn supports_fuzzy_search(&self) -> bool {
+        true
+    }
+
+    fn fuzzy_candidates(&self) -> Vec<SearchResult> {
+        vec![result(&self.language)]
+    }
+
     fn set_language(&mut self, language: String) {
         self.language = language;
     }
 }
 
 fn matches_keyword(query: &str, language: &str) -> bool {
-    crate::utils::i18n::tr_aliases(language, "Launcher", "Weather keyword")
+    let keywords = crate::utils::i18n::tr_aliases(language, "Launcher", "Weather keyword");
+    keywords
         .iter()
-        .any(|keyword| query.eq_ignore_ascii_case(keyword))
+        .any(|keyword| query.trim().eq_ignore_ascii_case(keyword))
 }
 
 fn result(language: &str) -> SearchResult {
@@ -96,6 +105,18 @@ fn detail_view(language: &str) -> crate::result::DetailView {
         actions: Vec::new(),
         preferred_width: None,
         scrollable: false,
+    }
+}
+
+#[cfg(test)]
+mod fuzzy_tests {
+    use super::*;
+
+    #[test]
+    fn declares_fuzzy_search_candidates_without_matching_locally() {
+        let provider = WeatherProvider::new();
+        assert!(provider.supports_fuzzy_search());
+        assert_eq!(provider.fuzzy_candidates().len(), 1);
     }
 }
 

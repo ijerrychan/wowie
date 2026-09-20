@@ -15,6 +15,19 @@ use std::sync::Mutex;
 pub trait DynamicProvider: Send + Sync {
     fn query(&self, query: &str) -> Vec<SearchResult>;
 
+    /// Whether this provider exposes candidates that SearchCore may match
+    /// fuzzily. The matching algorithm and the user setting remain central.
+    fn supports_fuzzy_search(&self) -> bool {
+        false
+    }
+
+    /// Results used only as candidates for fuzzy matching. Providers should
+    /// keep query-specific generation in `query` and return stable searchable
+    /// entries here.
+    fn fuzzy_candidates(&self) -> Vec<SearchResult> {
+        Vec::new()
+    }
+
     fn replace_config(&mut self, _shortcuts: Vec<ShortcutConfig>) {}
 
     fn set_language(&mut self, _language: String) {}
@@ -67,11 +80,18 @@ impl ProviderRegistry {
         self.dynamic.push(Mutex::new(Box::new(provider)));
     }
 
-    pub fn query(&self, query: &str) -> Vec<SearchResult> {
+    pub fn query(&self, query: &str, fuzzy_search: bool) -> Vec<SearchResult> {
         let mut results = self.plugins.query(query);
         for provider in &self.dynamic {
             if let Ok(provider) = provider.lock() {
                 results.extend(provider.query(query));
+                if fuzzy_search && !query.trim().is_empty() && provider.supports_fuzzy_search() {
+                    for candidate in provider.fuzzy_candidates() {
+                        if !results.iter().any(|result| result.id == candidate.id) {
+                            results.push(candidate);
+                        }
+                    }
+                }
             }
         }
         results

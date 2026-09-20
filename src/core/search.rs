@@ -133,7 +133,7 @@ impl SearchCore {
                     .unwrap_or(0)
             );
         }
-        let dynamic = self.providers.query(&input);
+        let dynamic = self.providers.query(&input, fuzzy_search);
         // Launch callbacks resolve rows by id after the search worker returns.
         // Keep only the current query's dynamic records so a repeated shortcut
         // id cannot resolve to an older command or URL.

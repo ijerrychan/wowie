@@ -74,6 +74,40 @@ pub(super) fn context_actions(
     actions
 }
 
+/// Size the native-looking menu from the widest visible label. Slint does not
+/// expose the preferred width of items inside a repeated element, so keep the
+/// measurement here next to the labels that populate the menu.
+pub(super) fn context_menu_width(actions: &[ContextActionRow]) -> i32 {
+    let widest = actions
+        .iter()
+        .map(|action| {
+            let title = match action.id.as_str() {
+                "open-directory" => "Open containing folder",
+                "run-as-admin" => "Run as administrator",
+                _ => action.title.as_str(),
+            };
+            let title_width = approximate_text_width(title, 13);
+            let subtitle_width = approximate_text_width(action.subtitle.as_str(), 10);
+            title_width.max(subtitle_width)
+        })
+        .max()
+        .unwrap_or_default();
+    (widest + 50).max(180)
+}
+
+fn approximate_text_width(text: &str, font_size: i32) -> i32 {
+    text.chars()
+        .map(|character| match character {
+            ' ' => (font_size * 3 + 5) / 10,
+            'i' | 'j' | 'l' | 'I' | 't' | 'f' | 'r' => (font_size * 4 + 5) / 10,
+            'm' | 'w' | 'M' | 'W' => (font_size * 8 + 5) / 10,
+            character if character.is_ascii_uppercase() => (font_size * 6 + 5) / 10,
+            character if character.is_ascii() => (font_size * 5 + 5) / 10,
+            _ => font_size,
+        })
+        .sum()
+}
+
 pub(super) fn resolve_plugin_action_icons(
     item: &SearchResult,
     icon_service: &IconService,

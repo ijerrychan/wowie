@@ -49,7 +49,7 @@ component SearchGlyph inherits Rectangle {
         }
         if root.previous-kind == "" : Image {
             width: parent.width; height: parent.height;
-            source: root.previous-image.width > 0 ? root.previous-image : @image-url("../wowie.png");
+            source: root.previous-image.width > 0 ? root.previous-image : @image-url("../assets/icons/magnify.svg");
             image-fit: contain;
             opacity: max(0.0, 1.0 - root.animated-progress);
         }
@@ -68,7 +68,7 @@ component SearchGlyph inherits Rectangle {
         }
         if root.source-kind == "" : Image {
             width: parent.width; height: parent.height;
-            source: root.source-image.width > 0 ? root.source-image : @image-url("../wowie.png");
+            source: root.source-image.width > 0 ? root.source-image : @image-url("../assets/icons/magnify.svg");
             image-fit: contain;
             opacity: min(1.0, root.animated-progress);
         }
@@ -275,12 +275,12 @@ export component Launcher inherits Window {
                             }
                         }
                     }
-                    BuiltinIcon { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; kind: row.icon_kind; }
-                    if row.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source: row.icon; image-fit: contain; }
+                    BuiltinIcon { visible: !root.search-icon-is-shortcut && row.icon_kind != ""; x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; kind: row.icon_kind; }
+                    if row.icon_kind == "" : Image { visible: !root.search-icon-is-shortcut; x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source: row.icon; image-fit: contain; }
                     VerticalBox {
                         x: 60px; y: root.result-content-offset; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px : parent.width - 60px - parent.shortcut-card-width; height: root.result-content-height; spacing: 2px;
                         Text { text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: 14px; font-weight: 500; overflow: elide; }
-                        Text { width: parent.width - 4px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "control-panel" ? @tr("Control Panel") : row.location_kind == "apps-folder-entry" ? @tr("Package") : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
+                        Text { width: parent.width - 4px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "control-panel" ? @tr("Control Panel") : row.location_kind == "application" && row.location == "" ? @tr("Application") : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
                     }
                     Rectangle {
                         x: parent.width - shortcut-card-width - 10px; y: (root.result-row-height - 24px) / 2; width: shortcut-card-width; height: 24px;
@@ -385,7 +385,8 @@ export component Launcher inherits Window {
 export component ContextMenu inherits Window {
     title: "Wowie Context Menu";
     no-frame: true;
-    width: 292px;
+    in property <length> menu-width: 292px;
+    width: root.menu-width;
     height: max(40px, 8px + root.actions.length * root.menu-item-height);
     background: transparent;
 

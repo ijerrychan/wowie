@@ -40,10 +40,6 @@ msgid "Calculator"
 msgstr "计算器"
 
 msgctxt "Launcher"
-msgid "Package"
-msgstr "软件包"
-
-msgctxt "Launcher"
 msgid "Control Panel"
 msgstr "控制面板"
 

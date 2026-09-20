@@ -40,10 +40,6 @@ msgid "Calculator"
 msgstr "Calculator"
 
 msgctxt "Launcher"
-msgid "Package"
-msgstr "Package"
-
-msgctxt "Launcher"
 msgid "Control Panel"
 msgstr "Control Panel"
 

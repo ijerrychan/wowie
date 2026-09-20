@@ -27,14 +27,17 @@ impl ResultRowPayload {
     pub(super) fn from(item: &SearchResult, show_advanced_details: bool, query: &str) -> Self {
         let location = display_location(item, show_advanced_details);
         let shortcut_prefix = shortcut_prefix(item, query);
+        let uses_application_fallback = !show_advanced_details
+            && item.category == ResultCategory::Application
+            && crate::providers::app::preferred_launch_entry(item).is_some();
         Self {
             id: item.id.clone(),
             title: item.title.clone(),
             location,
-            location_kind: if item.category == ResultCategory::ControlPanel {
+            location_kind: if uses_application_fallback {
+                "application"
+            } else if item.category == ResultCategory::ControlPanel {
                 "control-panel"
-            } else if !show_advanced_details && is_store_application_shell_target(item) {
-                "apps-folder-entry"
             } else {
                 ""
             }
@@ -146,6 +149,9 @@ fn display_location(item: &SearchResult, show_advanced_details: bool) -> String 
     let Some(entry) = crate::providers::app::preferred_launch_entry(item) else {
         return item.location.clone();
     };
+    if !show_advanced_details && item.category == ResultCategory::Application {
+        return crate::platform::application_description(&entry.target).unwrap_or_default();
+    }
     let target = entry.target.to_string_lossy();
     let is_shell_or_url =
         crate::platform::windows_rules::is_shell_namespace(&entry.target) || target.contains("://");
@@ -164,13 +170,6 @@ fn display_location(item: &SearchResult, show_advanced_details: bool) -> String 
     } else {
         format!("{base} {}", entry.arguments.trim())
     }
-}
-
-fn is_store_application_shell_target(item: &SearchResult) -> bool {
-    item.location
-        .trim_start()
-        .get(.."shell:AppsFolder\\".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("shell:AppsFolder\\"))
 }
 
 pub(super) type IconItemState = Arc<Mutex<(u64, Arc<Vec<SearchResult>>)>>;

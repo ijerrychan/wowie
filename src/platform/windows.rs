@@ -2,13 +2,13 @@ use super::{PlatformEvent, PlatformIntegration};
 use anyhow::Result;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
-#[cfg(not(debug_assertions))]
-use std::ffi::c_void;
 use std::{
+    collections::HashMap,
+    ffi::c_void,
     fs,
     os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
-    sync::mpsc,
+    sync::{mpsc, Mutex, OnceLock},
     thread,
 };
 use url::Url;
@@ -45,7 +45,175 @@ use com::{wide_path, ComScope, WinRtScope};
 pub(crate) use icons::{application_icon, default_open_icon, indexed_application_icon};
 pub(crate) use shortcuts::resolve_shortcut;
 
+#[link(name = "Version")]
+unsafe extern "system" {
+    fn GetFileVersionInfoSizeW(file_name: *const u16, handle: *mut u32) -> u32;
+    fn GetFileVersionInfoW(
+        file_name: *const u16,
+        handle: u32,
+        length: u32,
+        data: *mut c_void,
+    ) -> i32;
+    fn VerQueryValueW(
+        block: *const c_void,
+        sub_block: *const u16,
+        buffer: *mut *mut c_void,
+        length: *mut u32,
+    ) -> i32;
+}
+
 pub struct WindowsPlatform;
+
+static APPLICATION_DESCRIPTION_CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> =
+    OnceLock::new();
+
+pub(crate) fn application_description(target: &Path) -> Option<String> {
+    let key = target.to_string_lossy().to_lowercase();
+    let cache = APPLICATION_DESCRIPTION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(values) = cache.lock() {
+        if let Some(description) = values.get(&key) {
+            return description.clone();
+        }
+    }
+
+    let value = target.to_string_lossy();
+    let value = value.trim();
+    let apps_folder_prefix = ["shell:AppsFolder\\", "shell:AppsFolder/"]
+        .into_iter()
+        .find(|prefix| {
+            value
+                .get(..prefix.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+        });
+    let description = if let Some(prefix) = apps_folder_prefix {
+        let aumid = &value[prefix.len()..];
+        package_description(aumid)
+    } else {
+        file_description(target)
+    };
+    if let Ok(mut values) = cache.lock() {
+        values.insert(key, description.clone());
+    }
+    description
+}
+
+fn file_description(path: &Path) -> Option<String> {
+    let path = wide_path(path);
+    let mut handle = 0;
+    let size = unsafe { GetFileVersionInfoSizeW(path.as_ptr(), &mut handle) };
+    if size == 0 {
+        return None;
+    }
+    let mut data = vec![0_u8; size as usize];
+    if unsafe { GetFileVersionInfoW(path.as_ptr(), handle, size, data.as_mut_ptr().cast()) } == 0 {
+        return None;
+    }
+
+    let translations = query_version_value(&data, r"\VarFileInfo\Translation")
+        .and_then(|(pointer, length)| {
+            (length >= 4).then(|| {
+                unsafe { std::slice::from_raw_parts(pointer.cast::<u16>(), length as usize / 2) }
+                    .chunks_exact(2)
+                    .map(|pair| (pair[0], pair[1]))
+                    .collect::<Vec<_>>()
+            })
+        })
+        .unwrap_or_default();
+    let translations = if translations.is_empty() {
+        vec![(0x0409, 0x04b0), (0x0409, 0x04e4)]
+    } else {
+        translations
+    };
+
+    translations.into_iter().find_map(|(language, code_page)| {
+        let path = format!(r"\StringFileInfo\{language:04x}{code_page:04x}\FileDescription");
+        let (pointer, length) = query_version_value(&data, &path)?;
+        let value = unsafe { std::slice::from_raw_parts(pointer.cast::<u16>(), length as usize) };
+        let end = value
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(value.len());
+        let value = String::from_utf16_lossy(&value[..end]);
+        (!value.trim().is_empty()).then_some(value.trim().to_owned())
+    })
+}
+
+fn query_version_value(data: &[u8], path: &str) -> Option<(*mut c_void, u32)> {
+    let path = path
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut pointer = std::ptr::null_mut();
+    let mut length = 0;
+    let success = unsafe {
+        VerQueryValueW(
+            data.as_ptr().cast(),
+            path.as_ptr(),
+            &mut pointer,
+            &mut length,
+        )
+    };
+    (success != 0 && !pointer.is_null() && length > 0).then_some((pointer, length))
+}
+
+fn package_description(aumid: &str) -> Option<String> {
+    use windows::core::HSTRING;
+    use windows::ApplicationModel::AppInfo;
+    use windows::Management::Deployment::{PackageManager, PackageTypes};
+
+    let _winrt = WinRtScope::initialize()?;
+
+    // Resolve the exact application first. This also exposes the full Package
+    // object, whose manifest description is populated for packages that leave
+    // AppListEntry.DisplayInfo.Description empty.
+    if let Ok(app_info) = AppInfo::GetFromAppUserModelId(&HSTRING::from(aumid)) {
+        if let Ok(display) = app_info.DisplayInfo() {
+            if let Ok(description) = display.Description() {
+                let description = description.to_string();
+                if !description.trim().is_empty() {
+                    return Some(description);
+                }
+            }
+        }
+        if let Ok(package) = app_info.Package() {
+            if let Ok(description) = package.Description() {
+                let description = description.to_string();
+                if !description.trim().is_empty() {
+                    return Some(description);
+                }
+            }
+        }
+    }
+
+    // Keep the package enumeration for older Windows builds and for entries
+    // that cannot be resolved through AppInfo.
+    let manager = PackageManager::new().ok()?;
+    let packages = manager
+        .FindPackagesWithPackageTypes(PackageTypes::Main | PackageTypes::Optional)
+        .ok()?;
+    for package in packages {
+        let Ok(entries) = package.GetAppListEntries() else {
+            continue;
+        };
+        for entry in entries {
+            let Ok(entry_aumid) = entry.AppUserModelId() else {
+                continue;
+            };
+            if !entry_aumid.to_string().eq_ignore_ascii_case(aumid) {
+                continue;
+            }
+            let Ok(display) = entry.DisplayInfo() else {
+                return None;
+            };
+            let Ok(description) = display.Description() else {
+                return None;
+            };
+            let description = description.to_string();
+            return (!description.trim().is_empty()).then_some(description);
+        }
+    }
+    None
+}
 
 #[cfg(not(debug_assertions))]
 #[link(name = "kernel32")]

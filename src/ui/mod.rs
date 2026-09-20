@@ -15,7 +15,7 @@ use crate::{
     search,
     utils::i18n,
 };
-use actions::{context_actions, resolve_plugin_action_icons};
+use actions::{context_actions, context_menu_width, resolve_plugin_action_icons};
 use anyhow::Result;
 use details::{request_dynamic_detail, set_detail_view};
 use results::{
@@ -39,11 +39,12 @@ fn update_search_icon(
     icon: Option<&crate::platform::IconData>,
     kind: String,
     is_shortcut: bool,
+    animate: bool,
     transition_generation: Arc<AtomicU64>,
 ) {
     let transition_id = transition_generation.fetch_add(1, Ordering::AcqRel) + 1;
     let was_shortcut = window.get_search_icon_is_shortcut();
-    let should_transition = was_shortcut || is_shortcut;
+    let should_transition = animate && (was_shortcut || is_shortcut);
     let previous_icon = window.get_search_icon();
     let previous_kind = window.get_search_icon_kind();
     if should_transition {
@@ -361,6 +362,7 @@ pub fn run() -> Result<()> {
                                 shortcut_icon.as_ref().map(|icon| icon.as_ref()),
                                 shortcut_icon_kind,
                                 is_shortcut_result,
+                                icon_mode_changed,
                                 search_icon_generation,
                             );
                         }
@@ -564,6 +566,7 @@ pub fn run() -> Result<()> {
                 window.set_context_menu_open(true);
             }
             if let Some(menu) = context_weak.upgrade() {
+                menu.set_menu_width(context_menu_width(&actions) as f32);
                 menu.set_actions(ModelRc::from(Rc::new(VecModel::from(actions))));
                 platform.disable_window_transitions(menu.window());
                 let _ = menu.show();
@@ -912,6 +915,7 @@ pub fn run() -> Result<()> {
                                     shortcut_icon.as_ref().map(|icon| icon.as_ref()),
                                     shortcut_icon_kind,
                                     is_shortcut_result,
+                                    icon_mode_changed,
                                     search_icon_generation_for_ui,
                                 );
                             }

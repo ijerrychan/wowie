@@ -378,6 +378,23 @@ pub fn indexed_application_icon(_target: &std::path::Path, _index: i32) -> Optio
     }
 }
 
+/// Return the user-facing description associated with an application target.
+///
+/// Windows stores this in the executable's version information, or exposes it
+/// through the package metadata for AppsFolder targets. Other platforms simply
+/// report no description and let the UI use its category fallback.
+pub fn application_description(target: &std::path::Path) -> Option<String> {
+    #[cfg(windows)]
+    {
+        windows::application_description(target)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = target;
+        None
+    }
+}
+
 pub fn default_open_icon(_target: &std::path::Path) -> Option<IconData> {
     #[cfg(windows)]
     {
