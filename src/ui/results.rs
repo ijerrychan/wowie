@@ -1,6 +1,6 @@
 use super::{Launcher, ResultRow};
 use crate::{
-    icon_service::IconService,
+    icon_service::{IconService, DISPLAY_ICON_SIZE},
     result::{is_action_shortcut, IconSpec, ResultCategory, SearchResult},
 };
 use slint::Model;
@@ -66,7 +66,7 @@ fn shortcut_prefix(item: &SearchResult, query: &str) -> String {
     if !is_action_shortcut(item) {
         return String::new();
     }
-    let query_prefix = query.trim_start().split_whitespace().next();
+    let query_prefix = query.split_whitespace().next();
     item.aliases
         .iter()
         .find_map(|alias| {
@@ -80,7 +80,7 @@ fn shortcut_prefix(item: &SearchResult, query: &str) -> String {
                 .iter()
                 .find_map(|alias| alias.split_whitespace().next())
         })
-        .or_else(|| query.trim_start().split_whitespace().next())
+        .or_else(|| query.split_whitespace().next())
         .unwrap_or_default()
         .to_owned()
 }
@@ -179,10 +179,8 @@ pub(super) fn request_icons(
             *state = (query_id, HashSet::new());
         }
         for index in start..end {
-            if state.1.insert(index) {
-                if static_icon_kind(items[index].icon.as_ref()).is_empty() {
-                    pending.push((index, items[index].clone()));
-                }
+            if state.1.insert(index) && static_icon_kind(items[index].icon.as_ref()).is_empty() {
+                pending.push((index, items[index].clone()));
             }
         }
     }
@@ -198,7 +196,7 @@ pub(super) fn request_icons(
             if query_generation.load(Ordering::Acquire) != query_id {
                 return;
             }
-            let Some(icon) = icon_service.resolve_at(&item, 24) else {
+            let Some(icon) = icon_service.resolve_at(&item, DISPLAY_ICON_SIZE) else {
                 continue;
             };
             resolved.push((index, icon));

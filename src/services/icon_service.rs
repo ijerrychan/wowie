@@ -7,19 +7,25 @@ use crate::{
 use std::{
     collections::{HashMap, VecDeque},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
+    time::UNIX_EPOCH,
 };
 
 // Keep decoded raster icons bounded, while rendering vector icons at the size
 // requested by their UI surface.
 const MAX_ICON_DIMENSION: u32 = 128;
+const MAX_EXTERNAL_ICON_DIMENSION: u32 = 64;
 const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
-const DEFAULT_ICON_SIZE: u32 = 24;
 const MAX_CACHED_ICON_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CACHED_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+
+pub(crate) const DISPLAY_ICON_SIZE: u32 = 24;
 
 #[derive(Clone, Default)]
 pub struct IconService {
     cache: Arc<Mutex<IconCache>>,
+    sources: Arc<Mutex<SourceCache>>,
+    in_flight: Arc<Mutex<HashMap<String, Arc<InFlight>>>>,
 }
 
 #[derive(Default)]
@@ -35,6 +41,24 @@ struct CachedIcon {
     bytes: usize,
 }
 
+#[derive(Default)]
+struct SourceCache {
+    entries: HashMap<String, CachedSource>,
+    lru: VecDeque<String>,
+    bytes: usize,
+}
+
+struct CachedSource {
+    bytes: Arc<Vec<u8>>,
+    size: usize,
+}
+
+#[derive(Default)]
+struct InFlight {
+    result: Mutex<Option<Option<Arc<IconData>>>>,
+    ready: Condvar,
+}
+
 impl IconService {
     pub fn new() -> Self {
         Self::default()
@@ -45,20 +69,21 @@ impl IconService {
     /// otherwise bypass the byte-based cache bound.
     pub fn resolve_at(&self, item: &SearchResult, size: u32) -> Option<Arc<IconData>> {
         let size = normalize_icon_size(size);
-        self.resolve_cached(format!("{}@{size}", icon_source_key(item)), || {
-            resolve_uncached(item, size)
-        })
-    }
-
-    pub fn resolve_spec(&self, spec: &IconSpec) -> Option<Arc<IconData>> {
-        self.resolve_spec_at(spec, DEFAULT_ICON_SIZE)
+        let source_key = icon_source_key(item);
+        let key = cache_key(&source_key, size, icon_source_is_size_independent(item));
+        let sources = Arc::clone(&self.sources);
+        self.resolve_cached(key, || resolve_uncached(item, size, &sources))
     }
 
     pub fn resolve_spec_at(&self, spec: &IconSpec, size: u32) -> Option<Arc<IconData>> {
         let size = normalize_icon_size(size);
-        self.resolve_cached(format!("{}@{size}", icon_spec_key(spec)), || {
-            resolve_spec(spec, size)
-        })
+        let key = cache_key(
+            &icon_spec_key(spec),
+            size,
+            icon_spec_is_size_independent(spec),
+        );
+        let sources = Arc::clone(&self.sources);
+        self.resolve_cached(key, || resolve_spec_with_cache(spec, size, &sources))
     }
 
     fn resolve_cached<F>(&self, key: String, resolve: F) -> Option<Arc<IconData>>
@@ -71,11 +96,42 @@ impl IconService {
             }
         }
 
-        let icon = resolve().map(Arc::new)?;
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(key, Arc::clone(&icon));
+        let in_flight = Arc::new(InFlight::default());
+        let (in_flight, is_owner) = if let Ok(mut requests) = self.in_flight.lock() {
+            if let Some(existing) = requests.get(&key) {
+                (Arc::clone(existing), false)
+            } else {
+                requests.insert(key.clone(), Arc::clone(&in_flight));
+                (in_flight, true)
+            }
+        } else {
+            (in_flight, true)
+        };
+
+        if !is_owner {
+            let mut result = in_flight.result.lock().ok()?;
+            while result.is_none() {
+                result = in_flight.ready.wait(result).ok()?;
+            }
+            return result.as_ref().cloned().flatten();
         }
-        Some(icon)
+
+        let result = resolve().map(Arc::new);
+        if let Ok(mut cache) = self.cache.lock() {
+            if let Some(icon) = result.as_ref() {
+                cache.insert(key.clone(), Arc::clone(icon));
+            }
+        }
+        if is_owner {
+            if let Ok(mut requests) = self.in_flight.lock() {
+                requests.remove(&key);
+            }
+            if let Ok(mut state) = in_flight.result.lock() {
+                *state = Some(result.clone());
+                in_flight.ready.notify_all();
+            }
+        }
+        result
     }
 }
 
@@ -117,8 +173,68 @@ fn icon_bytes(icon: &IconData) -> usize {
     icon.rgba.len()
 }
 
-fn resolve_uncached(item: &SearchResult, size: u32) -> Option<IconData> {
-    if let Some(icon) = item.icon.as_ref().and_then(|spec| resolve_spec(spec, size)) {
+impl SourceCache {
+    fn get(&mut self, key: &str) -> Option<Arc<Vec<u8>>> {
+        let bytes = self
+            .entries
+            .get(key)
+            .map(|entry| Arc::clone(&entry.bytes))?;
+        self.touch(key);
+        Some(bytes)
+    }
+
+    fn insert(&mut self, key: String, bytes: Arc<Vec<u8>>) {
+        if let Some(previous) = self.entries.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(previous.size);
+            self.lru.retain(|existing| existing != &key);
+        }
+
+        let size = bytes.len();
+        self.bytes += size;
+        self.lru.push_back(key.clone());
+        self.entries.insert(key, CachedSource { bytes, size });
+        while self.bytes > MAX_CACHED_SOURCE_BYTES {
+            let Some(oldest) = self.lru.pop_front() else {
+                break;
+            };
+            if let Some(removed) = self.entries.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(removed.size);
+            }
+        }
+    }
+
+    fn touch(&mut self, key: &str) {
+        self.lru.retain(|existing| existing != key);
+        self.lru.push_back(key.to_owned());
+    }
+}
+
+fn source_bytes<F>(cache: &Mutex<SourceCache>, key: String, load: F) -> Option<Arc<Vec<u8>>>
+where
+    F: FnOnce() -> Option<Vec<u8>>,
+{
+    if let Ok(mut cache) = cache.lock() {
+        if let Some(bytes) = cache.get(&key) {
+            return Some(bytes);
+        }
+    }
+    let bytes = Arc::new(load()?);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(key, Arc::clone(&bytes));
+    }
+    Some(bytes)
+}
+
+fn resolve_uncached(
+    item: &SearchResult,
+    size: u32,
+    sources: &Mutex<SourceCache>,
+) -> Option<IconData> {
+    if let Some(icon) = item
+        .icon
+        .as_ref()
+        .and_then(|spec| resolve_spec_with_cache(spec, size, sources))
+    {
         return Some(icon);
     }
 
@@ -127,7 +243,7 @@ fn resolve_uncached(item: &SearchResult, size: u32) -> Option<IconData> {
         .unwrap_or(&item.launch_target);
 
     if matches!(item.source, crate::platform::SourceId::Shortcut) {
-        if let Some(icon) = fetch_favicon(&item.launch_target, size) {
+        if let Some(icon) = fetch_favicon(&item.launch_target, size, sources) {
             return Some(icon);
         }
     }
@@ -159,16 +275,18 @@ fn application_icon_with_path_lookup(target: &Path) -> Option<IconData> {
     })
 }
 
-fn fetch_favicon(target: &Path, size: u32) -> Option<IconData> {
+fn fetch_favicon(target: &Path, size: u32, sources: &Mutex<SourceCache>) -> Option<IconData> {
     let origin = favicon_origin(target)?;
     let favicon = format!("{origin}/favicon.ico");
-    let bytes = crate::utils::http::get_bytes(&favicon, 1_048_576).ok()?;
+    let bytes = source_bytes(sources, format!("favicon:{origin}"), || {
+        crate::utils::http::get_bytes(&favicon, 1_048_576).ok()
+    })?;
     decode_image(&bytes, size)
 }
 
 fn decode_image(bytes: &[u8], size: u32) -> Option<IconData> {
     let image = image::load_from_memory(bytes).ok()?;
-    let size = normalize_icon_size(size).min(MAX_ICON_DIMENSION);
+    let size = normalize_icon_size(size).min(MAX_EXTERNAL_ICON_DIMENSION);
     let image = image.thumbnail(size, size).to_rgba8();
     let (width, height) = image.dimensions();
     Some(IconData {
@@ -178,12 +296,14 @@ fn decode_image(bytes: &[u8], size: u32) -> Option<IconData> {
     })
 }
 
-fn resolve_spec(spec: &IconSpec, size: u32) -> Option<IconData> {
+fn resolve_spec_with_cache(
+    spec: &IconSpec,
+    size: u32,
+    sources: &Mutex<SourceCache>,
+) -> Option<IconData> {
     match spec {
-        IconSpec::Weather => load_svg_bytes(include_bytes!("../../assets/icons/weather.svg"), size),
-        IconSpec::Calculator => {
-            load_svg_bytes(include_bytes!("../../assets/icons/calculator.svg"), size)
-        }
+        IconSpec::Weather => named_icon("weather", size),
+        IconSpec::Calculator => named_icon("calculator", size),
         IconSpec::System(target) => crate::platform::application_icon(target),
         IconSpec::SystemIndexed { path, index } => {
             crate::platform::indexed_application_icon(path, *index)
@@ -191,11 +311,19 @@ fn resolve_spec(spec: &IconSpec, size: u32) -> Option<IconData> {
         IconSpec::DefaultOpen(target) => crate::platform::default_open_icon(target),
         IconSpec::Resource(path) => match path.extension().and_then(|extension| extension.to_str())
         {
-            Some(extension) if extension.eq_ignore_ascii_case("svg") => load_svg_icon(path, size),
-            _ => load_png_icon(path, size),
+            Some(extension) if extension.eq_ignore_ascii_case("svg") => {
+                load_svg_icon(path, size, sources)
+            }
+            _ => load_png_icon(path, size, sources),
         },
         IconSpec::Named(name) => named_icon(name, size),
     }
+}
+
+#[cfg(test)]
+fn resolve_spec(spec: &IconSpec, size: u32) -> Option<IconData> {
+    let sources = Mutex::new(SourceCache::default());
+    resolve_spec_with_cache(spec, size, &sources)
 }
 
 fn named_icon(name: &str, size: u32) -> Option<IconData> {
@@ -218,19 +346,35 @@ fn named_icon(name: &str, size: u32) -> Option<IconData> {
     }
 }
 
-fn load_png_icon(path: &Path, size: u32) -> Option<IconData> {
-    decode_image(&read_icon_bytes(path)?, size)
+fn load_png_icon(path: &Path, size: u32, sources: &Mutex<SourceCache>) -> Option<IconData> {
+    decode_image(&read_icon_bytes(path, sources)?, size)
 }
 
-fn load_svg_icon(path: &Path, size: u32) -> Option<IconData> {
-    load_svg_bytes(&read_icon_bytes(path)?, size)
+fn load_svg_icon(path: &Path, size: u32, sources: &Mutex<SourceCache>) -> Option<IconData> {
+    load_svg_bytes(
+        &read_icon_bytes(path, sources)?,
+        size.min(MAX_EXTERNAL_ICON_DIMENSION),
+    )
 }
 
-fn read_icon_bytes(path: &Path) -> Option<Vec<u8>> {
-    if std::fs::metadata(path).ok()?.len() > MAX_ICON_FILE_BYTES {
+fn read_icon_bytes(path: &Path, sources: &Mutex<SourceCache>) -> Option<Arc<Vec<u8>>> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if metadata.len() > MAX_ICON_FILE_BYTES {
         return None;
     }
-    std::fs::read(path).ok()
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos().to_string())
+        .unwrap_or_default();
+    let key = format!(
+        "file:{}:{}:{modified}",
+        stable_path_key(path),
+        metadata.len()
+    );
+    let path = path.to_owned();
+    source_bytes(sources, key, move || std::fs::read(path).ok())
 }
 
 fn load_svg_bytes(bytes: &[u8], size: u32) -> Option<IconData> {
@@ -259,6 +403,14 @@ fn normalize_icon_size(size: u32) -> u32 {
     size.clamp(1, MAX_ICON_DIMENSION)
 }
 
+fn cache_key(source: &str, size: u32, size_independent: bool) -> String {
+    if size_independent {
+        source.to_owned()
+    } else {
+        format!("{source}@{size}")
+    }
+}
+
 fn icon_source_key(item: &SearchResult) -> String {
     if let Some(icon) = item.icon.as_ref() {
         return icon_spec_key(icon);
@@ -270,21 +422,26 @@ fn icon_source_key(item: &SearchResult) -> String {
         }
     }
 
-    let fallback = item
+    let target = crate::providers::app::preferred_launch_entry(item)
+        .map(|entry| path_cache_key(&entry.target))
+        .unwrap_or_else(|| path_cache_key(&item.launch_target));
+    let candidates = item
         .launch_entries
-        .first()
-        .map(|entry| entry.target.display().to_string())
-        .unwrap_or_else(|| item.launch_target.display().to_string());
-    format!("fallback:{fallback}")
+        .iter()
+        .filter(|entry| !crate::platform::windows_rules::is_shortcut_path(&entry.path))
+        .map(|entry| path_cache_key(&entry.path))
+        .collect::<Vec<_>>()
+        .join("|");
+    format!("fallback:{target}|{candidates}")
 }
 
 fn icon_spec_key(icon: &IconSpec) -> String {
     match icon {
         IconSpec::System(path) | IconSpec::Resource(path) => {
-            format!("explicit:{}", path.display())
+            format!("explicit:{}", path_cache_key(path))
         }
         IconSpec::SystemIndexed { path, index } => {
-            format!("explicit:{}#{}", path.display(), index)
+            format!("explicit:{}#{}", path_cache_key(path), index)
         }
         IconSpec::DefaultOpen(path) => {
             let value = path.to_string_lossy();
@@ -305,13 +462,58 @@ fn icon_spec_key(icon: &IconSpec) -> String {
     }
 }
 
+fn icon_spec_is_size_independent(icon: &IconSpec) -> bool {
+    matches!(
+        icon,
+        IconSpec::System(_) | IconSpec::SystemIndexed { .. } | IconSpec::DefaultOpen(_)
+    )
+}
+
+fn icon_source_is_size_independent(item: &SearchResult) -> bool {
+    match item.icon.as_ref() {
+        Some(icon) => icon_spec_is_size_independent(icon),
+        None => {
+            !matches!(item.source, crate::platform::SourceId::Shortcut)
+                || favicon_origin(&item.launch_target).is_none()
+        }
+    }
+}
+
+fn stable_path_key(path: &Path) -> String {
+    let value = path.to_string_lossy().replace('\\', "/");
+    #[cfg(windows)]
+    {
+        value.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        value
+    }
+}
+
+fn path_cache_key(path: &Path) -> String {
+    let revision = std::fs::metadata(path)
+        .ok()
+        .map(|metadata| {
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+                .map(|value| value.as_nanos().to_string())
+                .unwrap_or_default();
+            format!("{}:{modified}", metadata.len())
+        })
+        .unwrap_or_else(|| "missing".into());
+    format!("{}:{revision}", stable_path_key(path))
+}
+
 fn favicon_origin(target: &Path) -> Option<String> {
     let value = target.to_str()?;
     let parsed = url::Url::parse(value).ok()?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return None;
     }
-    let host = parsed.host_str()?;
+    let host = parsed.host_str()?.to_lowercase();
     let port = parsed.port_or_known_default().filter(|port| {
         (*port != 80 || parsed.scheme() != "http") && (*port != 443 || parsed.scheme() != "https")
     });
@@ -361,9 +563,36 @@ mod tests {
     }
 
     #[test]
+    fn fixed_platform_icons_share_one_cache_key_across_sizes() {
+        for spec in [
+            IconSpec::System(PathBuf::from("C:\\Apps\\demo.exe")),
+            IconSpec::SystemIndexed {
+                path: PathBuf::from("C:\\Apps\\demo.exe"),
+                index: 1,
+            },
+            IconSpec::DefaultOpen(PathBuf::from("demo.txt")),
+        ] {
+            let source = icon_spec_key(&spec);
+            assert_eq!(
+                cache_key(&source, 16, icon_spec_is_size_independent(&spec)),
+                cache_key(&source, 40, icon_spec_is_size_independent(&spec))
+            );
+        }
+    }
+
+    #[test]
+    fn source_cache_reuses_loaded_bytes() {
+        let cache = Mutex::new(SourceCache::default());
+        let first = source_bytes(&cache, "test".into(), || Some(vec![1, 2, 3])).unwrap();
+        let second = source_bytes(&cache, "test".into(), || Some(vec![9])).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(second.as_ref(), &[1, 2, 3]);
+    }
+
+    #[test]
     fn named_plugin_icons_are_resolvable() {
         for name in ["book", "checklist", "wowie"] {
-            assert!(resolve_spec(&IconSpec::Named(name.into()), DEFAULT_ICON_SIZE).is_some());
+            assert!(resolve_spec(&IconSpec::Named(name.into()), 24).is_some());
         }
     }
 
@@ -380,10 +609,10 @@ mod tests {
     fn service_reuses_explicit_icon_results() {
         let service = IconService::new();
         let first = service
-            .resolve_spec(&IconSpec::Calculator)
+            .resolve_spec_at(&IconSpec::Calculator, 24)
             .expect("first icon");
         let second = service
-            .resolve_spec(&IconSpec::Calculator)
+            .resolve_spec_at(&IconSpec::Calculator, 24)
             .expect("cached icon");
         assert!(Arc::ptr_eq(&first, &second));
     }

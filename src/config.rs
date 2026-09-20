@@ -8,8 +8,8 @@ use std::{
 
 const DEFAULT_HOTKEY: &str = "Alt+Space";
 const DEFAULT_RENDERER: &str = "femtovg";
-const DEFAULT_WINDOW_WIDTH: u32 = 780;
-const DEFAULT_WINDOW_HEIGHT: u32 = 350;
+const DEFAULT_WINDOW_WIDTH: u32 = 720;
+const DEFAULT_WINDOW_HEIGHT: u32 = 550;
 const MIN_WINDOW_WIDTH: u32 = 420;
 pub(crate) const MIN_WINDOW_HEIGHT: u32 = 350;
 const MAX_WINDOW_WIDTH: u32 = 1200;
@@ -330,15 +330,17 @@ mod tests {
 
     #[test]
     fn shortcut_prefixes_are_normalized_with_one_trailing_space() {
-        let mut config = Config::default();
-        config.shortcuts = vec![ShortcutConfig {
-            name: "Search".into(),
-            prefix: "  g  ".into(),
-            shortcut_type: "url".into(),
-            template: "https://example.com/?q={query}".into(),
-            target: String::new(),
-            arguments: String::new(),
-        }];
+        let mut config = Config {
+            shortcuts: vec![ShortcutConfig {
+                name: "Search".into(),
+                prefix: "  g  ".into(),
+                shortcut_type: "url".into(),
+                template: "https://example.com/?q={query}".into(),
+                target: String::new(),
+                arguments: String::new(),
+            }],
+            ..Config::default()
+        };
 
         config.normalize();
 

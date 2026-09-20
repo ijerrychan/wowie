@@ -1,7 +1,4 @@
-use super::{
-    results::{icon_to_image, static_icon_kind},
-    ContextActionRow,
-};
+use super::{results::static_icon_kind, ContextActionRow};
 use crate::{
     icon_service::IconService,
     result::{self, SearchResult},
@@ -10,7 +7,6 @@ use crate::{
 pub(super) fn context_actions(
     item: &SearchResult,
     show_advanced_launch_entries: bool,
-    icon_service: &IconService,
 ) -> Vec<ContextActionRow> {
     let is_filesystem_target = is_supported_filesystem_target(&item.launch_target);
     let is_store_shell_target = is_apps_folder_target(&item.launch_target);
@@ -46,12 +42,7 @@ pub(super) fn context_actions(
                 title: action_id.clone().into(),
                 subtitle: "".into(),
                 kind: "plugin".into(),
-                icon: icon
-                    .as_ref()
-                    .filter(|_| icon_kind.is_empty())
-                    .and_then(|icon| icon_service.resolve_spec_at(icon, 16))
-                    .map(|icon| icon_to_image(icon.as_ref()))
-                    .unwrap_or_default(),
+                icon: slint::Image::default(),
                 icon_kind: icon_kind.into(),
             });
         }
@@ -81,6 +72,30 @@ pub(super) fn context_actions(
         }
     }
     actions
+}
+
+pub(super) fn resolve_plugin_action_icons(
+    item: &SearchResult,
+    icon_service: &IconService,
+) -> Vec<(String, crate::platform::IconData)> {
+    item.actions
+        .iter()
+        .filter_map(|action| {
+            let result::Action::Plugin {
+                action_id,
+                icon: Some(icon),
+                ..
+            } = action
+            else {
+                return None;
+            };
+            static_icon_kind(Some(icon)).is_empty().then(|| {
+                icon_service
+                    .resolve_spec_at(icon, 16)
+                    .map(|icon| (format!("plugin-action:{action_id}"), icon.as_ref().clone()))
+            })?
+        })
+        .collect()
 }
 
 pub(super) fn visible_launch_entries(

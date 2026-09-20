@@ -4,17 +4,25 @@ export struct ResultRow { id: string, title: string, location: string, location_
 export struct ContextActionRow { id: string, title: string, subtitle: string, kind: string, icon: image, icon_kind: string }
 export struct DetailBlock { kind: string, label: string, value: string, color: string, icon: image }
 
+component BuiltinIcon inherits Image {
+    in property <string> kind;
+    visible: root.kind != "";
+    image-fit: contain;
+    source: root.kind == "weather" ? @image-url("../assets/icons/weather.svg")
+        : root.kind == "calculator" ? @image-url("../assets/icons/calculator.svg")
+        : root.kind == "book" ? @image-url("../assets/icons/book-open.svg")
+        : root.kind == "checklist" ? @image-url("../assets/icons/list-checks.svg")
+        : root.kind == "folder-open" ? @image-url("../assets/icons/folder-open-outline.svg")
+        : root.kind == "shield-account" ? @image-url("../assets/icons/shield-account-outline.svg")
+        : @image-url("../wowie.png");
+}
+
 component SearchGlyph inherits Rectangle {
     in property <image> source-image;
     in property <string> source-kind;
     background: transparent;
-    if root.source-kind == "weather" : Image { x: 2px; y: 2px; width: 20px; height: 20px; source: @image-url("../assets/icons/weather.svg"); image-fit: contain; }
-    if root.source-kind == "calculator" : Image { x: 2px; y: 2px; width: 20px; height: 20px; source: @image-url("../assets/icons/calculator.svg"); image-fit: contain; }
-    if root.source-kind == "book" : Image { x: 2px; y: 2px; width: 20px; height: 20px; source: @image-url("../assets/icons/book-open.svg"); image-fit: contain; }
-    if root.source-kind == "checklist" : Image { x: 2px; y: 2px; width: 20px; height: 20px; source: @image-url("../assets/icons/list-checks.svg"); image-fit: contain; }
-    if root.source-kind == "folder-open" : Image { x: 2px; y: 2px; width: 20px; height: 20px; source: @image-url("../assets/icons/folder-open-outline.svg"); image-fit: contain; }
-    if root.source-kind == "shield-account" : Image { x: 2px; y: 2px; width: 20px; height: 20px; source: @image-url("../assets/icons/shield-account-outline.svg"); image-fit: contain; }
-    if root.source-kind == "" : Image { x: 2px; y: 2px; width: 20px; height: 20px; source: root.source-image.width > 0 ? root.source-image : @image-url("../wowie.png"); image-fit: contain; }
+    BuiltinIcon { x: 0px; y: 0px; width: parent.width; height: parent.height; kind: root.source-kind; }
+    if root.source-kind == "" : Image { width: parent.width; height: parent.height; source: root.source-image.width > 0 ? root.source-image : @image-url("../wowie.png"); image-fit: contain; }
 }
 
 export component Launcher inherits Window {
@@ -85,6 +93,10 @@ export component Launcher inherits Window {
     private property <length> result-row-inset: 2px;
     private property <length> result-column-gap: root.window-inset + root.result-row-inset + root.detail-panel-inset;
     private property <length> detail-panel-inset: 2px;
+    // Shift the list/panel split so the selected row's right edge and the
+    // panel's left edge are equally far from the window center line. Both
+    // edges move together, preserving their existing 8px separation.
+    private property <length> detail-panel-alignment-shift: 6px;
     private property <length> detail-panel-bottom-inset: 6px;
     private property <float> detail-panel-share: root.detail-panel-preferred-width > 0 && root.width > 0px ? root.detail-panel-preferred-width / (root.width / 1px) : 0.5;
     private property <length> detail-panel-content-height: 118px + root.detail-blocks.length * 60px + (root.detail-actions.length > 0 ? 50px : 0px);
@@ -167,7 +179,7 @@ export component Launcher inherits Window {
 
                 results-list := ListView {
                     x: 0px; y: 0px;
-                    width: root.detail-visible ? parent.width * (1.0 - root.detail-panel-share) - root.result-column-gap : parent.width;
+                    width: root.detail-visible ? parent.width * (1.0 - root.detail-panel-share) - root.result-column-gap + root.detail-panel-alignment-shift : parent.width;
                     height: parent.height;
                 for row[index] in root.results : result-row := Rectangle {
                     x: root.result-row-inset;
@@ -197,12 +209,7 @@ export component Launcher inherits Window {
                             }
                         }
                     }
-                    if row.icon_kind == "weather" : Image { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source: @image-url("../assets/icons/weather.svg"); image-fit: contain; }
-                    if row.icon_kind == "calculator" : Image { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source: @image-url("../assets/icons/calculator.svg"); image-fit: contain; }
-                    if row.icon_kind == "book" : Image { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source: @image-url("../assets/icons/book-open.svg"); image-fit: contain; }
-                    if row.icon_kind == "checklist" : Image { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source: @image-url("../assets/icons/list-checks.svg"); image-fit: contain; }
-                    if row.icon_kind == "folder-open" : Image { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source: @image-url("../assets/icons/folder-open-outline.svg"); image-fit: contain; }
-                    if row.icon_kind == "shield-account" : Image { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source: @image-url("../assets/icons/shield-account-outline.svg"); image-fit: contain; }
+                    BuiltinIcon { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; kind: row.icon_kind; }
                     if row.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source: row.icon; image-fit: contain; }
                     VerticalBox {
                         x: 60px; y: root.result-content-offset; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px : parent.width - 60px - parent.shortcut-card-width; height: root.result-content-height; spacing: 2px;
@@ -220,9 +227,9 @@ export component Launcher inherits Window {
                 }
 
                 if (root.detail-visible) : Rectangle {
-                    x: parent.width * (1.0 - root.detail-panel-share) - root.detail-panel-inset;
+                    x: parent.width * (1.0 - root.detail-panel-share) - root.detail-panel-inset + root.detail-panel-alignment-shift;
                     y: 0px;
-                    width: parent.width * root.detail-panel-share;
+                    width: parent.width * root.detail-panel-share - root.detail-panel-alignment-shift;
                     height: max(0px, parent.height - root.detail-panel-bottom-inset);
                     background: root.dark-mode ? #242424 : #fbfcfe;
                     border-radius: 10px;
@@ -270,12 +277,7 @@ export component Launcher inherits Window {
                         background: action-area.has-hover ? root.surface-hover : root.dark-mode ? #2b2b2b : #f1f3f6;
                         border-color: root.border; border-width: 1px; border-radius: 7px;
                         action-area := TouchArea { clicked => { root.detail-action-requested(index); } }
-                        if action.icon_kind == "folder-open" : Image { x: 8px; y: 6px; width: 16px; height: 16px; source: @image-url("../assets/icons/folder-open-outline.svg"); image-fit: contain; }
-                        if action.icon_kind == "shield-account" : Image { x: 8px; y: 6px; width: 16px; height: 16px; source: @image-url("../assets/icons/shield-account-outline.svg"); image-fit: contain; }
-                        if action.icon_kind == "book" : Image { x: 8px; y: 6px; width: 16px; height: 16px; source: @image-url("../assets/icons/book-open.svg"); image-fit: contain; }
-                        if action.icon_kind == "checklist" : Image { x: 8px; y: 6px; width: 16px; height: 16px; source: @image-url("../assets/icons/list-checks.svg"); image-fit: contain; }
-                        if action.icon_kind == "weather" : Image { x: 8px; y: 6px; width: 16px; height: 16px; source: @image-url("../assets/icons/weather.svg"); image-fit: contain; }
-                        if action.icon_kind == "calculator" : Image { x: 8px; y: 6px; width: 16px; height: 16px; source: @image-url("../assets/icons/calculator.svg"); image-fit: contain; }
+                        BuiltinIcon { x: 8px; y: 6px; width: 16px; height: 16px; kind: action.icon_kind; }
                         if action.icon_kind == "" : Image { x: 8px; y: 6px; width: 16px; height: 16px; source: action.icon; image-fit: contain; }
                         Text { x: 28px; y: 0px; width: parent.width - 36px; height: parent.height; text: action.title; color: root.text-secondary; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
                     }
@@ -345,12 +347,7 @@ export component ContextMenu inherits Window {
                     }
                 }
             }
-            if action.icon_kind == "folder-open" : Image { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: @image-url("../assets/icons/folder-open-outline.svg"); image-fit: contain; }
-            if action.icon_kind == "shield-account" : Image { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: @image-url("../assets/icons/shield-account-outline.svg"); image-fit: contain; }
-            if action.icon_kind == "book" : Image { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: @image-url("../assets/icons/book-open.svg"); image-fit: contain; }
-            if action.icon_kind == "checklist" : Image { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: @image-url("../assets/icons/list-checks.svg"); image-fit: contain; }
-            if action.icon_kind == "weather" : Image { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: @image-url("../assets/icons/weather.svg"); image-fit: contain; }
-            if action.icon_kind == "calculator" : Image { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: @image-url("../assets/icons/calculator.svg"); image-fit: contain; }
+            BuiltinIcon { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; kind: action.icon_kind; }
             if action.icon_kind == "" : Image { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: action.icon; image-fit: contain; }
             Text {
                 x: 36px; y: action.subtitle == "" ? 0px : 2px; width: parent.width - 50px;

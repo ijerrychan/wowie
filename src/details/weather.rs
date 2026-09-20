@@ -40,7 +40,7 @@ impl WeatherProvider {
 
 impl crate::details::DynamicDetailProvider for WeatherProvider {
     fn matches(&self, item: &crate::result::SearchResult) -> bool {
-        item.id == "shortcut:weather-test"
+        item.id == "weather:current"
     }
 
     fn cached(&self, language: &str) -> Option<crate::result::DetailView> {

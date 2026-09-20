@@ -14,7 +14,7 @@ pub(crate) fn indexed_application_icon(
     index: i32,
 ) -> Option<super::super::IconData> {
     use std::{ffi::c_void, mem, os::windows::ffi::OsStrExt};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
 
     let wide: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut large_icon: *mut c_void = std::ptr::null_mut();
@@ -35,19 +35,10 @@ pub(crate) fn indexed_application_icon(
         if unsafe { GetIconInfo(large_icon as _, &mut icon_info) } == 0 {
             return None;
         }
-        icon_pixels(&icon_info)
+        bitmap_pixels(icon_info.hbmColor, 32, 32)
     })();
-    unsafe { DestroyIcon(large_icon as _) };
-    delete_icon_bitmaps(&icon_info);
+    destroy_icon_resources(large_icon as _, &icon_info);
     result
-}
-
-fn icon_pixels(
-    icon_info: &windows_sys::Win32::UI::WindowsAndMessaging::ICONINFO,
-) -> Option<super::super::IconData> {
-    // Keep the native extraction at the shell's large-icon size. Low-resolution
-    // icons are intentionally passed through without interpolation.
-    bitmap_pixels(icon_info.hbmColor, 32, 32)
 }
 
 fn bitmap_pixels(
@@ -110,6 +101,16 @@ fn delete_icon_bitmaps(icon_info: &windows_sys::Win32::UI::WindowsAndMessaging::
     }
 }
 
+fn destroy_icon_resources(
+    icon: *mut std::ffi::c_void,
+    icon_info: &windows_sys::Win32::UI::WindowsAndMessaging::ICONINFO,
+) {
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon(icon as _);
+    }
+    delete_icon_bitmaps(icon_info);
+}
+
 #[link(name = "shell32")]
 unsafe extern "system" {
     fn ExtractIconExW(
@@ -147,7 +148,7 @@ fn application_icon_with_flags(
     use std::{mem, os::windows::ffi::OsStrExt};
     use windows_sys::Win32::UI::{
         Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON},
-        WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO},
+        WindowsAndMessaging::{GetIconInfo, ICONINFO},
     };
     let wide: Vec<u16> = _target.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut file_info: SHFILEINFOW = unsafe { mem::zeroed() };
@@ -201,18 +202,6 @@ fn application_icon_with_flags(
         }
         bitmap_pixels(icon_info.hbmColor, 32, 32)
     })();
-    unsafe {
-        DestroyIcon(file_info.hIcon);
-    }
-    if !icon_info.hbmColor.is_null() {
-        unsafe {
-            windows_sys::Win32::Graphics::Gdi::DeleteObject(icon_info.hbmColor as _);
-        }
-    }
-    if !icon_info.hbmMask.is_null() {
-        unsafe {
-            windows_sys::Win32::Graphics::Gdi::DeleteObject(icon_info.hbmMask as _);
-        }
-    }
+    destroy_icon_resources(file_info.hIcon as _, &icon_info);
     result
 }
