@@ -3,7 +3,7 @@ use crate::{
     icon_service::{IconService, DISPLAY_ICON_SIZE},
     result::{is_action_shortcut, IconSpec, ResultCategory, SearchResult},
 };
-use slint::Model;
+use slint::{Model, ModelRc};
 use std::{
     collections::HashSet,
     sync::{
@@ -31,7 +31,9 @@ impl ResultRowPayload {
             id: item.id.clone(),
             title: item.title.clone(),
             location,
-            location_kind: if !show_advanced_details && is_store_application_shell_target(item) {
+            location_kind: if item.category == ResultCategory::ControlPanel {
+                "control-panel"
+            } else if !show_advanced_details && is_store_application_shell_target(item) {
                 "apps-folder-entry"
             } else {
                 ""
@@ -43,6 +45,27 @@ impl ResultRowPayload {
             shortcut_prefix,
         }
     }
+}
+
+/// Compare only the fields that determine the visible result row. Loaded
+/// icons are intentionally ignored because they arrive asynchronously and can
+/// be updated in-place without rebuilding the result model.
+pub(super) fn matches_model(model: &ModelRc<ResultRow>, payloads: &[ResultRowPayload]) -> bool {
+    if model.row_count() != payloads.len() {
+        return false;
+    }
+    payloads.iter().enumerate().all(|(index, payload)| {
+        let Some(row) = model.row_data(index) else {
+            return false;
+        };
+        row.id.as_str() == payload.id
+            && row.title.as_str() == payload.title
+            && row.location.as_str() == payload.location
+            && row.location_kind.as_str() == payload.location_kind
+            && row.icon_kind.as_str() == payload.icon_kind
+            && row.shortcut_prefix.as_str() == payload.shortcut_prefix
+            && row.shortcut_prefix_width == payload.shortcut_prefix_width
+    })
 }
 
 pub(super) fn static_icon_kind(icon: Option<&IconSpec>) -> &'static str {

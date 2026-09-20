@@ -20,9 +20,59 @@ component BuiltinIcon inherits Image {
 component SearchGlyph inherits Rectangle {
     in property <image> source-image;
     in property <string> source-kind;
+    in property <image> previous-image;
+    in property <string> previous-kind;
+    in property <float> transition-progress: 1.0;
+    in property <bool> transition-animation-enabled: true;
     background: transparent;
-    BuiltinIcon { x: 0px; y: 0px; width: parent.width; height: parent.height; kind: root.source-kind; }
-    if root.source-kind == "" : Image { width: parent.width; height: parent.height; source: root.source-image.width > 0 ? root.source-image : @image-url("../wowie.png"); image-fit: contain; }
+    clip: true;
+
+    private property <float> animated-progress: root.transition-progress;
+    private property <float> outgoing-scale: max(0.0, 1.0 - root.animated-progress);
+    private property <float> incoming-scale: 0.72 + root.animated-progress * 0.28;
+    animate animated-progress {
+        duration: 180ms;
+        easing: ease-out-back;
+        enabled: root.transition-animation-enabled;
+    }
+
+    Rectangle {
+        x: (parent.width - parent.width * root.outgoing-scale) / 2;
+        y: (parent.height - parent.height * root.outgoing-scale) / 2;
+        width: parent.width * root.outgoing-scale;
+        height: parent.height * root.outgoing-scale;
+        background: transparent;
+        BuiltinIcon {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            kind: root.previous-kind;
+            opacity: max(0.0, 1.0 - root.animated-progress);
+        }
+        if root.previous-kind == "" : Image {
+            width: parent.width; height: parent.height;
+            source: root.previous-image.width > 0 ? root.previous-image : @image-url("../wowie.png");
+            image-fit: contain;
+            opacity: max(0.0, 1.0 - root.animated-progress);
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - parent.width * root.incoming-scale) / 2;
+        y: (parent.height - parent.height * root.incoming-scale) / 2;
+        width: parent.width * root.incoming-scale;
+        height: parent.height * root.incoming-scale;
+        background: transparent;
+        BuiltinIcon {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            kind: root.source-kind;
+            opacity: min(1.0, root.animated-progress);
+        }
+        if root.source-kind == "" : Image {
+            width: parent.width; height: parent.height;
+            source: root.source-image.width > 0 ? root.source-image : @image-url("../wowie.png");
+            image-fit: contain;
+            opacity: min(1.0, root.animated-progress);
+        }
+    }
 }
 
 export component Launcher inherits Window {
@@ -49,6 +99,11 @@ export component Launcher inherits Window {
     in property <color> accent-background: #280067c0;
     in property <image> search-icon;
     in property <string> search-icon-kind: "";
+    in property <image> search-icon-previous;
+    in property <string> search-icon-previous-kind: "";
+    in property <float> search-icon-transition-progress: 1.0;
+    in property <bool> search-icon-animation-enabled: true;
+    in-out property <bool> search-icon-is-shortcut: false;
     in property <bool> detail-panel-visible: false;
     in property <string> detail-title: "";
     in property <string> detail-subtitle: "";
@@ -106,6 +161,8 @@ export component Launcher inherits Window {
     private property <length> available-results-height: max(0px, root.height - 2 * root.window-inset - root.empty-state-padding - root.content-bottom-padding - root.search-row-height - root.content-spacing - root.operation-hint-spacing - root.no-results-spacing);
     private property <length> visible-results-area-height: root.available-results-height;
     private property <bool> detail-visible: root.detail-panel-visible && root.selected-index >= 0;
+    private property <float> detail-progress: root.detail-visible ? 1.0 : 0.0;
+    animate detail-progress { duration: 180ms; easing: ease-out-back; }
     private property <int> first-visible-index: max(0, round(-results-list.content-y / root.result-row-height));
     private property <bool> context-click-consumed: false;
     private property <int> last-visible-index: min(root.results.length, round((-results-list.content-y + results-list.visible-height) / root.result-row-height) + 1);
@@ -155,7 +212,15 @@ export component Launcher inherits Window {
                 height: root.search-row-height;
                 background: transparent;
 
-                SearchGlyph { x: 14px; y: (root.search-row-height - root.result-icon-size) / 2; width: root.result-icon-size; height: root.result-icon-size; source-image: root.search-icon; source-kind: root.search-icon-kind; }
+                SearchGlyph {
+                    x: 14px; y: (root.search-row-height - root.result-icon-size) / 2;
+                    width: root.result-icon-size; height: root.result-icon-size;
+                    source-image: root.search-icon; source-kind: root.search-icon-kind;
+                    previous-image: root.search-icon-previous;
+                    previous-kind: root.search-icon-previous-kind;
+                    transition-progress: root.search-icon-transition-progress;
+                    transition-animation-enabled: root.search-icon-animation-enabled;
+                }
                 Text { x: 48px; y: 0px; width: parent.width - 126px; height: parent.height; text: @tr("Search applications"); color: root.text-tertiary; font-size: 16px; vertical-alignment: center; visible: search-field.text == ""; }
                 search-field := TextInput {
                     x: 48px; y: 0px; width: parent.width - 126px; height: root.search-row-height;
@@ -176,10 +241,11 @@ export component Launcher inherits Window {
             results-area := Rectangle {
                 height: root.visible-results-area-height;
                 background: transparent;
+                clip: true;
 
                 results-list := ListView {
                     x: 0px; y: 0px;
-                    width: root.detail-visible ? parent.width * (1.0 - root.detail-panel-share) - root.result-column-gap + root.detail-panel-alignment-shift : parent.width;
+                    width: parent.width - root.detail-progress * (parent.width * root.detail-panel-share + root.result-column-gap - root.detail-panel-alignment-shift);
                     height: parent.height;
                 for row[index] in root.results : result-row := Rectangle {
                     x: root.result-row-inset;
@@ -214,7 +280,7 @@ export component Launcher inherits Window {
                     VerticalBox {
                         x: 60px; y: root.result-content-offset; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px : parent.width - 60px - parent.shortcut-card-width; height: root.result-content-height; spacing: 2px;
                         Text { text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: 14px; font-weight: 500; overflow: elide; }
-                        Text { width: parent.width - 4px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "apps-folder-entry" ? @tr("Windows app") : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
+                        Text { width: parent.width - 4px; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "control-panel" ? @tr("Control Panel") : row.location_kind == "apps-folder-entry" ? @tr("Package") : row.location; color: root.text-secondary; font-size: 11px; overflow: elide; }
                     }
                     Rectangle {
                         x: parent.width - shortcut-card-width - 10px; y: (root.result-row-height - 24px) / 2; width: shortcut-card-width; height: 24px;
@@ -226,17 +292,29 @@ export component Launcher inherits Window {
                 }
                 }
 
-                if (root.detail-visible) : Rectangle {
-                    x: parent.width * (1.0 - root.detail-panel-share) - root.detail-panel-inset + root.detail-panel-alignment-shift;
+                detail-panel := Rectangle {
+                    // Keep the panel mounted and reveal it from its fixed
+                    // right edge. Width/height are not scaled, so the card
+                    // content never stretches during the entrance animation.
+                    private property <length> panel-width: parent.width * root.detail-panel-share - root.detail-panel-alignment-shift;
+                    private property <length> panel-height: max(0px, parent.height - root.detail-panel-bottom-inset);
+                    visible: root.detail-visible;
+                    // Follow the animated list edge directly. This keeps the
+                    // gap constant throughout the entrance and prevents the
+                    // highlighted row from sliding underneath the panel.
+                    x: results-list.width + root.result-column-gap - root.result-row-inset;
                     y: 0px;
-                    width: parent.width * root.detail-panel-share - root.detail-panel-alignment-shift;
-                    height: max(0px, parent.height - root.detail-panel-bottom-inset);
+                    width: self.panel-width * max(0.0, root.detail-progress);
+                    height: self.panel-height;
                     background: root.dark-mode ? #242424 : #fbfcfe;
                     border-radius: 10px;
+                    clip: true;
+                    opacity: root.detail-visible ? 1.0 : 0.0;
 
                     Flickable {
-                        width: parent.width;
-                        height: parent.height;
+                        x: parent.width - detail-panel.panel-width;
+                        width: detail-panel.panel-width;
+                        height: detail-panel.panel-height;
                         content-width: self.width;
                         content-height: max(self.height, root.detail-panel-content-height);
                         interactive: root.detail-panel-scrollable || root.detail-panel-content-height > self.height;

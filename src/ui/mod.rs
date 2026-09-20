@@ -18,7 +18,9 @@ use crate::{
 use actions::{context_actions, resolve_plugin_action_icons};
 use anyhow::Result;
 use details::{request_dynamic_detail, set_detail_view};
-use results::{isolate_shortcut_results, request_icons, static_icon_kind, ResultRowPayload};
+use results::{
+    isolate_shortcut_results, matches_model, request_icons, static_icon_kind, ResultRowPayload,
+};
 use slint::{ComponentHandle, Model, ModelRc, Timer, VecModel};
 use std::{
     collections::HashSet,
@@ -31,6 +33,48 @@ use std::{
     time::Duration,
 };
 use window::{create_window, hide_context_menu, save_window_size, toggle_palette};
+
+fn update_search_icon(
+    window: &Launcher,
+    icon: Option<&crate::platform::IconData>,
+    kind: String,
+    is_shortcut: bool,
+    transition_generation: Arc<AtomicU64>,
+) {
+    let transition_id = transition_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    let was_shortcut = window.get_search_icon_is_shortcut();
+    let should_transition = was_shortcut || is_shortcut;
+    let previous_icon = window.get_search_icon();
+    let previous_kind = window.get_search_icon_kind();
+    if should_transition {
+        window.set_search_icon_animation_enabled(false);
+        window.set_search_icon_transition_progress(0.0);
+        window.set_search_icon_previous(previous_icon);
+        window.set_search_icon_previous_kind(previous_kind);
+    }
+    window.set_search_icon(icon.map(results::icon_to_image).unwrap_or_default());
+    window.set_search_icon_kind(kind.into());
+    window.set_search_icon_is_shortcut(is_shortcut);
+
+    if should_transition {
+        // Let the reset state render for one frame. Without this separation,
+        // Slint can coalesce reset and activation into one frame.
+        let weak = window.as_weak();
+        Timer::single_shot(Duration::from_millis(16), move || {
+            if let Some(window) = weak.upgrade() {
+                if transition_generation.load(Ordering::Acquire) != transition_id {
+                    return;
+                }
+                window.set_search_icon_animation_enabled(true);
+                window.set_search_icon_transition_progress(1.0);
+            }
+        });
+    } else {
+        window.set_search_icon_animation_enabled(false);
+        window.set_search_icon_transition_progress(1.0);
+        window.set_search_icon_animation_enabled(true);
+    }
+}
 
 pub fn run() -> Result<()> {
     #[cfg(not(debug_assertions))]
@@ -85,6 +129,7 @@ pub fn run() -> Result<()> {
     let follow_system_theme = Arc::new(AtomicBool::new(config.theme == "system"));
     let hide_on_focus_loss = Arc::new(AtomicBool::new(config.hide_on_focus_loss));
     let query_generation = Arc::new(AtomicU64::new(0));
+    let search_icon_generation = Arc::new(AtomicU64::new(0));
     let detail_generation = Arc::new(AtomicU64::new(0));
     let detail_registry = crate::details::DetailRegistry::default_providers();
     let current_query = Arc::new(Mutex::new(String::new()));
@@ -111,6 +156,11 @@ pub fn run() -> Result<()> {
         (accent & 0xff) as u8,
     ));
     window.set_search_icon(slint::Image::default());
+    window.set_search_icon_previous(slint::Image::default());
+    window.set_search_icon_previous_kind(String::new().into());
+    window.set_search_icon_transition_progress(1.0);
+    window.set_search_icon_animation_enabled(true);
+    window.set_search_icon_is_shortcut(false);
     window.set_launch_error(String::new().into());
     context_window.set_dark_mode(dark_mode);
     context_window.set_accent_color(slint::Color::from_rgb_u8(
@@ -191,6 +241,7 @@ pub fn run() -> Result<()> {
         let query_generation = Arc::clone(&query_generation);
         let current_query = Arc::clone(&current_query);
         let show_advanced_details = Arc::clone(&show_advanced_details);
+        let search_icon_generation = Arc::clone(&search_icon_generation);
         let detail_registry = detail_registry.clone();
         let detail_language = config.language.clone();
         let detail_generation = Arc::clone(&detail_generation);
@@ -216,8 +267,10 @@ pub fn run() -> Result<()> {
                         .get_result_window_height()
                         .max(config::MIN_WINDOW_HEIGHT as f32)
                 };
-                window.set_result_window_height(result_height);
-                if !query.trim().is_empty() {
+                if (window.get_result_window_height() - result_height).abs() > 0.5 {
+                    window.set_result_window_height(result_height);
+                }
+                if !query.trim().is_empty() && (current_height - result_height).abs() > 0.5 {
                     let logical_size = native_window
                         .size()
                         .to_logical(native_window.scale_factor());
@@ -228,7 +281,6 @@ pub fn run() -> Result<()> {
                 window.set_last_action_result(String::new().into());
                 window.set_last_action_subtitle(String::new().into());
                 window.set_launch_error(String::new().into());
-                window.set_detail_panel_visible(false);
             }
             let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
             let engine = Arc::clone(&engine);
@@ -237,6 +289,7 @@ pub fn run() -> Result<()> {
             let icon_requests = Arc::clone(&icon_requests);
             let weak = weak.clone();
             let query_generation = Arc::clone(&query_generation);
+            let search_icon_generation = Arc::clone(&search_icon_generation);
             let show_advanced_details_for_query = Arc::clone(&show_advanced_details);
             let detail_registry_for_query = detail_registry.clone();
             let detail_language_for_query = detail_language.clone();
@@ -257,6 +310,7 @@ pub fn run() -> Result<()> {
                     .and_then(|results| results.first())
                     .map(|item| static_icon_kind(item.icon.as_ref()).to_owned())
                     .unwrap_or_default();
+                let is_shortcut_result = shortcut_results.is_some();
                 let found = shortcut_results.unwrap_or(found);
                 let rows = found
                     .iter()
@@ -289,18 +343,27 @@ pub fn run() -> Result<()> {
                         if let Ok(mut state) = icon_requests.lock() {
                             *state = (query_id, HashSet::new());
                         }
-                        let model = Rc::new(VecModel::from(
-                            rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
-                        ));
-                        let count = model.row_count();
-                        window.set_results(ModelRc::from(model));
-                        window.set_search_icon(
-                            shortcut_icon
-                                .as_ref()
-                                .map(|icon| results::icon_to_image(icon.as_ref()))
-                                .unwrap_or_default(),
-                        );
-                        window.set_search_icon_kind(shortcut_icon_kind.into());
+                        let results_changed = !matches_model(&window.get_results(), &rows);
+                        let icon_mode_changed =
+                            window.get_search_icon_is_shortcut() != is_shortcut_result;
+                        let search_icon_changed =
+                            icon_mode_changed || (results_changed && is_shortcut_result);
+                        let count = rows.len();
+                        if results_changed {
+                            let model = Rc::new(VecModel::from(
+                                rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
+                            ));
+                            window.set_results(ModelRc::from(model));
+                        }
+                        if search_icon_changed {
+                            update_search_icon(
+                                &window,
+                                shortcut_icon.as_ref().map(|icon| icon.as_ref()),
+                                shortcut_icon_kind,
+                                is_shortcut_result,
+                                search_icon_generation,
+                            );
+                        }
                         let cached_detail = (!has_dynamic_detail)
                             .then(|| {
                                 found_for_icons
@@ -311,14 +374,16 @@ pub fn run() -> Result<()> {
                                     })
                             })
                             .flatten();
-                        set_detail_view(
-                            &window,
-                            cached_detail.as_ref().or(first_detail.as_ref()),
-                            &icon_service,
-                        );
-                        window.set_detail_panel_visible(detail_panel);
-                        window.set_selected_index(-1);
-                        window.set_selected_index(if count > 0 { 0 } else { -1 });
+                        if results_changed {
+                            set_detail_view(
+                                &window,
+                                cached_detail.as_ref().or(first_detail.as_ref()),
+                                &icon_service,
+                            );
+                            window.set_detail_panel_visible(detail_panel);
+                            window.set_selected_index(-1);
+                            window.set_selected_index(if count > 0 { 0 } else { -1 });
+                        }
                         request_icons(
                             0,
                             count.min(8) as i32,
@@ -693,6 +758,7 @@ pub fn run() -> Result<()> {
         let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
         let platform_for_config = Arc::clone(&platform);
         let detail_registry = detail_registry.clone();
+        let search_icon_generation = Arc::clone(&search_icon_generation);
         std::thread::spawn(move || {
             provider.discover_initial();
             let mut initial_refresh = true;
@@ -779,6 +845,7 @@ pub fn run() -> Result<()> {
                         .and_then(|results| results.first())
                         .map(|item| static_icon_kind(item.icon.as_ref()).to_owned())
                         .unwrap_or_default();
+                    let is_shortcut_result = shortcut_results.is_some();
                     let found = shortcut_results.unwrap_or(found);
                     let rows = found
                         .iter()
@@ -806,6 +873,7 @@ pub fn run() -> Result<()> {
                     let icon_requests_for_ui = Arc::clone(&icon_requests);
                     let icon_service_for_ui = icon_service.clone();
                     let query_generation_for_icons = Arc::clone(&query_generation);
+                    let search_icon_generation_for_ui = Arc::clone(&search_icon_generation);
                     let _ = slint::invoke_from_event_loop(move || {
                         if query_generation_for_ui.load(Ordering::Acquire) != query_id {
                             return;
@@ -817,22 +885,36 @@ pub fn run() -> Result<()> {
                             if let Ok(mut state) = icon_requests_for_ui.lock() {
                                 *state = (query_id, HashSet::new());
                             }
-                            let model = Rc::new(VecModel::from(
-                                rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
-                            ));
-                            let count = model.row_count();
-                            window.set_results(ModelRc::from(model));
-                            window.set_search_icon(
-                                shortcut_icon
-                                    .as_ref()
-                                    .map(|icon| results::icon_to_image(icon.as_ref()))
-                                    .unwrap_or_default(),
-                            );
-                            window.set_search_icon_kind(shortcut_icon_kind.into());
-                            set_detail_view(&window, first_detail.as_ref(), &icon_service_for_ui);
-                            window.set_detail_panel_visible(detail_panel);
-                            window.set_selected_index(-1);
-                            window.set_selected_index(if count > 0 { 0 } else { -1 });
+                            let results_changed = !matches_model(&window.get_results(), &rows);
+                            let icon_mode_changed =
+                                window.get_search_icon_is_shortcut() != is_shortcut_result;
+                            let search_icon_changed =
+                                icon_mode_changed || (results_changed && is_shortcut_result);
+                            let count = rows.len();
+                            if results_changed {
+                                let model = Rc::new(VecModel::from(
+                                    rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
+                                ));
+                                window.set_results(ModelRc::from(model));
+
+                                set_detail_view(
+                                    &window,
+                                    first_detail.as_ref(),
+                                    &icon_service_for_ui,
+                                );
+                                window.set_detail_panel_visible(detail_panel);
+                                window.set_selected_index(-1);
+                                window.set_selected_index(if count > 0 { 0 } else { -1 });
+                            }
+                            if search_icon_changed {
+                                update_search_icon(
+                                    &window,
+                                    shortcut_icon.as_ref().map(|icon| icon.as_ref()),
+                                    shortcut_icon_kind,
+                                    is_shortcut_result,
+                                    search_icon_generation_for_ui,
+                                );
+                            }
                             request_icons(
                                 0,
                                 count.min(8) as i32,
