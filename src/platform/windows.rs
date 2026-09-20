@@ -113,7 +113,9 @@ fn file_description(path: &Path) -> Option<String> {
         .and_then(|(pointer, length)| {
             (length >= 4).then(|| {
                 unsafe { std::slice::from_raw_parts(pointer.cast::<u16>(), length as usize / 2) }
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| (pair[0], pair[1]))
                     .collect::<Vec<_>>()
             })
@@ -762,10 +764,11 @@ fn collect_apps_folder(applications: &mut Vec<super::StoreApplication>) {
         if title.trim().is_empty() {
             continue;
         }
-        push_store_application(
-            applications,
-            apps_folder_application(&parsing, filesystem_path, title),
-        );
+        let mut application = apps_folder_application(&parsing, filesystem_path, title);
+        if application.app_user_model_id.is_some() || application.executable.is_some() {
+            application.description = application_description(&application.launch_target);
+        }
+        push_store_application(applications, application);
     }
     unsafe { CoTaskMemFree(Some(root_pidl.cast())) };
 }
@@ -921,7 +924,6 @@ fn apps_folder_application(
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
     {
-        let description = application_description(&path);
         return super::StoreApplication {
             identity: format!("exe:{}", path.to_string_lossy().trim().to_lowercase()),
             title,
@@ -931,7 +933,7 @@ fn apps_folder_application(
             // only a Shell namespace identifier and is not launchable.
             launch_target: path.clone(),
             executable: Some(path),
-            description,
+            description: None,
             app_user_model_id: None,
             package_family_name: None,
             package_metadata: None,
@@ -1023,9 +1025,7 @@ fn parse_guid(value: &str) -> Option<windows::core::GUID> {
 }
 
 fn store_application(aumid: &str, title: String, source: &'static str) -> super::StoreApplication {
-    let launch_target = PathBuf::from(format!("shell:AppsFolder\\{aumid}"));
-    let description = application_description(&launch_target);
-    store_application_with_metadata(aumid, title, source, None, description)
+    store_application_with_metadata(aumid, title, source, None, None)
 }
 
 fn store_application_with_metadata(

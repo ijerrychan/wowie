@@ -1,6 +1,6 @@
 //! Application identity, path normalization, and merge rules.
 
-use crate::result::{ResultCategory, SearchResult};
+use crate::result::{LaunchEntry, ResultCategory, SearchResult};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -91,6 +91,7 @@ pub(super) fn shell_apps_folder_value(value: &str) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
+#[cfg(test)]
 pub(super) fn same_filesystem_target(left: &Path, right: &Path) -> bool {
     filesystem_target_key(left)
         .zip(filesystem_target_key(right))
@@ -98,8 +99,35 @@ pub(super) fn same_filesystem_target(left: &Path, right: &Path) -> bool {
 }
 
 pub(super) fn filesystem_target_key(path: &Path) -> Option<String> {
-    (!crate::platform::windows_rules::is_shell_namespace(path) && !looks_like_uri(path))
-        .then(|| normalize_path(path))
+    if crate::platform::windows_rules::is_shell_namespace(path) || looks_like_uri(path) {
+        return None;
+    }
+    let key = normalize_path(path);
+    (!key.is_empty()).then_some(key)
+}
+
+pub(super) fn filesystem_target_key_for_entry(entry: &LaunchEntry) -> Option<String> {
+    if crate::platform::windows_rules::is_shell_namespace(&entry.target)
+        || looks_like_uri(&entry.target)
+    {
+        return None;
+    }
+    let target = if entry.target.is_relative() {
+        entry
+            .working_directory
+            .as_deref()
+            .map(|directory| directory.join(&entry.target))
+            .unwrap_or_else(|| entry.target.clone())
+    } else {
+        entry.target.clone()
+    };
+    filesystem_target_key(&target)
+}
+
+pub(super) fn same_filesystem_entry_target(left: &LaunchEntry, right: &LaunchEntry) -> bool {
+    filesystem_target_key_for_entry(left)
+        .zip(filesystem_target_key_for_entry(right))
+        .is_some_and(|(left, right)| left == right)
 }
 
 pub(super) fn looks_like_uri(path: &Path) -> bool {
@@ -253,6 +281,7 @@ pub(super) struct IdentityMergeStats {
 pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) -> IdentityMergeStats {
     let input_count = items.len();
     let mut grouped = HashMap::<String, SearchResult>::with_capacity(items.len());
+    let mut unmergeable = Vec::new();
     for mut item in std::mem::take(items) {
         let mut aliases = std::mem::take(&mut item.aliases);
         aliases.push(item.title.clone());
@@ -275,6 +304,11 @@ pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) -> IdentityMergeS
                 aliases.extend(product.split_whitespace().map(str::to_owned));
                 aliases.push(product);
             }
+        }
+        if item.identity.trim().is_empty() {
+            item.aliases = aliases;
+            unmergeable.push(item);
+            continue;
         }
         match grouped.get_mut(&item.identity) {
             Some(existing) => {
@@ -322,6 +356,7 @@ pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) -> IdentityMergeS
         }
     }
     let mut merged: Vec<_> = grouped.into_values().collect();
+    merged.extend(unmergeable);
     let merged_records = input_count.saturating_sub(merged.len());
     let mut launch_entries_removed = 0;
     for item in &mut merged {

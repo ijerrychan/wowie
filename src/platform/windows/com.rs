@@ -10,7 +10,7 @@ pub(super) struct WinRtScope(bool);
 
 impl WinRtScope {
     pub(super) fn initialize() -> Option<Self> {
-        let result = unsafe { co_initialize_mta() };
+        let result = unsafe { co_initialize_sta() };
         if result >= 0 {
             Some(Self(true))
         } else if result as u32 == RPC_E_CHANGED_MODE {
@@ -31,7 +31,7 @@ impl Drop for WinRtScope {
 
 impl ComScope {
     pub(super) fn initialize() -> Option<Self> {
-        let result = unsafe { co_initialize_mta() };
+        let result = unsafe { co_initialize_sta() };
         if result >= 0 {
             Some(Self(true))
         } else if result as u32 == RPC_E_CHANGED_MODE {
@@ -42,7 +42,7 @@ impl ComScope {
     }
 }
 
-unsafe fn co_initialize_mta() -> i32 {
+unsafe fn co_initialize_sta() -> i32 {
     #[link(name = "ole32")]
     unsafe extern "system" {
         fn CoInitializeEx(reserved: *const std::ffi::c_void, init_type: u32) -> i32;

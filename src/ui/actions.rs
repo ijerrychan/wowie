@@ -143,6 +143,13 @@ pub(super) fn visible_launch_entries(
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
+            // Windows installer-generated shortcuts can use an .ico file as
+            // an icon placeholder while launching the real application. It
+            // is useful for association provenance, but it is not a valid
+            // alternate launch target for the user-facing menu.
+            if crate::platform::windows_rules::is_icon_path(&entry.target) {
+                return None;
+            }
             if crate::providers::app::same_launch_behavior(default, entry) {
                 return None;
             }

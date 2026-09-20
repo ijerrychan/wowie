@@ -1,13 +1,13 @@
 use crate::result::{LaunchEntry, ResultCategory, SearchResult};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 use url::Url;
 
 use super::{
-    debug_enabled, debug_record_matches, filesystem_target_key, looks_like_uri, normalize_path,
-    normalize_url, same_filesystem_target, source_priority, website_url,
+    debug_enabled, debug_record_matches, filesystem_target_key_for_entry, looks_like_uri,
+    normalize_path, normalize_url, same_filesystem_entry_target, source_priority, website_url,
 };
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -19,11 +19,19 @@ pub(super) struct AssociationStats {
 pub(super) fn associate_file_entries(items: &mut Vec<SearchResult>) -> AssociationStats {
     let mut unified = Vec::with_capacity(items.len());
     let mut application_targets: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut application_identities: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut application_titles: HashMap<String, Vec<usize>> = HashMap::new();
     let mut stats = AssociationStats::default();
     for item in std::mem::take(items) {
         let is_file_entry = is_file_source(&item.source);
         let (match_index, candidate_count) = if is_file_entry && !is_remote_website(&item) {
-            select_file_association(&item, &unified, &application_targets)
+            select_file_association(
+                &item,
+                &unified,
+                &application_targets,
+                &application_identities,
+                &application_titles,
+            )
         } else {
             (None, 0)
         };
@@ -40,8 +48,20 @@ pub(super) fn associate_file_entries(items: &mut Vec<SearchResult>) -> Associati
         } else {
             let index = unified.len();
             if is_store_application(&item) {
+                if !item.identity.trim().is_empty() {
+                    application_identities
+                        .entry(item.identity.to_lowercase())
+                        .or_default()
+                        .push(index);
+                }
+                if !item.title.trim().is_empty() {
+                    application_titles
+                        .entry(item.title.trim().to_lowercase())
+                        .or_default()
+                        .push(index);
+                }
                 for entry in &item.launch_entries {
-                    if let Some(key) = filesystem_target_key(&entry.target) {
+                    if let Some(key) = filesystem_target_key_for_entry(entry) {
                         let matches = application_targets.entry(key).or_default();
                         if !matches.contains(&index) {
                             matches.push(index);
@@ -83,26 +103,36 @@ fn select_file_association(
     item: &SearchResult,
     applications: &[SearchResult],
     application_targets: &HashMap<String, Vec<usize>>,
+    application_identities: &HashMap<String, Vec<usize>>,
+    application_titles: &HashMap<String, Vec<usize>>,
 ) -> (Option<usize>, usize) {
     let mut candidates = HashMap::<usize, MatchStrength>::new();
     for entry in &item.launch_entries {
-        let strong_matches = filesystem_target_key(&entry.target)
-            .and_then(|key| application_targets.get(&key))
-            .cloned()
-            .unwrap_or_default();
-        if !strong_matches.is_empty() {
-            for index in strong_matches {
+        if let Some(strong_matches) =
+            filesystem_target_key_for_entry(entry).and_then(|key| application_targets.get(&key))
+        {
+            for &index in strong_matches {
                 if !package_identity_conflicts(item, &applications[index]) {
                     candidates.insert(index, MatchStrength::FilesystemTarget);
                 }
             }
-            continue;
+            if !strong_matches.is_empty() {
+                continue;
+            }
         }
 
         // Virtual Shell entries and constrained title fallbacks do not have a
         // filesystem key. Keep the slower compatibility path only for those
         // cases, but evaluate every launch entry before deciding.
-        for (index, application) in applications.iter().enumerate() {
+        let mut candidate_indices = HashSet::new();
+        if let Some(indices) = application_identities.get(&item.identity.to_lowercase()) {
+            candidate_indices.extend(indices.iter().copied());
+        }
+        if let Some(indices) = application_titles.get(&item.title.trim().to_lowercase()) {
+            candidate_indices.extend(indices.iter().copied());
+        }
+        for index in candidate_indices {
+            let application = &applications[index];
             if !is_store_application(application) {
                 continue;
             }
@@ -200,7 +230,10 @@ fn shortcut_match_strength(
     // AUMID is authoritative when the shortcut exposes one. Conflicting
     // AUMIDs must never be merged through a weaker executable match.
     if shortcut.identity.starts_with("aumid:") {
-        return (shortcut.identity == application.identity).then_some(MatchStrength::Aumid);
+        return shortcut
+            .identity
+            .eq_ignore_ascii_case(&application.identity)
+            .then_some(MatchStrength::Aumid);
     }
     if shortcut.identity == application.identity {
         return Some(MatchStrength::ExactIdentity);
@@ -209,7 +242,7 @@ fn shortcut_match_strength(
         return application
             .launch_entries
             .iter()
-            .any(|app_entry| same_filesystem_target(&app_entry.target, &entry.target))
+            .any(|app_entry| same_filesystem_entry_target(app_entry, entry))
             .then_some(MatchStrength::FilesystemTarget);
     }
     // Some Windows AppsFolder entries expose a virtual shell identity while
@@ -282,7 +315,7 @@ fn shortcut_match_strength(
     application
         .launch_entries
         .iter()
-        .any(|app_entry| same_filesystem_target(&app_entry.target, &entry.target))
+        .any(|app_entry| same_filesystem_entry_target(app_entry, entry))
         .then_some(MatchStrength::FilesystemTarget)
 }
 
@@ -433,6 +466,7 @@ pub(crate) fn preferred_launch_entry(item: &SearchResult) -> Option<&LaunchEntry
     let is_concrete = |entry: &&LaunchEntry| {
         !crate::platform::windows_rules::is_shell_namespace(&entry.target)
             && !looks_like_uri(&entry.target)
+            && !crate::platform::windows_rules::is_icon_path(&entry.target)
     };
     let has_non_updater = item
         .launch_entries
@@ -455,14 +489,17 @@ pub(crate) fn preferred_launch_entry(item: &SearchResult) -> Option<&LaunchEntry
             )
         })
         .or_else(|| {
-            item.launch_entries.iter().min_by_key(|entry| {
-                (
-                    entry.source.priority(),
-                    entry.target.to_string_lossy().to_lowercase(),
-                    entry.arguments.clone(),
-                    entry.working_directory.clone(),
-                )
-            })
+            item.launch_entries
+                .iter()
+                .filter(|entry| !crate::platform::windows_rules::is_icon_path(&entry.target))
+                .min_by_key(|entry| {
+                    (
+                        entry.source.priority(),
+                        entry.target.to_string_lossy().to_lowercase(),
+                        entry.arguments.clone(),
+                        entry.working_directory.clone(),
+                    )
+                })
         })
 }
 

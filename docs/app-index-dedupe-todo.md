@@ -104,6 +104,8 @@ AppsFolder / Package / StartMenu / Desktop / 其他来源
 - [x] 入口关联会拒绝冲突的 AppUserModelId / PackageFamilyName。
 - [x] 文件目标强匹配也会经过包身份冲突检查，不能绕过身份保护。
 - [x] 将匹配证据正式类型化，并输出可解释的去重决策诊断。
+- [x] 空 identity、空 filesystem target 不参与合并或强匹配。
+- [x] 相对启动目标会结合 working directory 生成比较键，避免跨目录误关联。
 
 ## P1：完善索引质量和包应用处理
 
@@ -302,6 +304,7 @@ Source Repository
 - [x] 来源没有变化时跳过统一结果重建。
 - [x] 建立基于 AUMID、PackageFamilyName 和 filesystem target 的来源反向索引基础。
 - [x] 对身份和启动拓扑不变的包来源刷新，复用现有合并结果，仅局部更新展示元数据。
+- [x] 为文件来源关联建立 identity/title 候选索引，避免每个快捷方式扫描全部包应用。
 - [ ] 将反向索引进一步接入身份或入口拓扑变化时的局部关联重算。
 
 ### [x] 减少来源刷新后的全量合并成本

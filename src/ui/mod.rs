@@ -1162,6 +1162,11 @@ mod tests {
             arguments: "--profile-directory=Work".into(),
             ..default.clone()
         };
+        let icon_placeholder = result::LaunchEntry {
+            path: PathBuf::from(r"C:\Start Menu\WSL Settings.lnk"),
+            target: PathBuf::from(r"C:\Windows\Installer\{guid}\wsl.ico"),
+            ..default.clone()
+        };
         let item = SearchResult {
             id: "exe:chrome".into(),
             identity: "exe:chrome".into(),
@@ -1178,6 +1183,7 @@ mod tests {
                 default.clone(),
                 same_arguments.clone(),
                 different_arguments.clone(),
+                icon_placeholder,
             ],
             actions: vec![
                 result::Action::Launch(default),

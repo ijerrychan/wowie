@@ -191,6 +191,11 @@ export component Launcher inherits Window {
     }
     changed first-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
     changed last-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
+    // Re-emit after replacing the model even when the calculated range stays
+    // unchanged. Without this, newly visible rows can wait for a selection
+    // or scroll event before their asynchronous icons are requested.
+    changed results => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
+    changed visible-results-area-height => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
 
     Rectangle {
         x: root.window-inset; y: root.window-inset;

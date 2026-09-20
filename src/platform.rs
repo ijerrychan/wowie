@@ -26,7 +26,7 @@ pub struct TrayRegistration {
     pub updates: std::sync::mpsc::Sender<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum AppProviderSource {
     StoreApps,
     StartMenu,
@@ -147,6 +147,7 @@ pub mod windows_rules {
     pub const SHORTCUT_EXTENSION: &str = "lnk";
     pub const URL_EXTENSION: &str = "url";
     pub const EXECUTABLE_EXTENSION: &str = "exe";
+    pub const ICON_EXTENSION: &str = "ico";
     pub const ADMINISTRATIVE_TOOLS_DIRECTORY: &str = "Administrative Tools";
     pub const SYSTEM_TOOLS_DIRECTORY: &str = "System Tools";
     pub const UPDATER_FILE_STEM: &str = "update";
@@ -170,6 +171,12 @@ pub mod windows_rules {
         path.extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension.eq_ignore_ascii_case(SHORTCUT_EXTENSION))
+    }
+
+    pub fn is_icon_path(path: &Path) -> bool {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case(ICON_EXTENSION))
     }
 
     pub fn is_legacy_tools_path(path: &Path) -> bool {
@@ -197,6 +204,12 @@ pub mod windows_rules {
         fn recognizes_updater_file_stems() {
             assert!(is_updater_path(Path::new(r"C:\Apps\Update.exe")));
             assert!(!is_updater_path(Path::new(r"C:\Apps\Demo.exe")));
+        }
+
+        #[test]
+        fn recognizes_icon_targets_as_non_launchable_placeholders() {
+            assert!(is_icon_path(Path::new(r"C:\Windows\Installer\wsl.ico")));
+            assert!(!is_icon_path(Path::new(r"C:\Apps\Demo.exe")));
         }
 
         #[test]

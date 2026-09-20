@@ -40,10 +40,13 @@ use discovery::{
 };
 #[cfg(test)]
 use discovery::{generic_file_result, is_website_shortcut, read_url_target};
+#[cfg(test)]
+use identity::same_filesystem_target;
 use identity::{
-    apps_folder_identity, executable_identity, filesystem_target_key, looks_like_uri,
-    merge_by_identity, normalize_path, packaged_identity_fields, same_filesystem_target,
-    shortcut_icon_target, source_priority, target_identity, target_stem_alias, IdentityMergeStats,
+    apps_folder_identity, executable_identity, filesystem_target_key,
+    filesystem_target_key_for_entry, looks_like_uri, merge_by_identity, normalize_path,
+    packaged_identity_fields, same_filesystem_entry_target, shortcut_icon_target, source_priority,
+    target_identity, target_stem_alias, IdentityMergeStats,
 };
 
 pub struct AppProvider {
@@ -97,7 +100,7 @@ impl SourceLookup {
                 let mut targets = record
                     .launch_entries
                     .iter()
-                    .filter_map(|entry| filesystem_target_key(&entry.target))
+                    .filter_map(filesystem_target_key_for_entry)
                     .collect::<Vec<_>>();
                 if let Some(target) = filesystem_target_key(&record.launch_target) {
                     targets.push(target);
@@ -111,6 +114,15 @@ impl SourceLookup {
                         .or_default()
                         .push((*source, index));
                 }
+            }
+        }
+        for index in [
+            &mut lookup.by_aumid,
+            &mut lookup.by_package_family,
+            &mut lookup.by_filesystem_target,
+        ] {
+            for records in index.values_mut() {
+                records.sort_unstable();
             }
         }
         lookup
@@ -241,7 +253,7 @@ impl AppProvider {
             );
         }
         self.source_lookup = updated_lookup;
-        let refreshed = self.sources.get(&source).expect("refreshed source");
+        let refreshed = self.sources.get(&source).map(Vec::as_slice).unwrap_or(&[]);
         self.items = Arc::new(
             try_merge_store_metadata_refresh(&previous, refreshed, &self.items)
                 .unwrap_or_else(|| merge_sources(&self.sources)),
@@ -419,7 +431,7 @@ fn try_merge_store_metadata_refresh(
         if candidates.len() != 1 {
             return None;
         }
-        result[index] = candidates.pop().expect("single merged identity");
+        result[index] = candidates.pop()?;
     }
     classify_unclassified_items(&mut result);
     sort_merge_inputs(&mut result);
@@ -516,16 +528,6 @@ fn classify_unclassified_items(items: &mut [SearchResult]) {
 }
 
 #[cfg(test)]
-fn refresh_display_location(item: &mut SearchResult) {
-    if item.category == ResultCategory::ControlPanel {
-        return;
-    }
-    if let Some(target) = preferred_launch_entry(item).map(|entry| entry.target.clone()) {
-        item.location = target.display().to_string();
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::search::SearchCore;
@@ -591,6 +593,46 @@ mod tests {
             lookup.by_filesystem_target["c:\\apps\\editor.exe"],
             vec![(source, 0)]
         );
+    }
+
+    #[test]
+    fn empty_identity_records_are_never_merged() {
+        let mut items = vec![
+            item("", "First", source_ids::START_MENU),
+            item("", "Second", source_ids::DESKTOP),
+        ];
+
+        merge_by_identity(&mut items);
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["First", "Second"]
+        );
+    }
+
+    #[test]
+    fn relative_launch_targets_include_working_directory_in_matching() {
+        let left = LaunchEntry {
+            source: source_ids::START_MENU.into(),
+            path: PathBuf::from(r"C:\Start Menu\Editor.lnk"),
+            target: PathBuf::from(r"bin\editor.exe"),
+            arguments: String::new(),
+            working_directory: Some(PathBuf::from(r"C:\Apps")),
+        };
+        let right = LaunchEntry {
+            source: source_ids::APPS_FOLDER.into(),
+            path: PathBuf::from(r"shell:AppsFolder\Vendor.Editor"),
+            target: PathBuf::from(r"C:\Apps\bin\editor.exe"),
+            arguments: String::new(),
+            working_directory: None,
+        };
+
+        assert!(same_filesystem_entry_target(&left, &right));
+        assert_eq!(filesystem_target_key(Path::new("")), None);
     }
 
     #[test]
@@ -1450,6 +1492,38 @@ mod tests {
     }
 
     #[test]
+    fn preferred_launch_entry_ignores_icon_placeholder_targets() {
+        let mut application = item(
+            "exe:c:\\apps\\wslsettings.exe",
+            "WSL Settings",
+            "AppsFolder",
+        );
+        application.launch_entries = vec![
+            LaunchEntry {
+                source: "AppsFolder".into(),
+                path: PathBuf::from(r"shell:AppsFolder\Microsoft.WSLSettings"),
+                target: PathBuf::from(r"C:\Program Files\WSL\WslSettings\wslsettings.exe"),
+                arguments: String::new(),
+                working_directory: None,
+            },
+            LaunchEntry {
+                source: "StartMenu".into(),
+                path: PathBuf::from(r"C:\Start Menu\WSL Settings.lnk"),
+                target: PathBuf::from(r"C:\Windows\Installer\{guid}\wsl.ico"),
+                arguments: String::new(),
+                working_directory: None,
+            },
+        ];
+
+        assert_eq!(
+            preferred_launch_entry(&application).map(|entry| entry.target.clone()),
+            Some(PathBuf::from(
+                r"C:\Program Files\WSL\WslSettings\wslsettings.exe"
+            ))
+        );
+    }
+
+    #[test]
     fn display_location_prefers_executable_target_over_lnk_path() {
         let mut application = item("exe:c:\\apps\\demo.exe", "Demo", "StartMenu");
         application.location = r"C:\Start Menu\Demo.lnk".into();
@@ -1469,9 +1543,12 @@ mod tests {
                 working_directory: None,
             },
         ];
-        refresh_display_location(&mut application);
+        refresh_application_location(&mut application);
         assert_eq!(application.location, r"C:\Apps\Demo.exe");
-        assert_eq!(application.launch_target, PathBuf::from("target.exe"));
+        assert_eq!(
+            application.launch_target,
+            PathBuf::from(r"C:\Apps\Demo.exe")
+        );
     }
 
     #[test]
