@@ -222,3 +222,15 @@ msgstr "雷暴伴冰雹"
 msgctxt "Tray"
 msgid "Exit"
 msgstr "退出"
+
+msgctxt "Launcher"
+msgid "Everything"
+msgstr "Everything"
+
+msgctxt "Launcher"
+msgid "Search with Everything"
+msgstr "用 Everything 搜索"
+
+msgctxt "Launcher"
+msgid "Everything IPC"
+msgstr "Everything IPC"

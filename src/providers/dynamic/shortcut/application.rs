@@ -41,6 +41,7 @@ mod tests {
             name: "Notepad".into(),
             prefix: "n".into(),
             shortcut_type: "application".into(),
+            mode: "execute".into(),
             template: String::new(),
             target: "notepad.exe".into(),
             arguments: "{query}".into(),

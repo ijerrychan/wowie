@@ -222,3 +222,15 @@ msgstr "Thunderstorm with hail"
 msgctxt "Tray"
 msgid "Exit"
 msgstr "Exit"
+
+msgctxt "Launcher"
+msgid "Everything"
+msgstr "Everything"
+
+msgctxt "Launcher"
+msgid "Search with Everything"
+msgstr "Search with Everything"
+
+msgctxt "Launcher"
+msgid "Everything IPC"
+msgstr "Everything IPC"

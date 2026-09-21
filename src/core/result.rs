@@ -1,5 +1,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    /// Replace the current query with a shortcut-prefixed engine query.
+    EnterSearchEngine { prefix: String },
     /// Launch using this specific discovered entry, including its arguments.
     Launch(LaunchEntry),
     /// An action implemented by a script plugin.
@@ -17,7 +19,6 @@ pub enum ResultCategory {
     Application,
     Game,
     Website,
-    Shortcut,
     Calculator,
     ControlPanel,
     Document,
@@ -95,15 +96,6 @@ pub struct SearchResult {
     pub icon: Option<IconSpec>,
     /// Provider-supplied ranking adjustment consumed generically by SearchCore.
     pub ranking_bias: i32,
-}
-
-/// Whether a result participates in shortcut-specific intent and UI rules.
-///
-/// The result category identifies shortcut-shaped results, while a detail-only
-/// result such as Weather must remain an ordinary searchable result even if it
-/// is generated dynamically.
-pub fn is_action_shortcut(item: &SearchResult) -> bool {
-    item.category == ResultCategory::Shortcut && (item.detail.is_none() || !item.actions.is_empty())
 }
 
 impl SearchResult {
@@ -201,6 +193,8 @@ pub enum IconSpec {
     DefaultOpen(std::path::PathBuf),
     /// A semantic host icon name, resolved by the shared icon service.
     Named(String),
+    /// A host-fetched HTTPS image, normally supplied by a plugin.
+    Remote(String),
 }
 
 /// A plugin-facing icon reference. It is resolved into an `IconSpec` only at
@@ -211,6 +205,7 @@ pub enum IconRef {
     Resource { path: String },
     System { target: String },
     Named { id: String },
+    Remote { url: String },
 }
 
 #[cfg(test)]

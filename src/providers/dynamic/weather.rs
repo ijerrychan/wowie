@@ -137,7 +137,6 @@ mod tests {
         assert_eq!(found[0].category, ResultCategory::Other);
         assert!(found[0].actions.is_empty());
         assert!(found[0].detail.is_some());
-        assert!(!crate::result::is_action_shortcut(&found[0]));
     }
 
     #[test]

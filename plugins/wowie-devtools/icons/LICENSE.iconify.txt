@@ -1,5 +1,0 @@
-The book-open.svg asset is sourced from Iconify: flat-color-icons:reading.
-
-Source: https://iconify.design/
-License: MIT
-Upstream: https://github.com/icons8/flat-color-icons

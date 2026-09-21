@@ -49,11 +49,19 @@ pub struct ShortcutConfig {
     pub prefix: String,
     #[serde(rename = "type", default)]
     pub shortcut_type: String,
+    /// Interaction mode after the prefix is recognized. Existing shortcut
+    /// configurations default to direct execution for compatibility.
+    #[serde(default = "default_shortcut_mode")]
+    pub mode: String,
     pub template: String,
     #[serde(default)]
     pub target: String,
     #[serde(default)]
     pub arguments: String,
+}
+
+fn default_shortcut_mode() -> String {
+    "execute".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -124,6 +132,7 @@ impl Default for Config {
                 name: "Search with Google".into(),
                 prefix: "g ".into(),
                 shortcut_type: "url".into(),
+                mode: "execute".into(),
                 template: "https://www.google.com/search?q={query}".into(),
                 target: String::new(),
                 arguments: String::new(),
@@ -187,6 +196,10 @@ impl Config {
             if shortcut.shortcut_type.is_empty() {
                 shortcut.shortcut_type = "url".into();
             }
+            shortcut.mode = shortcut.mode.trim().to_ascii_lowercase();
+            if !matches!(shortcut.mode.as_str(), "execute" | "search" | "panel") {
+                shortcut.mode = default_shortcut_mode();
+            }
             shortcut.template = shortcut.template.trim().to_string();
             shortcut.target = shortcut.target.trim().to_string();
             shortcut.arguments = shortcut.arguments.trim().to_string();
@@ -200,6 +213,12 @@ impl Config {
                     _ => false,
                 }
         });
+        // A prefix selects exactly one custom result/search engine. Keeping
+        // the first declaration makes hot reload deterministic and prevents
+        // ambiguous shortcut routing or unstable result identities.
+        let mut prefixes = HashSet::new();
+        self.shortcuts
+            .retain(|shortcut| prefixes.insert(shortcut.prefix.clone()));
         self.plugins = std::mem::take(&mut self.plugins)
             .into_iter()
             .filter_map(|(id, mut plugin)| {
@@ -367,6 +386,7 @@ mod tests {
                 name: "Search".into(),
                 prefix: "  g  ".into(),
                 shortcut_type: "url".into(),
+                mode: "execute".into(),
                 template: "https://example.com/?q={query}".into(),
                 target: String::new(),
                 arguments: String::new(),
@@ -377,5 +397,27 @@ mod tests {
         config.normalize();
 
         assert_eq!(config.shortcuts[0].prefix, "g ");
+    }
+
+    #[test]
+    fn shortcut_modes_are_normalized_and_legacy_configs_default_to_execute() {
+        let mut config: Config = serde_json::from_str(
+            r#"{
+                "shortcuts": [
+                    {"name":"Search","prefix":"s","type":"url","template":"https://example.com/?q={query}","mode":"search"},
+                    {"name":"Panel","prefix":"p","type":"url","template":"https://example.com/?q={query}","mode":"panel"},
+                    {"name":"Legacy","prefix":"l","type":"url","template":"https://example.com/?q={query}"},
+                    {"name":"Invalid","prefix":"i","type":"url","template":"https://example.com/?q={query}","mode":"unknown"}
+                ]
+            }"#,
+        )
+        .expect("shortcut config JSON");
+
+        config.normalize();
+
+        assert_eq!(config.shortcuts[0].mode, "search");
+        assert_eq!(config.shortcuts[1].mode, "panel");
+        assert_eq!(config.shortcuts[2].mode, "execute");
+        assert_eq!(config.shortcuts[3].mode, "execute");
     }
 }

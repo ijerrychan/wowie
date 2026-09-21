@@ -6,17 +6,21 @@
 
 use crate::{
     config::PluginConfig,
+    page::{SearchEngineMode, SearchEngineSession},
     result::{Action, IconRef, IconSpec, LaunchEntry, ResultCategory, SearchResult},
 };
 use anyhow::{Context, Result};
 use mlua::{Function, Lua, LuaSerdeExt, Value};
 use serde::{de, Deserialize, Deserializer};
 use std::{
+    collections::BTreeMap,
     fs,
+    fs::OpenOptions,
+    io::Write,
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, TryLockError,
     },
 };
 
@@ -53,6 +57,16 @@ pub struct PluginCommand {
     pub keywords: Vec<String>,
     #[serde(default)]
     pub action_words: Vec<String>,
+    /// Optional launcher presentation hint for this command.
+    #[serde(default)]
+    pub presentation: Option<String>,
+    /// How an action word owns the launcher interaction. Plugin commands
+    /// default to provider-backed search for backwards compatibility.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Require whitespace after the action word before entering its page.
+    #[serde(default)]
+    pub require_separator: bool,
     #[serde(default)]
     pub icon: Option<IconRef>,
 }
@@ -125,6 +139,7 @@ impl EmbeddedPlugin {
             locale,
             manifest.default_locale.as_str(),
             preferences,
+            &manifest.permissions,
         )
     }
 
@@ -133,7 +148,8 @@ impl EmbeddedPlugin {
         chunk_name: &str,
         locale: &str,
         fallback_locale: &str,
-        preferences: &std::collections::BTreeMap<String, serde_json::Value>,
+        preferences: &BTreeMap<String, serde_json::Value>,
+        permissions: &[String],
     ) -> Result<Self> {
         let lua = Lua::new();
         let wowie = lua.create_table()?;
@@ -181,6 +197,55 @@ impl EmbeddedPlugin {
                     action.set("icon", icon)?;
                 }
                 Ok(action)
+            })?,
+        )?;
+        let network_allowed = has_plugin_permission(permissions, "network");
+        wowie.set(
+            "http_get_json",
+            lua.create_function(move |lua, url: String| {
+                require_plugin_permission(network_allowed, "network")?;
+                validate_plugin_http_url(&url).map_err(mlua::Error::external)?;
+                let value: serde_json::Value =
+                    crate::utils::http::get_json(&url).map_err(mlua::Error::external)?;
+                lua.to_value(&value)
+            })?,
+        )?;
+        let network_allowed = has_plugin_permission(permissions, "network");
+        wowie.set(
+            "http_get_text",
+            lua.create_function(move |_, url: String| {
+                require_plugin_permission(network_allowed, "network")?;
+                validate_plugin_http_url(&url).map_err(mlua::Error::external)?;
+                crate::utils::http::get_text(&url, 2 * 1024 * 1024).map_err(mlua::Error::external)
+            })?,
+        )?;
+        wowie.set(
+            "url_encode",
+            lua.create_function(|_, value: String| {
+                Ok(url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>())
+            })?,
+        )?;
+        wowie.set(
+            "url_encode_path",
+            lua.create_function(|_, value: String| Ok(encode_url_path_segment(&value)))?,
+        )?;
+        let clipboard_allowed = has_plugin_permission(permissions, "clipboard");
+        wowie.set(
+            "clipboard_set",
+            lua.create_function(move |_, text: String| {
+                require_plugin_permission(clipboard_allowed, "clipboard")?;
+                set_clipboard_text(&text).map_err(mlua::Error::external)
+            })?,
+        )?;
+        let network_allowed = has_plugin_permission(permissions, "network");
+        let download_allowed = has_plugin_permission(permissions, "download");
+        wowie.set(
+            "download",
+            lua.create_function(move |_, (url, filename): (String, String)| {
+                require_plugin_permission(network_allowed, "network")?;
+                require_plugin_permission(download_allowed, "download")?;
+                validate_plugin_http_url(&url).map_err(mlua::Error::external)?;
+                download_plugin_file(&url, &filename).map_err(mlua::Error::external)
             })?,
         )?;
         lua.globals().set("wowie", wowie)?;
@@ -245,6 +310,107 @@ impl EmbeddedPlugin {
         };
         Ok(serde_json::to_string(&value)?)
     }
+}
+
+fn has_plugin_permission(permissions: &[String], requested: &str) -> bool {
+    permissions
+        .iter()
+        .any(|permission| permission.eq_ignore_ascii_case(requested))
+}
+
+fn require_plugin_permission(
+    allowed: bool,
+    permission: &str,
+) -> std::result::Result<(), mlua::Error> {
+    allowed
+        .then_some(())
+        .ok_or_else(|| mlua::Error::runtime(format!("plugin permission required: {permission}")))
+}
+
+fn validate_plugin_http_url(value: &str) -> Result<()> {
+    let value = value.trim();
+    let parsed = url::Url::parse(value).context("invalid plugin URL")?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || value.chars().any(char::is_whitespace)
+    {
+        anyhow::bail!("plugin URL must be an HTTP(S) URL without credentials or whitespace");
+    }
+    Ok(())
+}
+
+fn encode_url_path_segment(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    encoded
+}
+
+fn set_clipboard_text(text: &str) -> Result<()> {
+    let mut clipboard = arboard::Clipboard::new().context("open system clipboard")?;
+    clipboard
+        .set_text(text.to_owned())
+        .context("write system clipboard")
+}
+
+fn download_plugin_file(url: &str, filename: &str) -> Result<String> {
+    let bytes = crate::utils::http::get_bytes(url, 4 * 1024 * 1024)?;
+    let directory = dirs::download_dir().context("download directory is unavailable")?;
+    fs::create_dir_all(&directory).context("create download directory")?;
+
+    let safe_name: String = filename
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+        .take(96)
+        .collect();
+    let safe_name = if safe_name.is_empty() {
+        "wowie-download.svg".to_owned()
+    } else {
+        safe_name
+    };
+    let path = Path::new(&safe_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("wowie-download");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("svg");
+
+    for suffix in 0..1000_u32 {
+        let name = if suffix == 0 {
+            safe_name.clone()
+        } else {
+            format!("{stem}-{suffix}.{extension}")
+        };
+        let target = directory.join(name);
+        let Ok(mut file) = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&target)
+        else {
+            continue;
+        };
+        file.write_all(&bytes).context("write downloaded file")?;
+        return Ok(target.to_string_lossy().into_owned());
+    }
+
+    anyhow::bail!("could not choose a free download filename")
 }
 
 #[derive(Debug, Deserialize)]
@@ -633,6 +799,114 @@ impl PluginManager {
             .collect()
     }
 
+    pub fn owns_search_engine_session(&self, session: &SearchEngineSession) -> bool {
+        self.plugin_command_for_session(session).is_some()
+    }
+
+    pub fn query_active_search_engine(
+        &self,
+        session: &SearchEngineSession,
+        raw_query: &str,
+    ) -> Vec<SearchResult> {
+        let Some((plugin, command_id)) = self.plugin_command_for_session(session) else {
+            return Vec::new();
+        };
+        let locale = self
+            .locale
+            .lock()
+            .map(|locale| locale.clone())
+            .unwrap_or_else(|_| "system".into());
+        match query_plugin(
+            plugin,
+            &session.argument,
+            &locale,
+            Some(&command_id),
+            raw_query,
+        ) {
+            Ok(items) => {
+                mark_success(plugin, "query");
+                items
+            }
+            Err(error) => {
+                mark_failure(plugin, "query", &error);
+                eprintln!(
+                    "[plugin:{}] search engine query failed: {error:#}",
+                    plugin.manifest.id
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn preferred_view_mode_for_session(&self, session: &SearchEngineSession) -> &'static str {
+        self.plugin_command_for_session(session)
+            .and_then(|(plugin, command_id)| {
+                let command = plugin
+                    .manifest
+                    .commands
+                    .iter()
+                    .find(|command| command.id == command_id)?;
+                (command.presentation.as_deref() == Some("grid")).then_some("grid")
+            })
+            .unwrap_or("list")
+    }
+
+    fn plugin_command_for_session<'a>(
+        &'a self,
+        session: &SearchEngineSession,
+    ) -> Option<(&'a InstalledPlugin, String)> {
+        let (plugin_id, command_id) = session
+            .id
+            .strip_prefix("plugin:")
+            .and_then(|value| value.split_once(':'))?;
+        let plugin = self.plugins.iter().find(|plugin| {
+            plugin.enabled.load(Ordering::Acquire) && plugin.manifest.id == plugin_id
+        })?;
+        plugin
+            .manifest
+            .commands
+            .iter()
+            .any(|command| command.id == command_id)
+            .then_some((plugin, command_id.to_owned()))
+    }
+
+    pub fn search_engine(&self, query: &str) -> Option<SearchEngineSession> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.enabled.load(Ordering::Acquire))
+            .find_map(|plugin| {
+                let (_, command_id) = action_word_query(plugin, query);
+                let command_id = command_id?;
+                let command = plugin
+                    .manifest
+                    .commands
+                    .iter()
+                    .find(|command| command.id == command_id)?;
+                let word = query.trim_start().split_whitespace().next()?;
+                let argument = query
+                    .trim_start()
+                    .strip_prefix(word)
+                    .unwrap_or_default()
+                    .trim_start();
+                let title = if command.title.trim().is_empty() {
+                    plugin.manifest.name.clone()
+                } else {
+                    command.title.clone()
+                };
+                Some(SearchEngineSession {
+                    id: format!("plugin:{}:{}", plugin.manifest.id, command.id),
+                    title,
+                    prefix: format!("{word} "),
+                    argument: argument.into(),
+                    mode: command
+                        .mode
+                        .as_deref()
+                        .map(SearchEngineMode::from_config)
+                        .unwrap_or(SearchEngineMode::Search),
+                })
+            })
+    }
+
     pub fn execute(&self, plugin_id: &str, item_id: &str, action_id: &str) -> Result<String> {
         let plugin = self
             .plugins
@@ -696,6 +970,7 @@ fn action_word_query(plugin: &InstalledPlugin, query: &str) -> (String, Option<S
     let Some(word) = parts.next() else {
         return (query.to_owned(), None);
     };
+    let argument = parts.next();
     let Some(command) = plugin.manifest.commands.iter().find(|command| {
         command
             .action_words
@@ -704,8 +979,11 @@ fn action_word_query(plugin: &InstalledPlugin, query: &str) -> (String, Option<S
     }) else {
         return (query.to_owned(), None);
     };
+    if command.require_separator && argument.is_none() {
+        return (query.to_owned(), None);
+    }
     (
-        parts.next().unwrap_or_default().trim_start().to_owned(),
+        argument.unwrap_or_default().trim_start().to_owned(),
         Some(command.id.clone()),
     )
 }
@@ -732,9 +1010,22 @@ fn query_plugin(
         .embedded
         .as_ref()
         .context("plugin is not initialized")?;
-    let embedded = embedded
-        .lock()
-        .map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?;
+    // A stale shortcut request may still be waiting on network I/O while the
+    // user has already returned to ordinary search. Do not make that ordinary
+    // search wait for the plugin VM; the plugin is optional for this query.
+    let embedded = if command_id.is_none() {
+        match embedded.try_lock() {
+            Ok(embedded) => embedded,
+            Err(TryLockError::WouldBlock) => return Ok(Vec::new()),
+            Err(TryLockError::Poisoned(_)) => {
+                anyhow::bail!("plugin VM lock poisoned")
+            }
+        }
+    } else {
+        embedded
+            .lock()
+            .map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?
+    };
     let output = embedded.call("query", &request, None, None)?;
     let response: QueryResponse =
         serde_json::from_str(&output).context("decode plugin response")?;
@@ -837,11 +1128,9 @@ fn to_result(
         id: format!("plugin:{}:{}", plugin.manifest.id, item.id),
         identity: format!("plugin:{}:{}", plugin.manifest.id, item.id),
         title: item.title,
-        category: if command.is_some() {
-            ResultCategory::Shortcut
-        } else {
-            ResultCategory::Application
-        },
+        // Command ownership routes the query to a plugin search engine; it
+        // does not change what the plugin item is.
+        category: ResultCategory::Application,
         aliases: item
             .aliases
             .into_iter()
@@ -875,6 +1164,9 @@ fn resolve_plugin_icon(root: &Path, icon: IconRef) -> Option<IconSpec> {
         IconRef::Resource { path } => plugin_resource_path(root, &path).map(IconSpec::Resource),
         IconRef::System { target } => Some(IconSpec::System(target.into())),
         IconRef::Named { id } => Some(IconSpec::Named(id)),
+        IconRef::Remote { url } => validate_plugin_http_url(&url)
+            .is_ok()
+            .then_some(IconSpec::Remote(url)),
     }
 }
 
@@ -1057,6 +1349,7 @@ mod tests {
                     "title":"Search GitHub",
                     "keywords":["gh"],
                     "action_words":["gh"],
+                    "presentation":"grid",
                     "icon":{"type":"resource","path":"icons/github.png"}
                 }]
             }"#,
@@ -1064,6 +1357,7 @@ mod tests {
         .unwrap();
         assert_eq!(m.commands[0].id, "search");
         assert_eq!(m.commands[0].action_words, vec!["gh"]);
+        assert_eq!(m.commands[0].presentation.as_deref(), Some("grid"));
         assert!(matches!(m.commands[0].icon, Some(IconRef::Resource { .. })));
     }
 
@@ -1075,6 +1369,21 @@ mod tests {
         );
         assert!(plugin_resource_path(Path::new("plugins/github"), "../secret.png").is_none());
         assert!(plugin_resource_path(Path::new("plugins/github"), "C:\\secret.png").is_none());
+    }
+
+    #[test]
+    fn plugin_urls_are_limited_to_http_without_credentials() {
+        assert!(validate_plugin_http_url("https://api.dictionaryapi.dev/entries/en/hello").is_ok());
+        assert!(validate_plugin_http_url("http://example.com/icon.svg").is_ok());
+        assert!(validate_plugin_http_url("file:///secret").is_err());
+        assert!(validate_plugin_http_url("https://user:pass@example.com/icon.svg").is_err());
+        assert!(validate_plugin_http_url("https://example.com/a b").is_err());
+    }
+
+    #[test]
+    fn icon_path_encoding_uses_percent_encoding_not_query_plus_encoding() {
+        assert_eq!(encode_url_path_segment("line icon/+"), "line%20icon%2F%2B");
+        assert_eq!(encode_url_path_segment("alarm-clock"), "alarm-clock");
     }
 
     #[test]
@@ -1093,6 +1402,9 @@ mod tests {
                     title: "Search GitHub".into(),
                     keywords: vec!["gh".into()],
                     action_words: vec!["gh".into()],
+                    presentation: None,
+                    mode: None,
+                    require_separator: false,
                     icon: None,
                 }],
                 permissions: Vec::new(),
@@ -1174,7 +1486,8 @@ mod tests {
         let mut preferences = std::collections::BTreeMap::new();
         preferences.insert("token".into(), serde_json::json!("from-preferences"));
         let plugin =
-            EmbeddedPlugin::from_source(source, "test.lua", "zh-Hans", "en", &preferences).unwrap();
+            EmbeddedPlugin::from_source(source, "test.lua", "zh-Hans", "en", &preferences, &[])
+                .unwrap();
         let query = serde_json::json!({
             "request_id": "query-test",
             "query": "hello",
@@ -1200,112 +1513,48 @@ mod tests {
     }
 
     #[test]
-    fn bundled_devtools_plugin_exercises_public_plugin_surface() {
-        let manager = PluginManager::discover_with_config("zh-Hans", &Default::default());
-        let results = manager.query("dev");
-        assert_eq!(results.len(), 2);
-        assert!(results
-            .iter()
-            .all(|result| !result.id.ends_with(":preview-states")
-                && !result.id.ends_with(":preview-safety")));
-        assert!(results
-            .iter()
-            .any(|result| result.id == "plugin:wowie-devtools:developer-guide"));
-        let guide = results
-            .iter()
-            .find(|result| result.id == "plugin:wowie-devtools:developer-guide")
-            .unwrap();
-        assert_eq!(guide.title, "插件开发指南");
-        assert!(guide.detail.is_some());
-        assert!(!guide.actions.is_empty());
-        assert!(matches!(guide.icon, Some(IconSpec::Resource(_))));
-        assert!(matches!(
-            guide.actions[0],
-            Action::Plugin {
-                icon: Some(IconSpec::Named(_)),
-                ..
-            }
-        ));
-        assert!(guide
-            .detail
-            .as_ref()
-            .unwrap()
-            .actions
-            .iter()
-            .all(|action| action.icon.is_some()));
+    fn embedded_lua_detail_without_actions_is_a_valid_result() {
+        let source = r#"
+            wowie.on("query", function(query, context)
+                return {
+                    request_id = context.request_id,
+                    items = {
+                        wowie.result({
+                            id = "definition",
+                            title = query,
+                            detail = {
+                                title = "Definition",
+                                blocks = {
+                                    { type = "text", text = "A definition" }
+                                }
+                            }
+                        })
+                    }
+                }
+            end)
+        "#;
+        let preferences = std::collections::BTreeMap::new();
+        let plugin =
+            EmbeddedPlugin::from_source(source, "test.lua", "en", "en", &preferences, &[]).unwrap();
+        let query = serde_json::json!({
+            "request_id": "query-detail",
+            "query": "hello",
+        });
+        let response = plugin.call("query", &query, None, None).unwrap();
+        let response: QueryResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(
+            response.items[0].detail.as_ref().unwrap().title,
+            "Definition"
+        );
+    }
 
-        let preview_results = manager.query("preview");
-        let gallery = preview_results
-            .iter()
-            .find(|result| result.id == "plugin:wowie-devtools:preview-gallery")
-            .expect("preview gallery result");
-        assert_eq!(gallery.title, "P0 预览能力展厅");
-        let gallery_detail = gallery.detail.as_ref().expect("preview gallery detail");
-        assert!(gallery_detail.scrollable);
-        assert_eq!(gallery_detail.preferred_width, Some(560));
-        assert!(gallery_detail
-            .blocks
-            .iter()
-            .any(|block| matches!(block, crate::result::DetailBlock::Markdown { .. })));
-        assert!(gallery_detail
-            .blocks
-            .iter()
-            .any(|block| matches!(block, crate::result::DetailBlock::Image { .. })));
-        assert!(gallery_detail
-            .blocks
-            .iter()
-            .any(|block| matches!(block, crate::result::DetailBlock::Code { .. })));
-        assert!(gallery_detail
-            .blocks
-            .iter()
-            .any(|block| matches!(block, crate::result::DetailBlock::Table { .. })));
-        assert!(gallery_detail
-            .blocks
-            .iter()
-            .any(|block| matches!(block, crate::result::DetailBlock::Link { .. })));
-        assert!(gallery_detail
-            .blocks
-            .iter()
-            .any(|block| matches!(block, crate::result::DetailBlock::Weather { .. })));
-
-        let states = preview_results
-            .iter()
-            .find(|result| result.id == "plugin:wowie-devtools:preview-states")
-            .expect("preview states result");
-        let state_blocks = &states
-            .detail
-            .as_ref()
-            .expect("preview states detail")
-            .blocks;
-        assert!(state_blocks
-            .iter()
-            .any(|block| matches!(block, crate::result::DetailBlock::Loading { .. })));
-        assert!(state_blocks.iter().any(|block| matches!(
-            block,
-            crate::result::DetailBlock::Error {
-                retry_action: Some(_),
-                ..
-            }
-        )));
-
-        let safety = preview_results
-            .iter()
-            .find(|result| result.id == "plugin:wowie-devtools:preview-safety")
-            .expect("preview safety result");
-        let safety_blocks = &safety
-            .detail
-            .as_ref()
-            .expect("preview safety detail")
-            .blocks;
-        assert_eq!(safety_blocks.len(), 2);
-        assert!(safety_blocks
-            .iter()
-            .all(|block| matches!(block, crate::result::DetailBlock::Error { .. })));
-
-        let output = manager
-            .execute("wowie-devtools", "developer-guide", "open")
-            .unwrap();
-        assert!(output.contains("open"));
+    #[test]
+    fn plugin_discovery_is_empty_when_no_plugins_are_installed() {
+        let manager = PluginManager::discover_with_config("en", &Default::default());
+        assert!(manager.search_engine("eng").is_none());
+        assert!(manager.query("eng ").is_empty());
+        assert!(manager.statuses().is_empty());
     }
 
     #[test]

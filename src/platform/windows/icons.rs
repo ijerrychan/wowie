@@ -138,6 +138,14 @@ pub(crate) fn default_open_icon(_target: &Path) -> Option<super::super::IconData
         // shortcut icon.
         return application_icon_with_flags(Path::new("wowie-default-browser.html"), true);
     }
+    // `SHGFI_USEFILEATTRIBUTES` deliberately avoids filesystem access for
+    // ordinary files so an extension can resolve its default opener. For an
+    // existing directory it would instead describe the path as a normal file
+    // (FILE_ATTRIBUTE_NORMAL), producing no folder icon. Let Shell inspect
+    // real directories and return their standard or customised icon.
+    if _target.is_dir() {
+        return application_icon_with_flags(_target, false);
+    }
     application_icon_with_flags(_target, true)
 }
 

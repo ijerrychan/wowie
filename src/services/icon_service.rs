@@ -16,6 +16,7 @@ use std::{
 const MAX_ICON_DIMENSION: u32 = 128;
 const MAX_EXTERNAL_ICON_DIMENSION: u32 = 64;
 const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_REMOTE_ICON_BYTES: usize = 1 * 1024 * 1024;
 const MAX_CACHED_ICON_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CACHED_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -317,7 +318,23 @@ fn resolve_spec_with_cache(
             _ => load_png_icon(path, size, sources),
         },
         IconSpec::Named(name) => named_icon(name, size),
+        IconSpec::Remote(url) => {
+            let bytes = source_bytes(sources, format!("remote:{url}"), || {
+                fetch_remote_icon_bytes(url)
+            })?;
+            if url.to_ascii_lowercase().ends_with(".svg")
+                || bytes.iter().take(256).any(|byte| *byte == b'<')
+            {
+                load_svg_bytes(&bytes, size.min(MAX_EXTERNAL_ICON_DIMENSION))
+            } else {
+                decode_image(&bytes, size)
+            }
+        }
     }
+}
+
+fn fetch_remote_icon_bytes(url: &str) -> Option<Vec<u8>> {
+    crate::utils::http::get_bytes(url, MAX_REMOTE_ICON_BYTES).ok()
 }
 
 #[cfg(test)]
@@ -459,6 +476,7 @@ fn icon_spec_key(icon: &IconSpec) -> String {
         IconSpec::Weather => "weather".into(),
         IconSpec::Calculator => "calculator".into(),
         IconSpec::Named(name) => format!("named:{name}"),
+        IconSpec::Remote(url) => format!("remote:{url}"),
     }
 }
 
@@ -652,7 +670,6 @@ mod tests {
     #[test]
     fn default_open_web_icon_does_not_use_favicon_cache_key() {
         let mut item = test_result("web");
-        item.category = ResultCategory::Shortcut;
         item.source = "Shortcut".into();
         item.icon = Some(IconSpec::DefaultOpen(PathBuf::from(
             "https://untrusted.example",

@@ -1,7 +1,7 @@
 use super::{Launcher, ResultRow};
 use crate::{
     icon_service::{IconService, DISPLAY_ICON_SIZE},
-    result::{is_action_shortcut, IconSpec, ResultCategory, ResultPresentation, SearchResult},
+    result::{IconSpec, ResultCategory, ResultPresentation, SearchResult},
 };
 use slint::{Model, ModelRc};
 use std::{
@@ -25,9 +25,13 @@ pub(super) struct ResultRowPayload {
 }
 
 impl ResultRowPayload {
-    pub(super) fn from(item: &SearchResult, show_advanced_details: bool, query: &str) -> Self {
+    pub(super) fn from(
+        item: &SearchResult,
+        show_advanced_details: bool,
+        shortcut_hint: Option<&str>,
+    ) -> Self {
         let location = display_location(item, show_advanced_details);
-        let shortcut_prefix = shortcut_prefix(item, query);
+        let shortcut_prefix = shortcut_hint.unwrap_or_default().trim_end();
         let uses_application_fallback = !show_advanced_details
             && item.category == ResultCategory::Application
             && crate::providers::app::preferred_launch_entry(item).is_some();
@@ -45,11 +49,18 @@ impl ResultRowPayload {
             .into(),
             icon: None,
             icon_kind: static_icon_kind(item.icon.as_ref()).into(),
-            shortcut_prefix_width: shortcut_prefix_width(&shortcut_prefix),
-            shortcut_prefix,
+            shortcut_prefix_width: shortcut_prefix_width(shortcut_prefix),
+            shortcut_prefix: shortcut_prefix.into(),
             presentation: presentation_name(item.recommended_presentation()).into(),
         }
     }
+}
+
+fn shortcut_prefix_width(prefix: &str) -> i32 {
+    if prefix.is_empty() {
+        return 44;
+    }
+    (16 + prefix.chars().count() as i32 * 7).clamp(44, 120)
 }
 
 /// Compare only the fields that determine the visible result row. Loaded
@@ -93,60 +104,6 @@ pub(super) fn static_icon_kind(icon: Option<&IconSpec>) -> &'static str {
         },
         _ => "",
     }
-}
-
-fn shortcut_prefix(item: &SearchResult, query: &str) -> String {
-    if !is_action_shortcut(item) {
-        return String::new();
-    }
-    let query_prefix = query.split_whitespace().next();
-    item.aliases
-        .iter()
-        .find_map(|alias| {
-            let prefix = alias.split_whitespace().next()?;
-            query_prefix
-                .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
-                .then_some(prefix)
-        })
-        .or_else(|| {
-            item.aliases
-                .iter()
-                .find_map(|alias| alias.split_whitespace().next())
-        })
-        .or_else(|| query.split_whitespace().next())
-        .unwrap_or_default()
-        .to_owned()
-}
-
-fn shortcut_prefix_width(prefix: &str) -> i32 {
-    if prefix.is_empty() {
-        return 44;
-    }
-    (16 + prefix.chars().count() as i32 * 7).clamp(44, 120)
-}
-
-pub(super) fn isolate_shortcut_results(
-    query: &str,
-    results: &[SearchResult],
-) -> Option<Vec<SearchResult>> {
-    let mut parts = query.trim_start().splitn(2, char::is_whitespace);
-    let prefix = parts.next()?;
-    parts.next()?;
-
-    let matching = results
-        .iter()
-        .filter(|item| {
-            is_action_shortcut(item)
-                && item.aliases.iter().any(|alias| {
-                    alias
-                        .split_whitespace()
-                        .next()
-                        .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
-                })
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    (!matching.is_empty()).then_some(matching)
 }
 
 fn display_location(item: &SearchResult, show_advanced_details: bool) -> String {

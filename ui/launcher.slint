@@ -85,7 +85,7 @@ export component Launcher inherits Window {
     min-width: 520px;
     // With details open, both columns contribute to the window's required
     // height. Using only the detail card here clipped long result lists to a
-    // short plugin detail such as the devtools TODO card.
+    // short plugin detail content.
     preferred-height: search-field.text == "" ? root.empty-window-height : root.result-window-height;
     // Keep the empty launcher compact. Once a query has results, preserve
     // enough room for five rows while allowing the user to resize larger.
@@ -120,6 +120,8 @@ export component Launcher inherits Window {
     in-out property <string> last-action-subtitle: "";
     in property <[ResultRow]> results;
     in property <string> view-mode: "list";
+    in-out property <string> query-text: "";
+    in property <bool> shortcut-session-active: false;
     in property <bool> context-menu-open: false;
     in property <bool> context-menu-available: false;
     in-out property <int> selected-index: -1;
@@ -136,12 +138,15 @@ export component Launcher inherits Window {
     callback visible-range-changed(int, int);
     callback selection-changed(int);
     callback launch-requested(int);
+    callback shortcut-back-requested;
     callback detail-back-requested;
     callback detail-action-requested(int);
     callback detail-link-requested(string);
     callback context-menu-requested(int, bool);
     callback context-menu-dismissed;
     callback dismiss-requested;
+
+    changed query-text => { root.query-changed(root.query-text); }
 
     // Primary density controls. Keep row geometry here so compactness can be tuned centrally.
     private property <length> search-row-height: 40px;
@@ -351,7 +356,8 @@ export component Launcher inherits Window {
                     color: root.text-primary; font-size: 16px; vertical-alignment: center; single-line: true;
                     selection-background-color: root.accent-color;
                     selection-foreground-color: #ffffff;
-                    edited => { root.query-changed(self.text); }
+                    text: root.query-text;
+                    edited => { root.query-text = self.text; }
                     key-pressed(event) => {
                         if (event.text == Key.DownArrow) {
                             root.move-selection-down();
@@ -371,9 +377,11 @@ export component Launcher inherits Window {
                         } else if (event.text == Key.Return && root.selected-index >= 0) {
                             root.launch-requested(root.selected-index);
                             EventResult.accept
-                        } else if (event.text == Key.Escape) {
+                            } else if (event.text == Key.Escape) {
                             if (root.grid-detail-active) {
                                 root.detail-back-requested();
+                            } else if (root.shortcut-session-active) {
+                                root.shortcut-back-requested();
                             } else {
                                 root.dismiss-requested();
                             }
@@ -439,8 +447,8 @@ export component Launcher inherits Window {
                             }
                         }
                     }
-                    BuiltinIcon { visible: !root.search-icon-is-shortcut && row.icon_kind != ""; x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; kind: row.icon_kind; }
-                    if row.icon_kind == "" : Image { visible: !root.search-icon-is-shortcut; x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row.icon; image-fit: contain; }
+                    BuiltinIcon { visible: row.icon_kind != ""; x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; kind: row.icon_kind; }
+                    if row.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row.icon; image-fit: contain; }
                     Rectangle {
                         x: 60px; y: 0px; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px : parent.width - 60px - parent.shortcut-card-width; height: parent.height; background: transparent;
                         Text { x: 0px; y: row-text-top; width: parent.width; height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 13px : row.presentation == "grid" ? 15px : 14px; font-weight: row.presentation == "grid" ? 400 : 500; vertical-alignment: center; overflow: elide; }
@@ -675,7 +683,7 @@ export component Launcher inherits Window {
             if (search-field.text != "") : Rectangle {
                 height: root.operation-hint-height; background: transparent;
                 Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: root.border; }
-                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.view-mode == "grid" ? (root.context-menu-available ? @tr("↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide") : @tr("↑ ↓ ← →  Navigate     Enter  Open     Esc  Hide")) : (root.context-menu-available ? @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide") : @tr("↑ ↓  Navigate     Enter  Open     Esc  Hide")); color: root.text-tertiary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.shortcut-session-active ? "Esc  Back" : root.view-mode == "grid" ? (root.context-menu-available ? @tr("↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide") : @tr("↑ ↓ ← →  Navigate     Enter  Open     Esc  Hide")) : (root.context-menu-available ? @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide") : @tr("↑ ↓  Navigate     Enter  Open     Esc  Hide")); color: root.text-tertiary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
             }
         }
     }

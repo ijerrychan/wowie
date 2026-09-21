@@ -10,7 +10,7 @@ mod services;
 mod ui;
 mod utils;
 
-pub(crate) use core::{classifier, provider, ranking, result, search};
+pub(crate) use core::{classifier, page, provider, ranking, result, search};
 pub(crate) use services::{icon_service, launcher};
 
 fn main() -> anyhow::Result<()> {

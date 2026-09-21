@@ -35,7 +35,7 @@
 
 ### Phase 3：图标和 i18n 基础能力
 
-- [x] 统一 `IconRef`：`resource`、`system`、`named`
+- [x] 统一 `IconRef`：`resource`、`system`、`named`、受控 `remote`
 - [x] 结果、command、Action、DetailAction、DetailBlock 使用统一图标模型
 - [x] 插件资源路径禁止绝对路径和 `..` 穿越
 - [x] PNG、ICO、SVG 文件大小和缩略图尺寸限制
@@ -50,7 +50,7 @@
 
 当前已实现：`text`、`metric`、`icon`、`weather`、`separator`、`markdown`、`image`、`code`、`table`、`link`、`loading`、`error`、DetailAction、preferred width、scrollable，以及宿主按窗口宽度计算的面板比例。
 
-结构化预览已经由 `plugins/wowie-devtools` 提供可运行的覆盖示例和集成测试。
+结构化预览已经由仓库内的 Lua 插件示例和集成测试覆盖。
 
 暂不实施：
 
@@ -63,7 +63,8 @@
 ### 1. 完善内嵌 Lua API
 
 - [ ] 提供正式的 `wowie.locale`、翻译查找和 locale 变更通知
-- [ ] 提供受控的 HTTP、文件、剪贴板和系统 Action API
+- [x] 提供受控的 HTTP、剪贴板和下载 API（共享客户端、权限门控、大小限制）
+- [ ] 提供更细粒度的文件 API 和系统 Action API
 - [ ] 为 API 增加超时、取消和结果数量限制
 - [ ] 明确 Lua 错误映射为插件状态和用户可见错误
 
@@ -78,7 +79,7 @@
 ### 3. 测试和开发体验
 
 - [x] 内嵌 Lua query / execute 最小闭环测试
-- [x] 增加真实 `plugins/wowie-devtools/manifest.json + main.lua` 示例插件
+- [x] 增加真实 `manifest.json + main.lua` 示例插件
 - [x] 增加图标、详情、i18n、Action 的端到端测试
 - [ ] 增加 API 版本和错误场景测试
 - [ ] 提供插件开发文档和模板

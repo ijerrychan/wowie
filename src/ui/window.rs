@@ -78,6 +78,10 @@ pub(super) fn toggle_palette(
         platform.disable_window_transitions(window.window());
         let _ = window.show();
         platform.activate_palette(window.window());
+        // Showing a Slint window does not change `query-text`, so its
+        // property-change handler will not run. Refresh explicitly to
+        // replace any result model that was invalidated while hidden.
+        window.invoke_query_changed(window.get_query_text());
         let weak = window.as_weak();
         Timer::single_shot(PALETTE_POSITION_DELAY, move || {
             if let Some(window) = weak.upgrade() {

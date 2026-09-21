@@ -50,3 +50,9 @@ pub fn get_bytes(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
     }
     Ok(bytes.to_vec())
 }
+
+/// Fetch a bounded UTF-8 response through the shared HTTP client.
+pub fn get_text(url: &str, max_bytes: usize) -> Result<String> {
+    let bytes = get_bytes(url, max_bytes)?;
+    String::from_utf8(bytes).context("decode HTTP response as UTF-8")
+}

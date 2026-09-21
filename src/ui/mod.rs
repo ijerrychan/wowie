@@ -18,9 +18,7 @@ use crate::{
 use actions::{context_actions, context_menu_width, resolve_plugin_action_icons};
 use anyhow::Result;
 use details::{request_dynamic_detail, set_detail_view};
-use results::{
-    isolate_shortcut_results, matches_model, request_icons, static_icon_kind, ResultRowPayload,
-};
+use results::{matches_model, request_icons, static_icon_kind, ResultRowPayload};
 use slint::{ComponentHandle, Model, ModelRc, Timer, VecModel};
 use std::{
     collections::HashSet,
@@ -35,11 +33,21 @@ use std::{
 use window::{create_window, hide_context_menu, save_window_size, toggle_palette};
 
 const SEARCH_ICON_FRAME_DELAY: Duration = Duration::from_millis(16);
+const SEARCH_DEBOUNCE_DELAY: Duration = Duration::from_millis(120);
 const CONTEXT_MENU_LAYOUT_DELAY: Duration = Duration::from_millis(16);
 const LAUNCH_ERROR_DURATION: Duration = Duration::from_secs(5);
 const FOCUS_LOSS_DELAY: Duration = Duration::from_millis(30);
 const PROVIDER_REFRESH_INTERVAL: Duration = Duration::from_millis(200);
 pub(super) const PALETTE_POSITION_DELAY: Duration = Duration::from_millis(10);
+const SEARCH_PAGE_PREFETCH_DISTANCE: usize = 12;
+
+/// Per-query continuation state for paged search engines.
+#[derive(Default)]
+struct PageLoadState {
+    query_id: u64,
+    loading: bool,
+    exhausted: bool,
+}
 
 fn update_search_icon(
     window: &Launcher,
@@ -89,9 +97,11 @@ struct SearchPresentation {
     rows: Vec<ResultRowPayload>,
     shortcut_icon: Option<Arc<crate::platform::IconData>>,
     shortcut_icon_kind: String,
-    is_shortcut_result: bool,
+    is_search_engine: bool,
     detail: Option<result::DetailView>,
     detail_panel: bool,
+    view_mode: String,
+    search_engine: Option<crate::page::SearchEngineSession>,
 }
 
 fn build_search_presentation(
@@ -101,27 +111,32 @@ fn build_search_presentation(
     detail_registry: &crate::details::DetailRegistry,
     icon_service: &IconService,
 ) -> SearchPresentation {
+    let search_context = engine.search_context(query);
     let found = if query.trim().is_empty() {
         Vec::new()
     } else {
-        engine.search(query)
+        engine.search_in_context(&search_context, query)
     };
-    let shortcut_results = isolate_shortcut_results(query, &found);
-    let shortcut_icon = shortcut_results
+    let search_engine = search_context.session().cloned();
+    // SearchCore gives an entered engine exclusive ownership of the result
+    // surface. The UI never identifies engine rows by their result category.
+    let shortcut_icon = search_engine
         .as_ref()
-        .and_then(|results| results.first())
+        .and_then(|_| found.first())
         .filter(|item| static_icon_kind(item.icon.as_ref()).is_empty())
         .and_then(|item| icon_service.resolve_at(item, DISPLAY_ICON_SIZE));
-    let shortcut_icon_kind = shortcut_results
+    let shortcut_icon_kind = search_engine
         .as_ref()
-        .and_then(|results| results.first())
+        .and_then(|_| found.first())
         .map(|item| static_icon_kind(item.icon.as_ref()).to_owned())
         .unwrap_or_default();
-    let is_shortcut_result = shortcut_results.is_some();
-    let found = shortcut_results.unwrap_or(found);
+    let is_search_engine = search_engine.is_some();
     let rows = found
         .iter()
-        .map(|item| ResultRowPayload::from(item, show_advanced_details, query))
+        .map(|item| {
+            let shortcut_hint = engine.shortcut_hint(&item.id);
+            ResultRowPayload::from(item, show_advanced_details, shortcut_hint.as_deref())
+        })
         .collect();
     let has_dynamic_detail = found
         .first()
@@ -132,15 +147,17 @@ fn build_search_presentation(
     let detail = (!has_dynamic_detail)
         .then(|| found.first().and_then(|item| item.detail.clone()))
         .flatten();
-
+    let view_mode = engine.preferred_view_mode(&search_context).to_owned();
     SearchPresentation {
         found: Arc::new(found),
         rows,
         shortcut_icon,
         shortcut_icon_kind,
-        is_shortcut_result,
+        is_search_engine,
         detail,
         detail_panel,
+        view_mode,
+        search_engine,
     }
 }
 
@@ -154,6 +171,10 @@ fn apply_search_detail_state(
     // Grid selection stays lightweight. Its detail surface is opened only by
     // an explicit launch request, not as a side effect of moving selection.
     window.set_detail_panel_visible(show_panel && window.get_view_mode() != "grid");
+}
+
+fn apply_search_engine(window: &Launcher, session: Option<&crate::page::SearchEngineSession>) {
+    window.set_shortcut_session_active(session.is_some());
 }
 
 pub fn run() -> Result<()> {
@@ -218,6 +239,7 @@ pub fn run() -> Result<()> {
     // spikes while scrolling.
     let icon_items = Arc::new(Mutex::new((0_u64, Arc::new(Vec::<SearchResult>::new()))));
     let icon_requests = Arc::new(Mutex::new((0_u64, HashSet::<usize>::new())));
+    let page_load = Arc::new(Mutex::new(PageLoadState::default()));
 
     window.set_results(ModelRc::from(results.clone()));
     window.set_window_width(config.window_width as i32);
@@ -255,11 +277,15 @@ pub fn run() -> Result<()> {
     let hotkey_updates = hotkey_registration.updates.clone();
 
     {
+        let engine = engine.clone();
         let icon_items = Arc::clone(&icon_items);
         let icon_requests = Arc::clone(&icon_requests);
         let icon_service = icon_service.clone();
         let weak = window.as_weak();
         let query_generation = Arc::clone(&query_generation);
+        let current_query = Arc::clone(&current_query);
+        let show_advanced_details = Arc::clone(&show_advanced_details);
+        let page_load = Arc::clone(&page_load);
         window.on_visible_range_changed(move |start, end| {
             request_icons(
                 start,
@@ -270,6 +296,99 @@ pub fn run() -> Result<()> {
                 &weak,
                 &query_generation,
             );
+
+            let (query_id, items) = icon_items
+                .lock()
+                .map(|state| (state.0, Arc::clone(&state.1)))
+                .unwrap_or_else(|_| (0, Arc::new(Vec::new())));
+            if query_id == 0 || end.max(0) as usize + SEARCH_PAGE_PREFETCH_DISTANCE < items.len() {
+                return;
+            }
+            let query = current_query
+                .lock()
+                .map(|query| query.clone())
+                .unwrap_or_default();
+            let context = engine.search_context(&query);
+            if context.session().is_none() {
+                return;
+            }
+            if let Ok(mut state) = page_load.lock() {
+                if state.query_id != query_id {
+                    *state = PageLoadState {
+                        query_id,
+                        ..Default::default()
+                    };
+                }
+                if state.loading || state.exhausted {
+                    return;
+                }
+                state.loading = true;
+            } else {
+                return;
+            }
+
+            let engine = Arc::clone(&engine);
+            let icon_items = Arc::clone(&icon_items);
+            let icon_requests = Arc::clone(&icon_requests);
+            let icon_service = icon_service.clone();
+            let weak = weak.clone();
+            let query_generation = Arc::clone(&query_generation);
+            let page_load = Arc::clone(&page_load);
+            let show_advanced_details = Arc::clone(&show_advanced_details);
+            std::thread::spawn(move || {
+                let more = engine.load_more_in_context(&context, &query, items.len());
+                let _ = slint::invoke_from_event_loop(move || {
+                    if query_generation.load(Ordering::Acquire) != query_id {
+                        return;
+                    }
+                    if let Ok(mut state) = page_load.lock() {
+                        if state.query_id == query_id {
+                            state.loading = false;
+                            state.exhausted = more.is_empty();
+                        }
+                    }
+                    if more.is_empty() {
+                        return;
+                    }
+                    let Some(window) = weak.upgrade() else {
+                        return;
+                    };
+                    let mut combined = (*items).clone();
+                    combined.extend(more.iter().cloned());
+                    if let Ok(mut state) = icon_items.lock() {
+                        if state.0 != query_id || state.1.len() != items.len() {
+                            return;
+                        }
+                        state.1 = Arc::new(combined);
+                    } else {
+                        return;
+                    }
+                    let mut rows = (0..window.get_results().row_count())
+                        .filter_map(|index| window.get_results().row_data(index))
+                        .collect::<Vec<_>>();
+                    rows.extend(more.iter().map(|item| {
+                        let shortcut_hint = engine.shortcut_hint(&item.id);
+                        ResultRow::from(ResultRowPayload::from(
+                            item,
+                            show_advanced_details.load(Ordering::Acquire),
+                            shortcut_hint.as_deref(),
+                        ))
+                    }));
+                    window.set_results(ModelRc::from(Rc::new(VecModel::from(rows))));
+                    if let Ok(mut state) = icon_requests.lock() {
+                        *state = (query_id, HashSet::new());
+                    }
+                    request_icons(
+                        start,
+                        end,
+                        &icon_items,
+                        &icon_requests,
+                        &icon_service,
+                        &window.as_weak(),
+                        &query_generation,
+                    );
+                });
+            });
         });
     }
 
@@ -298,20 +417,33 @@ pub fn run() -> Result<()> {
             else {
                 return;
             };
-            match engine.execute_plugin_action(&item.id, &detail_action.id) {
-                Ok(output) => {
-                    let query = current_query
-                        .lock()
-                        .map(|query| query.clone())
-                        .unwrap_or_default();
-                    engine.record_success(&item.id, &query);
-                    window.set_last_action_id(item.id.into());
-                    window.set_last_action_result(output.title.into());
-                    window.set_last_action_subtitle(output.subtitle.into());
-                    window.set_launch_error(String::new().into());
-                }
-                Err(error) => window.set_launch_error(error.to_string().into()),
-            }
+            let item_id = item.id.clone();
+            let action_id = detail_action.id.clone();
+            let engine = Arc::clone(&engine);
+            let current_query = Arc::clone(&current_query);
+            let weak = weak.clone();
+            std::thread::spawn(move || {
+                let result = engine.execute_plugin_action(&item_id, &action_id);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(window) = weak.upgrade() else {
+                        return;
+                    };
+                    match result {
+                        Ok(output) => {
+                            let query = current_query
+                                .lock()
+                                .map(|query| query.clone())
+                                .unwrap_or_default();
+                            engine.record_success(&item_id, &query);
+                            window.set_last_action_id(item_id.into());
+                            window.set_last_action_result(output.title.into());
+                            window.set_last_action_subtitle(output.subtitle.into());
+                            window.set_launch_error(String::new().into());
+                        }
+                        Err(error) => window.set_launch_error(error.to_string().into()),
+                    }
+                });
+            });
         });
     }
     {
@@ -325,6 +457,19 @@ pub fn run() -> Result<()> {
             if let Some(window) = weak.upgrade() {
                 set_detail_view(&window, None, &icon_service);
                 window.set_detail_panel_visible(false);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_shortcut_back_requested(move || {
+            if let Some(window) = weak.upgrade() {
+                // The shortcut page is entered from the root query. Clearing
+                // the owned query returns to that root while preserving the
+                // same generation-safe search pipeline.
+                let query = slint::SharedString::default();
+                window.set_query_text(query.clone());
+                window.invoke_query_changed(query);
             }
         });
     }
@@ -402,6 +547,13 @@ pub fn run() -> Result<()> {
             let show_advanced_details_for_query = Arc::clone(&show_advanced_details);
             let detail_registry_for_query = detail_registry.clone();
             std::thread::spawn(move || {
+                // Plugin-backed shortcut searches may perform network I/O. Wait for
+                // the query to settle so typing or clearing a shortcut does not
+                // leave one request per keystroke running until its timeout.
+                std::thread::sleep(SEARCH_DEBOUNCE_DELAY);
+                if query_generation.load(Ordering::Acquire) != query_id {
+                    return;
+                }
                 let presentation = build_search_presentation(
                     &engine,
                     query.as_str(),
@@ -414,15 +566,21 @@ pub fn run() -> Result<()> {
                     rows,
                     shortcut_icon,
                     shortcut_icon_kind,
-                    is_shortcut_result,
+                    is_search_engine,
                     detail,
                     detail_panel,
+                    view_mode,
+                    search_engine,
                 } = presentation;
                 let _ = slint::invoke_from_event_loop(move || {
                     if query_generation.load(Ordering::Acquire) != query_id {
                         return;
                     }
                     if let Some(window) = weak.upgrade() {
+                        if window.get_view_mode() != view_mode {
+                            window.set_view_mode(view_mode.into());
+                        }
+                        apply_search_engine(&window, search_engine.as_ref());
                         if let Ok(mut state) = icon_items.lock() {
                             *state = (query_id, Arc::clone(&found_for_icons));
                         }
@@ -431,9 +589,9 @@ pub fn run() -> Result<()> {
                         }
                         let results_changed = !matches_model(&window.get_results(), &rows);
                         let icon_mode_changed =
-                            window.get_search_icon_is_shortcut() != is_shortcut_result;
+                            window.get_search_icon_is_shortcut() != is_search_engine;
                         let search_icon_changed =
-                            icon_mode_changed || (results_changed && is_shortcut_result);
+                            icon_mode_changed || (results_changed && is_search_engine);
                         let count = rows.len();
                         if results_changed {
                             let model = Rc::new(VecModel::from(
@@ -446,7 +604,7 @@ pub fn run() -> Result<()> {
                                 &window,
                                 shortcut_icon.as_ref().map(|icon| icon.as_ref()),
                                 shortcut_icon_kind,
-                                is_shortcut_result,
+                                is_search_engine,
                                 icon_mode_changed,
                                 search_icon_generation,
                             );
@@ -525,7 +683,30 @@ pub fn run() -> Result<()> {
                     .and_then(|row| engine.by_id(row.id.as_str()))
             });
             if let Some(item) = item {
-                if item.actions.is_empty() && item.detail.is_some() {
+                if let Some(result::Action::EnterSearchEngine { prefix }) = item.actions.first() {
+                    let query = current_query
+                        .lock()
+                        .map(|query| query.clone())
+                        .unwrap_or_default();
+                    if let Some(window) = weak.upgrade() {
+                        let query = slint::SharedString::from(format!("{prefix}{}", query.trim()));
+                        window.set_query_text(query.clone());
+                        window.invoke_query_changed(query);
+                    }
+                    return;
+                }
+                let open_grid_detail = weak
+                    .upgrade()
+                    .is_some_and(|window| window.get_view_mode() == "grid");
+                let open_shortcut_panel = current_query
+                    .lock()
+                    .ok()
+                    .map(|query| engine.search_context(&query))
+                    .and_then(|context| context.session().cloned())
+                    .is_some_and(|session| session.mode == crate::page::SearchEngineMode::Panel);
+                if (open_grid_detail || open_shortcut_panel || item.actions.is_empty())
+                    && item.detail.is_some()
+                {
                     let has_dynamic_detail = detail_registry.provider_for(&item).is_some();
                     if let Some(window) = weak.upgrade() {
                         window.set_selected_index(index);
@@ -950,9 +1131,11 @@ pub fn run() -> Result<()> {
                         rows,
                         shortcut_icon,
                         shortcut_icon_kind,
-                        is_shortcut_result,
+                        is_search_engine,
                         detail,
                         detail_panel,
+                        view_mode,
+                        search_engine,
                     } = build_search_presentation(
                         &engine,
                         &query,
@@ -972,6 +1155,10 @@ pub fn run() -> Result<()> {
                             return;
                         }
                         if let Some(window) = weak_for_ui.upgrade() {
+                            if window.get_view_mode() != view_mode {
+                                window.set_view_mode(view_mode.into());
+                            }
+                            apply_search_engine(&window, search_engine.as_ref());
                             if let Ok(mut state) = icon_items_for_ui.lock() {
                                 *state = (query_id, Arc::clone(&found_for_icons));
                             }
@@ -980,9 +1167,9 @@ pub fn run() -> Result<()> {
                             }
                             let results_changed = !matches_model(&window.get_results(), &rows);
                             let icon_mode_changed =
-                                window.get_search_icon_is_shortcut() != is_shortcut_result;
+                                window.get_search_icon_is_shortcut() != is_search_engine;
                             let search_icon_changed =
-                                icon_mode_changed || (results_changed && is_shortcut_result);
+                                icon_mode_changed || (results_changed && is_search_engine);
                             let count = rows.len();
                             if results_changed {
                                 let model = Rc::new(VecModel::from(
@@ -1004,7 +1191,7 @@ pub fn run() -> Result<()> {
                                     &window,
                                     shortcut_icon.as_ref().map(|icon| icon.as_ref()),
                                     shortcut_icon_kind,
-                                    is_shortcut_result,
+                                    is_search_engine,
                                     icon_mode_changed,
                                     search_icon_generation_for_ui,
                                 );
@@ -1191,7 +1378,7 @@ mod tests {
             id: "shortcut:command".into(),
             identity: "shortcut:command".into(),
             title: "Execute Command \"echo test\"".into(),
-            category: result::ResultCategory::Shortcut,
+            category: result::ResultCategory::Other,
             aliases: Vec::new(),
             location: "PowerShell".into(),
             launch_target: PathBuf::from("pwsh.exe"),

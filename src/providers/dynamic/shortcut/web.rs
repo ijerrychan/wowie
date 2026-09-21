@@ -50,14 +50,16 @@ fn render(
     } else {
         None
     };
-    if is_builtin_web && !preview && !argument.explicit && web_target.is_none() {
-        return None;
-    }
-
     let target_value = web_target
         .as_deref()
         .map(str::to_owned)
-        .unwrap_or_else(|| expand_url_template(&template, argument.value));
+        .unwrap_or_else(|| {
+            if is_builtin_web {
+                fallback_web_url(argument.value)
+            } else {
+                expand_url_template(&template, argument.value)
+            }
+        });
     let target = PathBuf::from(target_value);
     let location = if is_builtin_web {
         web_target.clone().unwrap_or_default()
@@ -163,16 +165,19 @@ mod tests {
     }
 
     #[test]
-    fn ignores_plain_text() {
+    fn plain_text_is_a_low_priority_web_fallback() {
         for input in ["notepad", "123", "12345", "192.168", "999.999.999.999"] {
-            assert!(builtin(query(input)).is_none());
+            let item = builtin(query(input)).expect("web fallback");
+            assert_eq!(item.ranking_bias, -1000);
+            assert!(item.launch_target.to_string_lossy().starts_with("https://"));
         }
     }
 
     #[test]
     fn follows_linkify_ip_support() {
         assert!(builtin(query("192.168.1.10")).is_some());
-        assert!(builtin(query("[::1]")).is_none());
+        let fallback = builtin(query("[::1]")).expect("web fallback");
+        assert_eq!(fallback.ranking_bias, -1000);
     }
 
     #[test]
@@ -205,6 +210,7 @@ mod tests {
             name: "用谷歌搜索".into(),
             prefix: "g".into(),
             shortcut_type: "url".into(),
+            mode: "execute".into(),
             template: "https://www.google.com/search?q={query}".into(),
             target: String::new(),
             arguments: String::new(),

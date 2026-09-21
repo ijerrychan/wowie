@@ -77,18 +77,18 @@ mod tests {
     }
 
     #[test]
-    fn supports_explicit_and_implicit_commands() {
+    fn supports_explicit_and_fallback_commands() {
         let explicit = builtin(query("> ipconfig")).expect("explicit command");
         assert_eq!(explicit.title, "Execute Command \"ipconfig\"");
         assert_eq!(
             explicit.launch_arguments,
             "-NoLogo -NoExit -Command \"ipconfig\""
         );
-        assert_eq!(explicit.category, crate::result::ResultCategory::Shortcut);
+        assert_eq!(explicit.category, crate::result::ResultCategory::Other);
 
-        let implicit = builtin(query("ipconfig")).expect("implicit command");
-        assert_eq!(implicit.title, "Execute Command \"ipconfig\"");
-        assert_eq!(implicit.ranking_bias, 0);
+        let fallback = builtin(query("ipconfig")).expect("fallback command");
+        assert_eq!(fallback.title, "Execute Command \"ipconfig\"");
+        assert!(fallback.ranking_bias < 0);
     }
 
     #[test]
@@ -111,6 +111,7 @@ mod tests {
             name: "Git status".into(),
             prefix: "gs".into(),
             shortcut_type: "command".into(),
+            mode: "execute".into(),
             template: String::new(),
             target: "git".into(),
             arguments: "status --short {query}".into(),

@@ -58,6 +58,18 @@ impl SearchCore {
         self.providers.set_language(language);
     }
 
+    pub fn preferred_view_mode(&self, context: &crate::page::SearchContext) -> &'static str {
+        self.providers.preferred_view_mode(context)
+    }
+
+    pub fn search_context(&self, query: &str) -> crate::page::SearchContext {
+        self.providers.search_context(query)
+    }
+
+    pub fn shortcut_hint(&self, result_id: &str) -> Option<String> {
+        self.providers.shortcut_hint(result_id)
+    }
+
     pub fn replace_plugin_config(
         &self,
         plugin_configs: &std::collections::BTreeMap<String, crate::config::PluginConfig>,
@@ -98,7 +110,8 @@ impl SearchCore {
             .iter()
             .find_map(|action| match action {
                 crate::result::Action::Plugin { action_id, .. } => Some(action_id.as_str()),
-                crate::result::Action::Launch(_) => None,
+                crate::result::Action::Launch(_)
+                | crate::result::Action::EnterSearchEngine { .. } => None,
             })
             .context("result has no plugin action")?;
         self.execute_plugin_action(item_id, action_id)
@@ -114,10 +127,56 @@ impl SearchCore {
         self.providers.execute_plugin_action(&item, action_id)
     }
 
+    /// Convenience wrapper retained for unit tests and small in-process
+    /// callers. The UI uses the explicit context-aware methods below.
+    #[cfg(test)]
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
+        let context = self.search_context(query);
+        self.search_in_context(&context, query)
+    }
+
+    /// Load the next page for an already-resolved search-engine session.
+    /// Accepted rows are retained with the current dynamic result cache so
+    /// later launch callbacks can resolve them by id.
+    pub fn load_more_in_context(
+        &self,
+        context: &crate::page::SearchContext,
+        query: &str,
+        offset: usize,
+    ) -> Vec<SearchResult> {
+        let more = self.providers.query_more(context, query, offset);
+        let Ok(mut cached) = self.dynamic_results.lock() else {
+            return Vec::new();
+        };
+        let mut accepted = Vec::new();
+        for item in more {
+            if cached.iter().any(|existing| existing.id == item.id) {
+                continue;
+            }
+            cached.push(item.clone());
+            accepted.push(item);
+        }
+        accepted
+    }
+
+    /// Search a context resolved by the caller. UI code should resolve once
+    /// and reuse this value for rendering, navigation and result retrieval.
+    pub fn search_in_context(
+        &self,
+        context: &crate::page::SearchContext,
+        query: &str,
+    ) -> Vec<SearchResult> {
         let input = query.to_owned();
-        let raw_query = input.trim().to_owned();
+        // An active engine owns the prefix. Its result titles are matched
+        // against the argument only (`e report` searches `report`), rather
+        // than against the launcher syntax including `e `.
+        let raw_query = context
+            .session()
+            .map(|session| session.argument.trim())
+            .unwrap_or_else(|| input.trim())
+            .to_owned();
         let query = raw_query.to_lowercase();
+        let search_engine_active = context.session().is_some();
         let fuzzy_search = self.fuzzy_search.load(Ordering::Acquire);
         let mut matcher = Matcher::new(MatcherConfig::DEFAULT);
         let mut matcher_buffer = Vec::new();
@@ -133,7 +192,7 @@ impl SearchCore {
                     .unwrap_or(0)
             );
         }
-        let dynamic = self.providers.query(&input, fuzzy_search);
+        let dynamic = self.providers.query(context, &input, fuzzy_search);
         // Launch callbacks resolve rows by id after the search worker returns.
         // Keep only the current query's dynamic records so a repeated shortcut
         // id cannot resolve to an older command or URL.
@@ -141,11 +200,14 @@ impl SearchCore {
             cached.clear();
             cached.extend(dynamic.iter().cloned());
         }
-        let indexed = self
-            .results
-            .lock()
-            .ok()
-            .map(|indexed| Arc::clone(&*indexed));
+        let indexed = if search_engine_active {
+            None
+        } else {
+            self.results
+                .lock()
+                .ok()
+                .map(|indexed| Arc::clone(&*indexed))
+        };
         let mut ranked: Vec<(RankKey, &SearchResult)> = indexed
             .as_ref()
             .map(|results| results.iter())
@@ -194,10 +256,20 @@ impl SearchCore {
                         item.launch_arguments
                     );
                 }
-                score.map(|score| {
+                // Custom results that have a registered shortcut are always
+                // visible as a fallback in the default engine, even when the
+                // current text matches neither their title nor aliases.
+                let fallback = self.providers.is_fallback_result(item);
+                score.or_else(|| {
+                    fallback.then_some(MatchScore {
+                        class: 0,
+                        quality: 0,
+                    })
+                })
+                .map(|score| {
                     (
                         RankKey {
-                            intent_priority: intent_priority(item, &query),
+                            fallback,
                             match_class: score.class,
                             match_quality: score.quality,
                             behavior: self.ranker.score(&item.id, &query),
@@ -209,8 +281,8 @@ impl SearchCore {
             })
             .collect();
         ranked.sort_by(|a, b| {
-            b.0.intent_priority
-                .cmp(&a.0.intent_priority)
+            a.0.fallback
+                .cmp(&b.0.fallback)
                 .then_with(|| b.0.match_class.cmp(&a.0.match_class))
                 .then_with(|| b.0.match_quality.cmp(&a.0.match_quality))
                 .then_with(|| b.0.behavior.cmp(&a.0.behavior))
@@ -248,28 +320,11 @@ struct MatchScore {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RankKey {
-    intent_priority: u8,
+    fallback: bool,
     match_class: u8,
     match_quality: i32,
     behavior: i32,
     provider_bias: i32,
-}
-
-/// Explicit shortcut syntax expresses direct intent. An unprefixed shortcut
-/// is only a fallback and must not outrank ordinary indexed results.
-fn intent_priority(item: &SearchResult, query: &str) -> u8 {
-    if !crate::result::is_action_shortcut(item) {
-        return 1;
-    }
-    if item
-        .aliases
-        .iter()
-        .any(|alias| alias.eq_ignore_ascii_case(query))
-    {
-        2
-    } else {
-        0
-    }
 }
 
 fn match_score(
@@ -691,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn implicit_shortcuts_stay_after_ordinary_results() {
+    fn unprefixed_custom_command_results_remain_fallbacks() {
         let notepad = SearchResult {
             id: "aumid:notepad".into(),
             identity: "aumid:notepad".into(),
@@ -721,9 +776,59 @@ mod tests {
         );
         let found = core.search("notepad");
         assert_eq!(found[0].title, "记事本");
+        assert_eq!(found[0].title, "记事本");
+        assert!(found.iter().any(|item| item.id.starts_with("shortcut:")));
+    }
+
+    #[test]
+    fn ordinary_exact_match_outranks_a_command_result_name() {
+        let ordinary = SearchResult {
+            id: "ordinary:command".into(),
+            identity: "ordinary:command".into(),
+            title: "Execute Command".into(),
+            category: ResultCategory::Application,
+            aliases: Vec::new(),
+            location: String::new(),
+            launch_target: "command.exe".into(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: "test".into(),
+            sources: vec!["test".into()],
+            launch_entries: Vec::new(),
+            actions: Vec::new(),
+            detail: None,
+            description: None,
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
+            icon: None,
+            ranking_bias: 0,
+        };
+        let core = SearchCore::with_plugins_and_shortcuts(
+            vec![ordinary],
+            PluginManager::discover_with_config("en", &std::collections::BTreeMap::new()),
+            Vec::new(),
+        );
+        core.replace_provider_language("en".into());
+        let found = core.search("Execute Command");
+        assert_eq!(found[0].id, "ordinary:command");
+    }
+
+    #[test]
+    fn bare_command_marker_keeps_custom_result_previews_visible() {
+        let core = SearchCore::with_plugins_and_shortcuts(
+            Vec::new(),
+            PluginManager::discover_with_config("en", &std::collections::BTreeMap::new()),
+            crate::config::Config::default().shortcuts,
+        );
+        core.replace_provider_language("en".into());
+        let found = core.search(">");
         assert!(found
             .iter()
-            .any(|item| item.category == ResultCategory::Shortcut));
+            .any(|item| item.title.starts_with("Execute Command")));
+        assert!(found
+            .iter()
+            .any(|item| item.title.starts_with("Search with Google")));
     }
 
     #[test]
