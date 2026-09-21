@@ -16,6 +16,25 @@ pub enum PlatformEvent {
     Quit,
 }
 
+/// Convert a point expressed in Slint logical coordinates into screen
+/// physical coordinates without embedding UI layout constants in a platform
+/// implementation.
+pub(crate) fn logical_point_to_physical(
+    origin: (i32, i32),
+    point: (f32, f32),
+    scale_factor: f32,
+) -> (i32, i32) {
+    let scale_factor = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    (
+        origin.0 + (point.0 * scale_factor).round() as i32,
+        origin.1 + (point.1 * scale_factor).round() as i32,
+    )
+}
+
 pub struct HotkeyRegistration {
     pub events: std::sync::mpsc::Receiver<PlatformEvent>,
     pub updates: std::sync::mpsc::Sender<String>,
@@ -293,7 +312,12 @@ pub trait PlatformIntegration: Send + Sync {
     fn system_prefers_dark_theme(&self) -> bool;
     fn system_accent_color(&self) -> u32;
     fn position_palette(&self, window: &slint::Window, result_mode: bool, result_height: f32);
-    fn position_context_menu(&self, window: &slint::Window);
+    fn position_context_menu(
+        &self,
+        window: &slint::Window,
+        launcher: &slint::Window,
+        anchor: Option<(f32, f32)>,
+    );
     fn activate_context_menu(&self, window: &slint::Window);
     fn is_window_focused(&self, window: &slint::Window) -> bool;
     fn activate_palette(&self, window: &slint::Window);
@@ -484,5 +508,38 @@ pub fn current() -> Arc<dyn PlatformIntegration> {
     #[cfg(not(windows))]
     {
         Arc::new(unsupported::UnsupportedPlatform)
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::logical_point_to_physical;
+
+    #[test]
+    fn logical_point_conversion_applies_origin_and_scale() {
+        assert_eq!(
+            logical_point_to_physical((100, 200), (12.25, 8.5), 1.5),
+            (118, 213)
+        );
+    }
+
+    #[test]
+    fn logical_point_conversion_rounds_negative_offsets_consistently() {
+        assert_eq!(
+            logical_point_to_physical((100, 200), (-2.4, -1.6), 1.25),
+            (97, 198)
+        );
+    }
+
+    #[test]
+    fn invalid_scale_falls_back_to_one() {
+        assert_eq!(
+            logical_point_to_physical((10, 20), (2.5, 3.5), 0.0),
+            (13, 24)
+        );
+        assert_eq!(
+            logical_point_to_physical((10, 20), (2.5, 3.5), f32::NAN),
+            (13, 24)
+        );
     }
 }

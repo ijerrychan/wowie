@@ -19,6 +19,7 @@ pub(super) fn context_actions(
             kind: "common".into(),
             icon: slint::Image::default(),
             icon_kind: "folder-open".into(),
+            shortcut: "Ctrl+O".into(),
         });
     }
     if is_filesystem_target || is_store_shell_target {
@@ -29,6 +30,7 @@ pub(super) fn context_actions(
             kind: "common".into(),
             icon: slint::Image::default(),
             icon_kind: "shield-account".into(),
+            shortcut: "Ctrl+Shift+Enter".into(),
         });
     }
     for action in &item.actions {
@@ -44,6 +46,7 @@ pub(super) fn context_actions(
                 kind: "plugin".into(),
                 icon: slint::Image::default(),
                 icon_kind: icon_kind.into(),
+                shortcut: String::new().into(),
             });
         }
     }
@@ -59,6 +62,7 @@ pub(super) fn context_actions(
             kind: "section".into(),
             icon: slint::Image::default(),
             icon_kind: "".into(),
+            shortcut: String::new().into(),
         });
         for (index, entry) in other_launches {
             actions.push(ContextActionRow {
@@ -68,6 +72,7 @@ pub(super) fn context_actions(
                 kind: "launch".into(),
                 icon: slint::Image::default(),
                 icon_kind: "".into(),
+                shortcut: String::new().into(),
             });
         }
     }
@@ -77,22 +82,35 @@ pub(super) fn context_actions(
 /// Size the native-looking menu from the widest visible label. Slint does not
 /// expose the preferred width of items inside a repeated element, so keep the
 /// measurement here next to the labels that populate the menu.
-pub(super) fn context_menu_width(actions: &[ContextActionRow]) -> i32 {
+pub(super) fn context_menu_width(actions: &[ContextActionRow], language: &str) -> i32 {
     let widest = actions
         .iter()
         .map(|action| {
             let title = match action.id.as_str() {
-                "open-directory" => "Open containing folder",
-                "run-as-admin" => "Run as administrator",
+                "open-directory" => crate::utils::i18n::tr(language, "Open containing folder"),
+                "run-as-admin" => crate::utils::i18n::tr(language, "Run as administrator"),
+                _ if action.kind == "section" => {
+                    crate::utils::i18n::tr(language, "Other launch entries")
+                }
                 _ => action.title.as_str(),
             };
             let title_width = approximate_text_width(title, 13);
             let subtitle_width = approximate_text_width(action.subtitle.as_str(), 10);
-            title_width.max(subtitle_width)
+            let content_width = title_width.max(subtitle_width);
+            // The label starts at x=36px. Keep a safety margin for font
+            // rasterization and the two-pixel menu border; otherwise a label
+            // that is only a few pixels wider than the estimate is elided.
+            if action.shortcut.is_empty() {
+                content_width + 68
+            } else {
+                // Shortcut hints occupy the rightmost 120px and need a
+                // six-pixel gap from the label.
+                content_width + 180
+            }
         })
         .max()
         .unwrap_or_default();
-    (widest + 50).max(180)
+    widest.max(180)
 }
 
 fn approximate_text_width(text: &str, font_size: i32) -> i32 {
@@ -197,4 +215,48 @@ fn is_supported_filesystem_target(target: &std::path::Path) -> bool {
         && target.parent().is_some()
         && !crate::platform::windows_rules::is_shell_namespace(target)
         && !target.to_string_lossy().contains("://")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn action(title: &str, shortcut: &str) -> ContextActionRow {
+        ContextActionRow {
+            id: "test-action".into(),
+            title: title.into(),
+            subtitle: String::new().into(),
+            kind: "common".into(),
+            icon: slint::Image::default(),
+            icon_kind: String::new().into(),
+            shortcut: shortcut.into(),
+        }
+    }
+
+    #[test]
+    fn long_action_titles_get_width_with_a_rendering_safety_margin() {
+        let title = "A very long action name that must remain visible";
+        let width = context_menu_width(&[action(title, "")], "en");
+
+        assert!(width >= approximate_text_width(title, 13) + 68);
+    }
+
+    #[test]
+    fn shortcut_area_is_reserved_without_overlapping_long_titles() {
+        let title = "A very long action name with a shortcut";
+        let width = context_menu_width(&[action(title, "Ctrl+Shift+Enter")], "en");
+
+        assert!(width >= approximate_text_width(title, 13) + 180);
+    }
+
+    #[test]
+    fn localized_section_title_participates_in_width_measurement() {
+        let mut section = action("", "");
+        section.id = "section:other-launch-entries".into();
+        section.kind = "section".into();
+
+        let width = context_menu_width(&[section], "en");
+
+        assert!(width >= approximate_text_width("Other launch entries", 13) + 68);
+    }
 }

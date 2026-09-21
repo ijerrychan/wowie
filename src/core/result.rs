@@ -24,6 +24,38 @@ pub enum ResultCategory {
     Other,
 }
 
+/// A renderer-neutral recommendation for presenting a result's content.
+///
+/// The launcher owns the final list/grid layout and navigation behavior. This
+/// value is reserved for content hints such as a detail preview, so changing
+/// the global view mode never depends on a provider category.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultPresentation {
+    List,
+    Compact,
+    Preview,
+    Grid,
+}
+
+impl ResultPresentation {
+    pub const fn recommended(has_detail: bool) -> Self {
+        if has_detail {
+            return Self::Preview;
+        }
+        Self::List
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Compact => "compact",
+            Self::Preview => "preview",
+            Self::Grid => "grid",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchEntry {
     pub source: crate::platform::SourceId,
@@ -74,6 +106,14 @@ pub fn is_action_shortcut(item: &SearchResult) -> bool {
     item.category == ResultCategory::Shortcut && (item.detail.is_none() || !item.actions.is_empty())
 }
 
+impl SearchResult {
+    /// Return the provider-independent presentation recommendation consumed by
+    /// the UI. The global list/grid mode is controlled by the launcher.
+    pub fn recommended_presentation(&self) -> ResultPresentation {
+        ResultPresentation::recommended(self.detail.is_some())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetailView {
     pub title: String,
@@ -111,6 +151,33 @@ pub enum DetailBlock {
     Weather {
         value: String,
     },
+    Markdown {
+        markdown: String,
+        color: String,
+    },
+    Image {
+        source: String,
+        alt: String,
+    },
+    Code {
+        language: String,
+        code: String,
+    },
+    Table {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
+    Link {
+        label: String,
+        url: String,
+    },
+    Loading {
+        message: String,
+    },
+    Error {
+        message: String,
+        retry_action: Option<String>,
+    },
     Separator,
 }
 
@@ -144,4 +211,37 @@ pub enum IconRef {
     Resource { path: String },
     System { target: String },
     Named { id: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResultPresentation;
+
+    #[test]
+    fn presentation_recommendations_are_provider_independent() {
+        assert_eq!(
+            ResultPresentation::recommended(false),
+            ResultPresentation::List
+        );
+        assert_eq!(
+            ResultPresentation::recommended(false),
+            ResultPresentation::List
+        );
+        assert_eq!(
+            ResultPresentation::recommended(true),
+            ResultPresentation::Preview
+        );
+        assert_eq!(
+            ResultPresentation::recommended(false),
+            ResultPresentation::List
+        );
+    }
+
+    #[test]
+    fn presentation_names_are_stable_for_the_ui_boundary() {
+        assert_eq!(ResultPresentation::List.as_str(), "list");
+        assert_eq!(ResultPresentation::Compact.as_str(), "compact");
+        assert_eq!(ResultPresentation::Preview.as_str(), "preview");
+        assert_eq!(ResultPresentation::Grid.as_str(), "grid");
+    }
 }

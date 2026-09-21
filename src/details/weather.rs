@@ -187,9 +187,9 @@ pub fn error_detail_view(language: &str) -> crate::result::DetailView {
             crate::utils::i18n::tr(language, "Unavailable")
         ),
         actions: Vec::new(),
-        blocks: vec![crate::result::DetailBlock::Text {
-            text: crate::utils::i18n::tr(language, "Weather unavailable").into(),
-            color: "secondary".into(),
+        blocks: vec![crate::result::DetailBlock::Error {
+            message: crate::utils::i18n::tr(language, "Weather unavailable").into(),
+            retry_action: None,
         }],
         preferred_width: None,
         scrollable: false,

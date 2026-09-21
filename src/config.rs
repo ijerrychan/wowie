@@ -10,9 +10,15 @@ const DEFAULT_HOTKEY: &str = "Alt+Space";
 const DEFAULT_RENDERER: &str = "femtovg";
 const DEFAULT_WINDOW_WIDTH: u32 = 720;
 const DEFAULT_WINDOW_HEIGHT: u32 = 550;
+const DEFAULT_LIST_ITEM_HEIGHT: u32 = 50;
+const DEFAULT_GRID_ITEM_SIZE: u32 = 124;
 const MIN_WINDOW_WIDTH: u32 = 420;
 pub(crate) const MIN_WINDOW_HEIGHT: u32 = 350;
 const MAX_WINDOW_WIDTH: u32 = 1200;
+const MIN_LIST_ITEM_HEIGHT: u32 = 36;
+const MAX_LIST_ITEM_HEIGHT: u32 = 96;
+const MIN_GRID_ITEM_SIZE: u32 = 96;
+const MAX_GRID_ITEM_SIZE: u32 = 240;
 const DEFAULT_THEME: &str = "system";
 const DEFAULT_LANGUAGE: &str = "system";
 
@@ -23,6 +29,8 @@ pub struct Config {
     pub renderer: String,
     pub window_width: u32,
     pub window_height: u32,
+    pub list_item_height: u32,
+    pub grid_item_size: u32,
     pub theme: String,
     pub language: String,
     pub show_on_startup: bool,
@@ -103,6 +111,8 @@ impl Default for Config {
             renderer: DEFAULT_RENDERER.into(),
             window_width: DEFAULT_WINDOW_WIDTH,
             window_height: DEFAULT_WINDOW_HEIGHT,
+            list_item_height: DEFAULT_LIST_ITEM_HEIGHT,
+            grid_item_size: DEFAULT_GRID_ITEM_SIZE,
             theme: DEFAULT_THEME.into(),
             language: DEFAULT_LANGUAGE.into(),
             show_on_startup: true,
@@ -158,6 +168,12 @@ impl Config {
         }
         self.window_width = self.window_width.clamp(MIN_WINDOW_WIDTH, MAX_WINDOW_WIDTH);
         self.window_height = self.window_height.max(MIN_WINDOW_HEIGHT);
+        self.list_item_height = self
+            .list_item_height
+            .clamp(MIN_LIST_ITEM_HEIGHT, MAX_LIST_ITEM_HEIGHT);
+        self.grid_item_size = self
+            .grid_item_size
+            .clamp(MIN_GRID_ITEM_SIZE, MAX_GRID_ITEM_SIZE);
         if self.theme != "system" && self.theme != "light" && self.theme != "dark" {
             self.theme = DEFAULT_THEME.into();
         }
@@ -291,6 +307,8 @@ mod tests {
         assert_eq!(config.hotkey, "Alt+Space");
         assert_eq!(config.renderer, "femtovg");
         assert_eq!(config.window_height, DEFAULT_WINDOW_HEIGHT);
+        assert_eq!(config.list_item_height, DEFAULT_LIST_ITEM_HEIGHT);
+        assert_eq!(config.grid_item_size, DEFAULT_GRID_ITEM_SIZE);
         assert!(config.show_on_startup);
         assert!(config.hide_on_focus_loss);
         assert!(!config.show_advanced_details);
@@ -309,6 +327,20 @@ mod tests {
             .iter()
             .any(|extension| extension == "exe"));
         assert!(config.plugins.is_empty());
+    }
+
+    #[test]
+    fn item_sizes_are_normalized_to_safe_layout_ranges() {
+        let mut config = Config {
+            list_item_height: 0,
+            grid_item_size: u32::MAX,
+            ..Config::default()
+        };
+
+        config.normalize();
+
+        assert_eq!(config.list_item_height, MIN_LIST_ITEM_HEIGHT);
+        assert_eq!(config.grid_item_size, MAX_GRID_ITEM_SIZE);
     }
 
     #[test]

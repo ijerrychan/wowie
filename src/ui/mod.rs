@@ -34,6 +34,13 @@ use std::{
 };
 use window::{create_window, hide_context_menu, save_window_size, toggle_palette};
 
+const SEARCH_ICON_FRAME_DELAY: Duration = Duration::from_millis(16);
+const CONTEXT_MENU_LAYOUT_DELAY: Duration = Duration::from_millis(16);
+const LAUNCH_ERROR_DURATION: Duration = Duration::from_secs(5);
+const FOCUS_LOSS_DELAY: Duration = Duration::from_millis(30);
+const PROVIDER_REFRESH_INTERVAL: Duration = Duration::from_millis(200);
+pub(super) const PALETTE_POSITION_DELAY: Duration = Duration::from_millis(10);
+
 fn update_search_icon(
     window: &Launcher,
     icon: Option<&crate::platform::IconData>,
@@ -61,7 +68,7 @@ fn update_search_icon(
         // Let the reset state render for one frame. Without this separation,
         // Slint can coalesce reset and activation into one frame.
         let weak = window.as_weak();
-        Timer::single_shot(Duration::from_millis(16), move || {
+        Timer::single_shot(SEARCH_ICON_FRAME_DELAY, move || {
             if let Some(window) = weak.upgrade() {
                 if transition_generation.load(Ordering::Acquire) != transition_id {
                     return;
@@ -75,6 +82,78 @@ fn update_search_icon(
         window.set_search_icon_transition_progress(1.0);
         window.set_search_icon_animation_enabled(true);
     }
+}
+
+struct SearchPresentation {
+    found: Arc<Vec<SearchResult>>,
+    rows: Vec<ResultRowPayload>,
+    shortcut_icon: Option<Arc<crate::platform::IconData>>,
+    shortcut_icon_kind: String,
+    is_shortcut_result: bool,
+    detail: Option<result::DetailView>,
+    detail_panel: bool,
+}
+
+fn build_search_presentation(
+    engine: &search::SearchCore,
+    query: &str,
+    show_advanced_details: bool,
+    detail_registry: &crate::details::DetailRegistry,
+    icon_service: &IconService,
+) -> SearchPresentation {
+    let found = if query.trim().is_empty() {
+        Vec::new()
+    } else {
+        engine.search(query)
+    };
+    let shortcut_results = isolate_shortcut_results(query, &found);
+    let shortcut_icon = shortcut_results
+        .as_ref()
+        .and_then(|results| results.first())
+        .filter(|item| static_icon_kind(item.icon.as_ref()).is_empty())
+        .and_then(|item| icon_service.resolve_at(item, DISPLAY_ICON_SIZE));
+    let shortcut_icon_kind = shortcut_results
+        .as_ref()
+        .and_then(|results| results.first())
+        .map(|item| static_icon_kind(item.icon.as_ref()).to_owned())
+        .unwrap_or_default();
+    let is_shortcut_result = shortcut_results.is_some();
+    let found = shortcut_results.unwrap_or(found);
+    let rows = found
+        .iter()
+        .map(|item| ResultRowPayload::from(item, show_advanced_details, query))
+        .collect();
+    let has_dynamic_detail = found
+        .first()
+        .is_some_and(|item| detail_registry.provider_for(item).is_some());
+    let detail_panel = found
+        .first()
+        .is_some_and(|item| item.detail.is_some() && !has_dynamic_detail);
+    let detail = (!has_dynamic_detail)
+        .then(|| found.first().and_then(|item| item.detail.clone()))
+        .flatten();
+
+    SearchPresentation {
+        found: Arc::new(found),
+        rows,
+        shortcut_icon,
+        shortcut_icon_kind,
+        is_shortcut_result,
+        detail,
+        detail_panel,
+    }
+}
+
+fn apply_search_detail_state(
+    window: &Launcher,
+    detail: Option<&result::DetailView>,
+    show_panel: bool,
+    icon_service: &IconService,
+) {
+    set_detail_view(window, detail, icon_service);
+    // Grid selection stays lightweight. Its detail surface is opened only by
+    // an explicit launch request, not as a side effect of moving selection.
+    window.set_detail_panel_visible(show_panel && window.get_view_mode() != "grid");
 }
 
 pub fn run() -> Result<()> {
@@ -143,6 +222,8 @@ pub fn run() -> Result<()> {
     window.set_results(ModelRc::from(results.clone()));
     window.set_window_width(config.window_width as i32);
     window.set_result_window_height(config.window_height as f32);
+    window.set_list_item_height(config.list_item_height as f32);
+    window.set_grid_item_size(config.grid_item_size as f32);
     window.set_dark_mode(dark_mode);
     let accent = platform.system_accent_color();
     window.set_accent_color(slint::Color::from_rgb_u8(
@@ -234,6 +315,34 @@ pub fn run() -> Result<()> {
         });
     }
     {
+        let weak = window.as_weak();
+        let icon_service = icon_service.clone();
+        let detail_generation = Arc::clone(&detail_generation);
+        window.on_detail_back_requested(move || {
+            // Invalidate an in-flight dynamic preview before hiding it. A
+            // late provider response must not reopen the detail surface.
+            detail_generation.fetch_add(1, Ordering::AcqRel);
+            if let Some(window) = weak.upgrade() {
+                set_detail_view(&window, None, &icon_service);
+                window.set_detail_panel_visible(false);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let language = config.language.clone();
+        window.on_detail_link_requested(move |url| {
+            let result = launcher::open_url(url.as_str());
+            if result.is_err() {
+                if let Some(window) = weak.upgrade() {
+                    window.set_launch_error(
+                        i18n::tr(&language, "Could not open preview link").into(),
+                    );
+                }
+            }
+        });
+    }
+    {
         let engine = engine.clone();
         let icon_service = icon_service.clone();
         let icon_items = Arc::clone(&icon_items);
@@ -244,7 +353,6 @@ pub fn run() -> Result<()> {
         let show_advanced_details = Arc::clone(&show_advanced_details);
         let search_icon_generation = Arc::clone(&search_icon_generation);
         let detail_registry = detail_registry.clone();
-        let detail_language = config.language.clone();
         let detail_generation = Arc::clone(&detail_generation);
         window.on_query_changed(move |query| {
             // Invalidate an in-flight detail request immediately. The result
@@ -293,46 +401,23 @@ pub fn run() -> Result<()> {
             let search_icon_generation = Arc::clone(&search_icon_generation);
             let show_advanced_details_for_query = Arc::clone(&show_advanced_details);
             let detail_registry_for_query = detail_registry.clone();
-            let detail_language_for_query = detail_language.clone();
             std::thread::spawn(move || {
-                let found = if query.trim().is_empty() {
-                    Vec::new()
-                } else {
-                    engine.search(query.as_str())
-                };
-                let shortcut_results = isolate_shortcut_results(query.as_str(), &found);
-                let shortcut_icon = shortcut_results
-                    .as_ref()
-                    .and_then(|results| results.first())
-                    .filter(|item| static_icon_kind(item.icon.as_ref()).is_empty())
-                    .and_then(|item| icon_service.resolve_at(item, DISPLAY_ICON_SIZE));
-                let shortcut_icon_kind = shortcut_results
-                    .as_ref()
-                    .and_then(|results| results.first())
-                    .map(|item| static_icon_kind(item.icon.as_ref()).to_owned())
-                    .unwrap_or_default();
-                let is_shortcut_result = shortcut_results.is_some();
-                let found = shortcut_results.unwrap_or(found);
-                let rows = found
-                    .iter()
-                    .map(|item| {
-                        ResultRowPayload::from(
-                            item,
-                            show_advanced_details_for_query.load(Ordering::Acquire),
-                            query.as_str(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let has_dynamic_detail = found
-                    .first()
-                    .is_some_and(|item| detail_registry_for_query.provider_for(item).is_some());
-                let detail_panel = found
-                    .first()
-                    .is_some_and(|item| item.detail.is_some() && !has_dynamic_detail);
-                let first_detail = (!has_dynamic_detail)
-                    .then(|| found.first().and_then(|item| item.detail.clone()))
-                    .flatten();
-                let found_for_icons = Arc::new(found);
+                let presentation = build_search_presentation(
+                    &engine,
+                    query.as_str(),
+                    show_advanced_details_for_query.load(Ordering::Acquire),
+                    &detail_registry_for_query,
+                    &icon_service,
+                );
+                let SearchPresentation {
+                    found: found_for_icons,
+                    rows,
+                    shortcut_icon,
+                    shortcut_icon_kind,
+                    is_shortcut_result,
+                    detail,
+                    detail_panel,
+                } = presentation;
                 let _ = slint::invoke_from_event_loop(move || {
                     if query_generation.load(Ordering::Acquire) != query_id {
                         return;
@@ -366,23 +451,13 @@ pub fn run() -> Result<()> {
                                 search_icon_generation,
                             );
                         }
-                        let cached_detail = (!has_dynamic_detail)
-                            .then(|| {
-                                found_for_icons
-                                    .first()
-                                    .and_then(|item| detail_registry_for_query.provider_for(item))
-                                    .and_then(|provider| {
-                                        provider.cached(&detail_language_for_query)
-                                    })
-                            })
-                            .flatten();
                         if results_changed {
-                            set_detail_view(
+                            apply_search_detail_state(
                                 &window,
-                                cached_detail.as_ref().or(first_detail.as_ref()),
+                                detail.as_ref(),
+                                detail_panel,
                                 &icon_service,
                             );
-                            window.set_detail_panel_visible(detail_panel);
                             window.set_selected_index(-1);
                             window.set_selected_index(if count > 0 { 0 } else { -1 });
                         }
@@ -405,6 +480,7 @@ pub fn run() -> Result<()> {
         let icon_service = icon_service.clone();
         let weak = window.as_weak();
         let detail_registry = detail_registry.clone();
+        let show_advanced_launch_entries = Arc::clone(&show_advanced_launch_entries);
         let detail_generation = Arc::clone(&detail_generation);
         window.on_selection_changed(move |index| {
             // Selection only changes local preview state. It also invalidates
@@ -419,16 +495,16 @@ pub fn run() -> Result<()> {
                 .as_ref()
                 .is_some_and(|item| detail_registry.provider_for(item).is_some());
             if let Some(window) = weak.upgrade() {
-                set_detail_view(
-                    &window,
-                    item.as_ref()
-                        .filter(|_| !has_dynamic_detail)
-                        .and_then(|item| item.detail.as_ref()),
-                    &icon_service,
-                );
-                window.set_detail_panel_visible(
-                    !has_dynamic_detail && item.as_ref().is_some_and(|item| item.detail.is_some()),
-                );
+                let context_menu_available = item.as_ref().is_some_and(|item| {
+                    !context_actions(item, show_advanced_launch_entries.load(Ordering::Acquire))
+                        .is_empty()
+                });
+                let detail = item
+                    .as_ref()
+                    .filter(|_| !has_dynamic_detail)
+                    .and_then(|item| item.detail.as_ref());
+                window.set_context_menu_available(context_menu_available);
+                apply_search_detail_state(&window, detail, detail.is_some(), &icon_service);
             }
         });
     }
@@ -511,7 +587,7 @@ pub fn run() -> Result<()> {
                         if let Some(window) = weak.upgrade() {
                             window.set_launch_error(error.to_string().into());
                             let weak = window.as_weak();
-                            Timer::single_shot(Duration::from_secs(5), move || {
+                            Timer::single_shot(LAUNCH_ERROR_DURATION, move || {
                                 if let Some(window) = weak.upgrade() {
                                     window.set_launch_error(String::new().into());
                                 }
@@ -533,7 +609,8 @@ pub fn run() -> Result<()> {
         let context_item = Arc::clone(&context_item);
         let visible = Arc::clone(&visible);
         let show_advanced_launch_entries = Arc::clone(&show_advanced_launch_entries);
-        window.on_context_menu_requested(move |index| {
+        let context_language = config.language.clone();
+        window.on_context_menu_requested(move |index, keyboard| {
             let Some(item) = weak.upgrade().and_then(|window| {
                 window
                     .get_results()
@@ -566,12 +643,44 @@ pub fn run() -> Result<()> {
                 window.set_context_menu_open(true);
             }
             if let Some(menu) = context_weak.upgrade() {
-                menu.set_menu_width(context_menu_width(&actions) as f32);
+                menu.set_menu_width(context_menu_width(&actions, &context_language) as f32);
+                menu.set_keyboard_invoked(keyboard);
                 menu.set_actions(ModelRc::from(Rc::new(VecModel::from(actions))));
                 platform.disable_window_transitions(menu.window());
                 let _ = menu.show();
-                platform.position_context_menu(menu.window());
+                let launcher = weak.upgrade();
+                let anchor = launcher.as_ref().and_then(|launcher| {
+                    keyboard.then(|| {
+                        (
+                            launcher.get_context_menu_anchor_x(),
+                            launcher.get_context_menu_anchor_y(),
+                        )
+                    })
+                });
+                if let Some(launcher) = launcher {
+                    platform.position_context_menu(menu.window(), launcher.window(), anchor);
+                }
                 platform.activate_context_menu(menu.window());
+                if let Some(anchor) = anchor {
+                    // The native window can still report its previous size
+                    // on the first show. Reposition once after Slint applies
+                    // the new actions and resizes the menu.
+                    let platform_for_reposition = Arc::clone(&platform);
+                    let menu_for_reposition = context_weak.clone();
+                    let launcher_for_reposition = weak.clone();
+                    Timer::single_shot(CONTEXT_MENU_LAYOUT_DELAY, move || {
+                        if let (Some(menu), Some(launcher)) = (
+                            menu_for_reposition.upgrade(),
+                            launcher_for_reposition.upgrade(),
+                        ) {
+                            platform_for_reposition.position_context_menu(
+                                menu.window(),
+                                launcher.window(),
+                                Some(anchor),
+                            );
+                        }
+                    });
+                }
             }
 
             let icon_service = icon_service.clone();
@@ -770,7 +879,7 @@ pub fn run() -> Result<()> {
                     initial_refresh = false;
                     true
                 } else {
-                    match app_source_events.recv_timeout(Duration::from_millis(200)) {
+                    match app_source_events.recv_timeout(PROVIDER_REFRESH_INTERVAL) {
                         Ok(source) => provider.refresh_source(source),
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -800,6 +909,8 @@ pub fn run() -> Result<()> {
                         let theme = updated.theme.clone();
                         let language = updated.language.clone();
                         let window_width = updated.window_width as i32;
+                        let list_item_height = updated.list_item_height as f32;
+                        let grid_item_size = updated.grid_item_size as f32;
                         let _ = slint::invoke_from_event_loop(move || {
                             if language != "system" {
                                 let _ = slint::select_bundled_translation(&language);
@@ -811,6 +922,8 @@ pub fn run() -> Result<()> {
                             };
                             if let Some(window) = weak_for_config.upgrade() {
                                 window.set_window_width(window_width);
+                                window.set_list_item_height(list_item_height);
+                                window.set_grid_item_size(grid_item_size);
                                 window.set_dark_mode(dark_mode);
                                 let accent = platform_for_config.system_accent_color();
                                 window.set_accent_background(slint::Color::from_argb_u8(
@@ -832,44 +945,21 @@ pub fn run() -> Result<()> {
                         .map(|value| value.clone())
                         .unwrap_or_default();
                     let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
-                    let found = if query.trim().is_empty() {
-                        Vec::new()
-                    } else {
-                        engine.search(&query)
-                    };
-                    let shortcut_results = isolate_shortcut_results(&query, &found);
-                    let shortcut_icon = shortcut_results
-                        .as_ref()
-                        .and_then(|results| results.first())
-                        .filter(|item| static_icon_kind(item.icon.as_ref()).is_empty())
-                        .and_then(|item| icon_service.resolve_at(item, DISPLAY_ICON_SIZE));
-                    let shortcut_icon_kind = shortcut_results
-                        .as_ref()
-                        .and_then(|results| results.first())
-                        .map(|item| static_icon_kind(item.icon.as_ref()).to_owned())
-                        .unwrap_or_default();
-                    let is_shortcut_result = shortcut_results.is_some();
-                    let found = shortcut_results.unwrap_or(found);
-                    let rows = found
-                        .iter()
-                        .map(|item| {
-                            ResultRowPayload::from(
-                                item,
-                                show_advanced_details.load(Ordering::Acquire),
-                                &query,
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    let has_dynamic_detail = found
-                        .first()
-                        .is_some_and(|item| detail_registry.provider_for(item).is_some());
-                    let detail_panel = found
-                        .first()
-                        .is_some_and(|item| item.detail.is_some() && !has_dynamic_detail);
-                    let first_detail = (!has_dynamic_detail)
-                        .then(|| found.first().and_then(|item| item.detail.clone()))
-                        .flatten();
-                    let found_for_icons = Arc::new(found);
+                    let SearchPresentation {
+                        found: found_for_icons,
+                        rows,
+                        shortcut_icon,
+                        shortcut_icon_kind,
+                        is_shortcut_result,
+                        detail,
+                        detail_panel,
+                    } = build_search_presentation(
+                        &engine,
+                        &query,
+                        show_advanced_details.load(Ordering::Acquire),
+                        &detail_registry,
+                        &icon_service,
+                    );
                     let query_generation_for_ui = Arc::clone(&query_generation);
                     let weak_for_ui = weak.clone();
                     let icon_items_for_ui = Arc::clone(&icon_items);
@@ -900,12 +990,12 @@ pub fn run() -> Result<()> {
                                 ));
                                 window.set_results(ModelRc::from(model));
 
-                                set_detail_view(
+                                apply_search_detail_state(
                                     &window,
-                                    first_detail.as_ref(),
+                                    detail.as_ref(),
+                                    detail_panel,
                                     &icon_service_for_ui,
                                 );
-                                window.set_detail_panel_visible(detail_panel);
                                 window.set_selected_index(-1);
                                 window.set_selected_index(if count > 0 { 0 } else { -1 });
                             }
@@ -977,7 +1067,7 @@ pub fn run() -> Result<()> {
                 let platform = Arc::clone(&platform_for_context_focus);
                 let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
                 let observed_generation = context_generation.load(Ordering::Acquire);
-                Timer::single_shot(Duration::from_millis(30), move || {
+                Timer::single_shot(FOCUS_LOSS_DELAY, move || {
                     if context_generation.load(Ordering::Acquire) == observed_generation {
                         let launcher_focused = weak
                             .upgrade()
@@ -1002,7 +1092,7 @@ pub fn run() -> Result<()> {
         visible.store(true, Ordering::Release);
         let weak = window.as_weak();
         let platform = Arc::clone(&platform);
-        Timer::single_shot(Duration::from_millis(10), move || {
+        Timer::single_shot(PALETTE_POSITION_DELAY, move || {
             if let Some(window) = weak.upgrade() {
                 platform.position_palette(
                     window.window(),

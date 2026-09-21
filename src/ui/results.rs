@@ -1,7 +1,7 @@
 use super::{Launcher, ResultRow};
 use crate::{
     icon_service::{IconService, DISPLAY_ICON_SIZE},
-    result::{is_action_shortcut, IconSpec, ResultCategory, SearchResult},
+    result::{is_action_shortcut, IconSpec, ResultCategory, ResultPresentation, SearchResult},
 };
 use slint::{Model, ModelRc};
 use std::{
@@ -21,6 +21,7 @@ pub(super) struct ResultRowPayload {
     icon_kind: String,
     shortcut_prefix: String,
     shortcut_prefix_width: i32,
+    presentation: String,
 }
 
 impl ResultRowPayload {
@@ -46,6 +47,7 @@ impl ResultRowPayload {
             icon_kind: static_icon_kind(item.icon.as_ref()).into(),
             shortcut_prefix_width: shortcut_prefix_width(&shortcut_prefix),
             shortcut_prefix,
+            presentation: presentation_name(item.recommended_presentation()).into(),
         }
     }
 }
@@ -68,7 +70,12 @@ pub(super) fn matches_model(model: &ModelRc<ResultRow>, payloads: &[ResultRowPay
             && row.icon_kind.as_str() == payload.icon_kind
             && row.shortcut_prefix.as_str() == payload.shortcut_prefix
             && row.shortcut_prefix_width == payload.shortcut_prefix_width
+            && row.presentation.as_str() == payload.presentation
     })
+}
+
+fn presentation_name(presentation: ResultPresentation) -> &'static str {
+    presentation.as_str()
 }
 
 pub(super) fn static_icon_kind(icon: Option<&IconSpec>) -> &'static str {
@@ -268,6 +275,7 @@ impl From<ResultRowPayload> for ResultRow {
             icon_kind: payload.icon_kind.into(),
             shortcut_prefix: payload.shortcut_prefix.into(),
             shortcut_prefix_width: payload.shortcut_prefix_width,
+            presentation: payload.presentation.into(),
         }
     }
 }

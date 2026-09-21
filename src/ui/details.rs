@@ -55,6 +55,22 @@ pub(super) fn request_dynamic_detail_with_id(
         return;
     }
 
+    if let Some(window) = weak.upgrade() {
+        let loading = DetailView {
+            title: item.title.clone(),
+            subtitle: String::new(),
+            source: String::new(),
+            blocks: vec![ResultDetailBlock::Loading {
+                message: crate::utils::i18n::tr(&language, "Loading preview").into(),
+            }],
+            actions: Vec::new(),
+            preferred_width: None,
+            scrollable: false,
+        };
+        set_detail_view(&window, Some(&loading), &icon_service);
+        window.set_detail_panel_visible(true);
+    }
+
     std::thread::spawn(move || {
         let result = provider.load(&language);
         let _ = slint::invoke_from_event_loop(move || {
@@ -118,6 +134,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 label: String::new().into(),
                 value: text.clone().into(),
                 color: color.clone().into(),
+                secondary: String::new().into(),
                 icon: slint::Image::default(),
             },
             ResultDetailBlock::Metric {
@@ -129,6 +146,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 label: label.clone().into(),
                 value: value.clone().into(),
                 color: color.clone().into(),
+                secondary: String::new().into(),
                 icon: slint::Image::default(),
             },
             ResultDetailBlock::Icon { glyph, color, icon } => DetailBlock {
@@ -136,6 +154,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 label: String::new().into(),
                 value: glyph.clone().into(),
                 color: color.clone().into(),
+                secondary: String::new().into(),
                 icon: icon
                     .as_ref()
                     .and_then(|icon| icon_service.resolve_spec_at(icon, 40))
@@ -147,6 +166,72 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 label: String::new().into(),
                 value: value.clone().into(),
                 color: String::new().into(),
+                secondary: String::new().into(),
+                icon: slint::Image::default(),
+            },
+            ResultDetailBlock::Markdown { markdown, color } => DetailBlock {
+                kind: "markdown".into(),
+                label: String::new().into(),
+                value: markdown.clone().into(),
+                color: color.clone().into(),
+                secondary: String::new().into(),
+                icon: slint::Image::default(),
+            },
+            ResultDetailBlock::Image { source, alt } => DetailBlock {
+                kind: "image".into(),
+                label: alt.clone().into(),
+                value: source.clone().into(),
+                color: String::new().into(),
+                secondary: alt.clone().into(),
+                icon: slint::Image::load_from_path(std::path::Path::new(source))
+                    .unwrap_or_default(),
+            },
+            ResultDetailBlock::Code { language, code } => DetailBlock {
+                kind: "code".into(),
+                label: language.clone().into(),
+                value: code.clone().into(),
+                color: String::new().into(),
+                secondary: String::new().into(),
+                icon: slint::Image::default(),
+            },
+            ResultDetailBlock::Table { columns, rows } => DetailBlock {
+                kind: "table".into(),
+                label: columns.join("  ·  ").into(),
+                value: rows
+                    .iter()
+                    .map(|row| row.join("    "))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .into(),
+                color: String::new().into(),
+                secondary: String::new().into(),
+                icon: slint::Image::default(),
+            },
+            ResultDetailBlock::Link { label, url } => DetailBlock {
+                kind: "link".into(),
+                label: label.clone().into(),
+                value: url.clone().into(),
+                color: "accent".into(),
+                secondary: String::new().into(),
+                icon: slint::Image::default(),
+            },
+            ResultDetailBlock::Loading { message } => DetailBlock {
+                kind: "loading".into(),
+                label: String::new().into(),
+                value: message.clone().into(),
+                color: String::new().into(),
+                secondary: String::new().into(),
+                icon: slint::Image::default(),
+            },
+            ResultDetailBlock::Error {
+                message,
+                retry_action,
+            } => DetailBlock {
+                kind: "error".into(),
+                label: retry_action.clone().unwrap_or_default().into(),
+                value: message.clone().into(),
+                color: String::new().into(),
+                secondary: String::new().into(),
                 icon: slint::Image::default(),
             },
             ResultDetailBlock::Separator => DetailBlock {
@@ -154,6 +239,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 label: String::new().into(),
                 value: String::new().into(),
                 color: String::new().into(),
+                secondary: String::new().into(),
                 icon: slint::Image::default(),
             },
         })
@@ -182,6 +268,7 @@ fn detail_actions_model(
                 .map(|icon| icon_to_image(icon.as_ref()))
                 .unwrap_or_default(),
             icon_kind: static_icon_kind(action.icon.as_ref()).into(),
+            shortcut: String::new().into(),
         })
         .collect::<Vec<_>>();
     ModelRc::from(Rc::new(VecModel::from(actions)))

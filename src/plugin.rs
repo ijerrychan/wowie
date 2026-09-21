@@ -10,7 +10,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use mlua::{Function, Lua, LuaSerdeExt, Value};
-use serde::Deserialize;
+use serde::{de, Deserialize, Deserializer};
 use std::{
     fs,
     path::{Component, Path, PathBuf},
@@ -251,10 +251,44 @@ impl EmbeddedPlugin {
 struct QueryResponse {
     #[serde(default)]
     request_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_plugin_items")]
     items: Vec<PluginItem>,
     #[serde(default)]
     error: Option<PluginError>,
+}
+
+fn deserialize_plugin_items<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<PluginItem>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(de::Error::custom),
+        // Lua has no distinct empty-array type. An empty table is encoded as
+        // an object by mlua, so accept it as the protocol's empty item list.
+        serde_json::Value::Object(items) if items.is_empty() => Ok(Vec::new()),
+        other => Err(de::Error::custom(format!(
+            "expected plugin items array, got {}",
+            json_type_name(&other)
+        ))),
+    }
+}
+
+fn json_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -366,7 +400,42 @@ enum PluginDetailBlock {
     Weather {
         value: String,
     },
+    Markdown {
+        markdown: String,
+        #[serde(default = "default_detail_color")]
+        color: String,
+    },
+    Image {
+        source: String,
+        #[serde(default)]
+        alt: String,
+    },
+    Code {
+        language: String,
+        code: String,
+    },
+    Table {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
+    Link {
+        label: String,
+        url: String,
+    },
+    Loading {
+        #[serde(default = "default_loading_message")]
+        message: String,
+    },
+    Error {
+        message: String,
+        #[serde(default)]
+        retry_action: Option<String>,
+    },
     Separator,
+}
+
+fn default_loading_message() -> String {
+    "Loading preview".into()
 }
 
 fn default_detail_color() -> String {
@@ -673,7 +742,7 @@ fn query_plugin(
     Ok(response
         .items
         .into_iter()
-        .map(|item| to_result(plugin, item, command_id, requested_query))
+        .map(|item| to_result(plugin, item, command_id, requested_query, locale))
         .collect())
 }
 
@@ -732,6 +801,7 @@ fn to_result(
     item: PluginItem,
     requested_command_id: Option<&str>,
     requested_query: &str,
+    language: &str,
 ) -> SearchResult {
     let item_command_id = item.command_id.as_deref().or(requested_command_id);
     let command = item_command_id.and_then(|command_id| {
@@ -788,7 +858,9 @@ fn to_result(
         sources: vec![format!("plugin:{}", plugin.manifest.id).into()],
         launch_entries: Vec::<LaunchEntry>::new(),
         actions,
-        detail: item.detail.map(|view| to_detail_view(&plugin.root, view)),
+        detail: item
+            .detail
+            .map(|view| to_detail_view(&plugin.root, view, language)),
         description: None,
         app_user_model_id: None,
         package_family_name: None,
@@ -818,7 +890,11 @@ fn plugin_resource_path(root: &Path, relative: &str) -> Option<PathBuf> {
     Some(root.join(relative_path))
 }
 
-fn to_detail_view(root: &Path, view: PluginDetailView) -> crate::result::DetailView {
+fn to_detail_view(
+    root: &Path,
+    view: PluginDetailView,
+    language: &str,
+) -> crate::result::DetailView {
     crate::result::DetailView {
         title: detail_text(view.title),
         subtitle: detail_text(view.subtitle),
@@ -868,6 +944,65 @@ fn to_detail_view(root: &Path, view: PluginDetailView) -> crate::result::DetailV
                         _ => "cloud".into(),
                     },
                 },
+                PluginDetailBlock::Markdown { markdown, color } => {
+                    crate::result::DetailBlock::Markdown {
+                        markdown: detail_text(markdown),
+                        color: detail_color(&color),
+                    }
+                }
+                PluginDetailBlock::Image { source, alt } => {
+                    let Some(path) = plugin_resource_path(root, &source) else {
+                        return crate::result::DetailBlock::Error {
+                            message: crate::utils::i18n::tr(language, "Preview image unavailable")
+                                .into(),
+                            retry_action: None,
+                        };
+                    };
+                    crate::result::DetailBlock::Image {
+                        source: path.to_string_lossy().into_owned(),
+                        alt: detail_text(alt),
+                    }
+                }
+                PluginDetailBlock::Code { language, code } => crate::result::DetailBlock::Code {
+                    language: detail_text(language),
+                    code: code.chars().take(8_192).collect(),
+                },
+                PluginDetailBlock::Table { columns, rows } => crate::result::DetailBlock::Table {
+                    columns: columns.into_iter().take(8).map(detail_text).collect(),
+                    rows: rows
+                        .into_iter()
+                        .take(32)
+                        .map(|row| row.into_iter().take(8).map(detail_text).collect())
+                        .collect(),
+                },
+                PluginDetailBlock::Link { label, url } => {
+                    if is_supported_detail_url(&url) {
+                        crate::result::DetailBlock::Link {
+                            label: detail_text(label),
+                            url: detail_text(url),
+                        }
+                    } else {
+                        crate::result::DetailBlock::Error {
+                            message: crate::utils::i18n::tr(language, "Preview link unsupported")
+                                .into(),
+                            retry_action: None,
+                        }
+                    }
+                }
+                PluginDetailBlock::Loading { message } => crate::result::DetailBlock::Loading {
+                    message: if message == "Loading preview" {
+                        crate::utils::i18n::tr(language, "Loading preview").into()
+                    } else {
+                        detail_text(message)
+                    },
+                },
+                PluginDetailBlock::Error {
+                    message,
+                    retry_action,
+                } => crate::result::DetailBlock::Error {
+                    message: detail_text(message),
+                    retry_action: retry_action.map(detail_text),
+                },
                 PluginDetailBlock::Separator => crate::result::DetailBlock::Separator,
             })
             .collect(),
@@ -889,6 +1024,14 @@ fn detail_color(value: &str) -> String {
         "primary" | "secondary" | "tertiary" | "accent" => value.into(),
         _ => "secondary".into(),
     }
+}
+
+fn is_supported_detail_url(value: &str) -> bool {
+    let value = value.trim();
+    value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .is_some_and(|rest| !rest.is_empty() && !rest.chars().any(char::is_whitespace))
 }
 
 #[cfg(test)]
@@ -1000,6 +1143,12 @@ mod tests {
     }
 
     #[test]
+    fn empty_lua_item_tables_are_treated_as_empty_plugin_results() {
+        let response: QueryResponse = serde_json::from_str(r#"{"items":{}}"#).unwrap();
+        assert!(response.items.is_empty());
+    }
+
+    #[test]
     fn embedded_lua_can_query_and_execute_with_preferences() {
         let source = r#"
             wowie.on("query", function(query, context)
@@ -1054,6 +1203,11 @@ mod tests {
     fn bundled_devtools_plugin_exercises_public_plugin_surface() {
         let manager = PluginManager::discover_with_config("zh-Hans", &Default::default());
         let results = manager.query("dev");
+        assert_eq!(results.len(), 2);
+        assert!(results
+            .iter()
+            .all(|result| !result.id.ends_with(":preview-states")
+                && !result.id.ends_with(":preview-safety")));
         assert!(results
             .iter()
             .any(|result| result.id == "plugin:wowie-devtools:developer-guide"));
@@ -1079,6 +1233,75 @@ mod tests {
             .actions
             .iter()
             .all(|action| action.icon.is_some()));
+
+        let preview_results = manager.query("preview");
+        let gallery = preview_results
+            .iter()
+            .find(|result| result.id == "plugin:wowie-devtools:preview-gallery")
+            .expect("preview gallery result");
+        assert_eq!(gallery.title, "P0 预览能力展厅");
+        let gallery_detail = gallery.detail.as_ref().expect("preview gallery detail");
+        assert!(gallery_detail.scrollable);
+        assert_eq!(gallery_detail.preferred_width, Some(560));
+        assert!(gallery_detail
+            .blocks
+            .iter()
+            .any(|block| matches!(block, crate::result::DetailBlock::Markdown { .. })));
+        assert!(gallery_detail
+            .blocks
+            .iter()
+            .any(|block| matches!(block, crate::result::DetailBlock::Image { .. })));
+        assert!(gallery_detail
+            .blocks
+            .iter()
+            .any(|block| matches!(block, crate::result::DetailBlock::Code { .. })));
+        assert!(gallery_detail
+            .blocks
+            .iter()
+            .any(|block| matches!(block, crate::result::DetailBlock::Table { .. })));
+        assert!(gallery_detail
+            .blocks
+            .iter()
+            .any(|block| matches!(block, crate::result::DetailBlock::Link { .. })));
+        assert!(gallery_detail
+            .blocks
+            .iter()
+            .any(|block| matches!(block, crate::result::DetailBlock::Weather { .. })));
+
+        let states = preview_results
+            .iter()
+            .find(|result| result.id == "plugin:wowie-devtools:preview-states")
+            .expect("preview states result");
+        let state_blocks = &states
+            .detail
+            .as_ref()
+            .expect("preview states detail")
+            .blocks;
+        assert!(state_blocks
+            .iter()
+            .any(|block| matches!(block, crate::result::DetailBlock::Loading { .. })));
+        assert!(state_blocks.iter().any(|block| matches!(
+            block,
+            crate::result::DetailBlock::Error {
+                retry_action: Some(_),
+                ..
+            }
+        )));
+
+        let safety = preview_results
+            .iter()
+            .find(|result| result.id == "plugin:wowie-devtools:preview-safety")
+            .expect("preview safety result");
+        let safety_blocks = &safety
+            .detail
+            .as_ref()
+            .expect("preview safety detail")
+            .blocks;
+        assert_eq!(safety_blocks.len(), 2);
+        assert!(safety_blocks
+            .iter()
+            .all(|block| matches!(block, crate::result::DetailBlock::Error { .. })));
+
         let output = manager
             .execute("wowie-devtools", "developer-guide", "open")
             .unwrap();
@@ -1099,7 +1322,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let detail = to_detail_view(Path::new("."), view);
+        let detail = to_detail_view(Path::new("."), view, "en");
         assert_eq!(detail.title, "Repository");
         assert_eq!(detail.blocks.len(), 3);
         assert_eq!(detail.actions[0].title, "Open");

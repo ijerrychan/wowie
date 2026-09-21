@@ -37,6 +37,35 @@ pub fn launch(item: &SearchResult) -> Result<()> {
     anyhow::bail!("launch is not supported on this platform")
 }
 
+/// Open a preview link using the platform's default browser. Only explicit
+/// HTTP(S) URLs are accepted; preview data must never turn into arbitrary
+/// shell commands.
+pub fn open_url(url: &str) -> Result<()> {
+    let url = url.trim();
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        anyhow::bail!("preview_link_unsupported");
+    }
+    if url.chars().any(char::is_whitespace) {
+        anyhow::bail!("preview_link_invalid");
+    }
+    #[cfg(target_os = "windows")]
+    {
+        shell_execute(std::path::Path::new(url), "", None, None)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(url).spawn()?;
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(url).spawn()?;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    anyhow::bail!("opening links is not supported on this platform")
+}
+
 pub fn launch_entry(entry: &crate::result::LaunchEntry, as_admin: bool) -> Result<()> {
     #[cfg(target_os = "windows")]
     {

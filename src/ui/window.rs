@@ -1,13 +1,10 @@
-use super::{ContextMenu, Launcher};
+use super::{ContextMenu, Launcher, PALETTE_POSITION_DELAY};
 use crate::{config, platform, result::SearchResult};
 use anyhow::Result;
 use slint::{ComponentHandle, Timer};
-use std::{
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
-    },
-    time::Duration,
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
 };
 
 pub(super) fn create_window(config: &config::Config) -> Result<Launcher> {
@@ -82,7 +79,7 @@ pub(super) fn toggle_palette(
         let _ = window.show();
         platform.activate_palette(window.window());
         let weak = window.as_weak();
-        Timer::single_shot(Duration::from_millis(10), move || {
+        Timer::single_shot(PALETTE_POSITION_DELAY, move || {
             if let Some(window) = weak.upgrade() {
                 platform.position_palette(
                     window.window(),
@@ -108,6 +105,7 @@ pub(super) fn hide_context_menu(
     generation.fetch_add(1, Ordering::AcqRel);
     visible.store(false, Ordering::Release);
     if let Some(menu) = menu.upgrade() {
+        menu.set_keyboard_invoked(false);
         let _ = menu.hide();
     }
     if let Ok(mut current) = item.lock() {

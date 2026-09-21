@@ -8,6 +8,14 @@ msgid "Search applications"
 msgstr "搜索应用"
 
 msgctxt "Launcher"
+msgid "List view"
+msgstr "列表视图"
+
+msgctxt "Launcher"
+msgid "Grid view"
+msgstr "网格视图"
+
+msgctxt "Launcher"
 msgid "{} results"
 msgstr "{} 个结果"
 
@@ -67,6 +75,26 @@ msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  导航     Enter  打开     Esc  隐藏"
 
+msgctxt "Launcher"
+msgid "↑ ↓ ← →  Navigate     Enter  Open     Esc  Hide"
+msgstr "↑ ↓ ← →  导航     Enter  打开     Esc  隐藏"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Enter  Open     Menu  Context     Esc  Hide"
+msgstr "↑ ↓  导航     Enter  打开     Menu  菜单     Esc  隐藏"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Enter  Open     Ctrl+Shift+M  Context     Esc  Hide"
+msgstr "↑ ↓  导航     Enter  打开     Ctrl+Shift+M  菜单     Esc  隐藏"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
+msgstr "↑ ↓  导航     Enter  打开     Ctrl+M  菜单     Esc  隐藏"
+
+msgctxt "Launcher"
+msgid "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
+msgstr "↑ ↓ ← →  导航     Enter  打开     Ctrl+M  菜单     Esc  隐藏"
+
 msgctxt "ContextMenu"
 msgid "Open containing folder"
 msgstr "打开所在目录"
@@ -78,6 +106,26 @@ msgstr "以管理员身份运行"
 msgctxt "ContextMenu"
 msgid "Other launch entries"
 msgstr "其他启动入口"
+
+msgctxt "Launcher"
+msgid "Loading preview"
+msgstr "正在加载预览"
+
+msgctxt "Launcher"
+msgid "Preview unavailable"
+msgstr "预览不可用"
+
+msgctxt "Launcher"
+msgid "Preview image unavailable"
+msgstr "预览图片不可用"
+
+msgctxt "Launcher"
+msgid "Preview link unsupported"
+msgstr "不支持此预览链接"
+
+msgctxt "Launcher"
+msgid "Could not open preview link"
+msgstr "无法打开预览链接"
 
 msgctxt "Launcher"
 msgid "Weather"

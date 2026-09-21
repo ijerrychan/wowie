@@ -48,13 +48,15 @@
 
 ### Phase 4：详情面板
 
-当前已实现：`text`、`metric`、`icon`、`weather`、`separator`、DetailAction、preferred width，以及宿主按窗口宽度计算的面板比例。
+当前已实现：`text`、`metric`、`icon`、`weather`、`separator`、`markdown`、`image`、`code`、`table`、`link`、`loading`、`error`、DetailAction、preferred width、scrollable，以及宿主按窗口宽度计算的面板比例。
+
+结构化预览已经由 `plugins/wowie-devtools` 提供可运行的覆盖示例和集成测试。
 
 暂不实施：
 
-- [ ] 可滚动详情容器
-- [ ] markdown、image、link、badge 等更多 primitive
-- [ ] 动态详情请求
+- [x] 可滚动详情容器
+- [x] markdown、image、code、table、link、loading、error 等结构化 primitive
+- [ ] 插件动态详情请求（当前使用静态结构化预览；动态详情继续由宿主 DetailProvider 处理）
 
 ## 下一步建议
 
@@ -77,7 +79,7 @@
 
 - [x] 内嵌 Lua query / execute 最小闭环测试
 - [x] 增加真实 `plugins/wowie-devtools/manifest.json + main.lua` 示例插件
-- [ ] 增加图标、详情、i18n、Action 的端到端测试
+- [x] 增加图标、详情、i18n、Action 的端到端测试
 - [ ] 增加 API 版本和错误场景测试
 - [ ] 提供插件开发文档和模板
 
