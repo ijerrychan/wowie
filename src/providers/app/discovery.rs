@@ -186,6 +186,7 @@ pub(super) fn collect_store_apps(output: &mut Vec<SearchResult>) {
             package_metadata: app.package_metadata,
             icon: None,
             ranking_bias: 0,
+            visibility: crate::result::ResultVisibility::Always,
         });
     }
 }
@@ -285,6 +286,7 @@ pub(super) fn collect_tree(
                 package_metadata: None,
                 icon: None,
                 ranking_bias: 0,
+                visibility: crate::result::ResultVisibility::Always,
             });
             continue;
         }
@@ -336,6 +338,7 @@ pub(super) fn collect_tree(
                 package_metadata: None,
                 icon: Some(IconSpec::DefaultOpen(PathBuf::from(&url))),
                 ranking_bias: 0,
+                visibility: crate::result::ResultVisibility::Always,
             });
             continue;
         }
@@ -409,6 +412,7 @@ pub(super) fn collect_tree(
                     })
                 }),
             ranking_bias: 0,
+            visibility: crate::result::ResultVisibility::Always,
         });
     }
 }
@@ -444,6 +448,7 @@ pub(super) fn generic_file_result(path: &Path, title: &str, source: &str) -> Sea
         package_metadata: None,
         icon: Some(IconSpec::DefaultOpen(path.to_owned())),
         ranking_bias: 0,
+        visibility: crate::result::ResultVisibility::Always,
     }
 }
 

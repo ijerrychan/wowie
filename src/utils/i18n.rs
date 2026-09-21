@@ -26,6 +26,7 @@ pub fn tr_in_context(
 }
 
 /// Returns a translated list. Values use `|` as the separator in the `.po` file.
+#[allow(dead_code)]
 pub fn tr_list(
     language: &str,
     context: &'static str,
@@ -39,6 +40,7 @@ pub fn tr_list(
 }
 
 /// Returns localized values followed by English fallback values, without duplicates.
+#[allow(dead_code)]
 pub fn tr_aliases(
     language: &str,
     context: &'static str,

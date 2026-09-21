@@ -15,10 +15,8 @@ use crate::{
     config::ShortcutConfig,
     page::{SearchEngineMode, SearchEngineSession},
     platform::SourceId,
-    provider::{ProviderRegistry, SearchEngineProvider},
-    result::{
-        Action, IconSpec, LaunchEntry, ResultCategory, SearchResult,
-    },
+    provider::{ProviderRegistry, SearchEngineProvider, DEFAULT_SEARCH_DEBOUNCE},
+    result::{Action, IconSpec, LaunchEntry, ResultCategory, SearchResult},
 };
 use std::path::PathBuf;
 
@@ -36,7 +34,7 @@ pub(super) struct ShortcutQuery<'a> {
 impl<'a> ShortcutQuery<'a> {
     fn new(raw: &'a str, language: &'a str) -> Option<Self> {
         let text = raw.trim();
-        (!text.is_empty()).then_some(Self {
+        Some(Self {
             raw,
             text,
             language,
@@ -85,7 +83,8 @@ pub(super) fn build_result(query: ShortcutQuery<'_>, spec: ShortcutSpec) -> Sear
     let icon = spec
         .icon
         .or_else(|| Some(IconSpec::System(spec.target.clone())));
-    let title = if spec.preview {
+    let preview = spec.preview || query.text.is_empty();
+    let title = if preview {
         spec.name.clone()
     } else {
         format!("{} \"{}\"", spec.name, spec.display_argument)
@@ -100,7 +99,14 @@ pub(super) fn build_result(query: ShortcutQuery<'_>, spec: ShortcutSpec) -> Sear
         aliases.push(query.text.to_owned());
     }
 
-    let actions = if spec.preview {
+    let actions = if query.text.is_empty() {
+        // Empty-query rows are engine entry points, not executable previews.
+        // This keeps command, URL, and configured shortcuts consistent with
+        // other root-search engines such as Everything.
+        vec![Action::EnterSearchEngine {
+            prefix: spec.prefix.clone(),
+        }]
+    } else if preview {
         Vec::new()
     } else {
         vec![Action::Launch(LaunchEntry {
@@ -138,6 +144,11 @@ pub(super) fn build_result(query: ShortcutQuery<'_>, spec: ShortcutSpec) -> Sear
         // A result reached through its shortcut is an explicit request. The
         // same custom result remains visible from default search as a fallback.
         ranking_bias: if spec.include_query_alias { 0 } else { -1000 },
+        visibility: if query.text.is_empty() {
+            crate::result::ResultVisibility::EmptyQueryOnly
+        } else {
+            crate::result::ResultVisibility::Always
+        },
     }
 }
 
@@ -145,8 +156,8 @@ pub(super) fn result_id(_index: usize, prefix: &str) -> String {
     // A binding survives configuration reordering. Prefix conflicts are
     // rejected during config normalization, so the normalized prefix is a
     // stable identity for a shortcut-owned custom result.
-    let encoded = url::form_urlencoded::byte_serialize(prefix.trim_end().as_bytes())
-        .collect::<String>();
+    let encoded =
+        url::form_urlencoded::byte_serialize(prefix.trim_end().as_bytes()).collect::<String>();
     format!("shortcut:{encoded}")
 }
 
@@ -155,6 +166,14 @@ pub(super) fn effective_type(shortcut: &ShortcutConfig) -> &str {
         prefix if prefix == COMMAND_PREFIX.trim_end() => "command",
         prefix if prefix == WEB_PREFIX.trim_end() => "url",
         _ => shortcut.shortcut_type.as_str(),
+    }
+}
+
+pub(super) fn configured_description(query: ShortcutQuery<'_>, shortcut: &ShortcutConfig) -> String {
+    if shortcut.description.is_empty() {
+        crate::utils::i18n::tr(query.language, "Custom shortcut").into()
+    } else {
+        expand_raw_template(&shortcut.description, query.resolve_argument(&shortcut.prefix).value)
     }
 }
 
@@ -215,6 +234,7 @@ pub fn session(
             prefix: COMMAND_PREFIX.into(),
             argument: argument.into(),
             mode: SearchEngineMode::Execute,
+            state: Default::default(),
         });
     }
     if raw.starts_with(WEB_PREFIX) {
@@ -228,6 +248,7 @@ pub fn session(
                 .trim_start()
                 .into(),
             mode: SearchEngineMode::Execute,
+            state: Default::default(),
         });
     }
 
@@ -239,6 +260,7 @@ pub fn session(
             prefix: shortcut.prefix.clone(),
             argument: argument.trim_start().into(),
             mode: SearchEngineMode::from_config(&shortcut.mode),
+            state: Default::default(),
         })
     })
 }
@@ -283,16 +305,32 @@ impl ShortcutProvider {
         if item_id == result_id(1, WEB_PREFIX) {
             return Some(WEB_PREFIX.into());
         }
-        self.configured.iter().enumerate().find_map(|(index, shortcut)| {
-            (item_id == result_id(index + 2, &shortcut.prefix))
-                .then(|| shortcut.prefix.clone())
-        })
+        self.configured
+            .iter()
+            .enumerate()
+            .find_map(|(index, shortcut)| {
+                (item_id == result_id(index + 2, &shortcut.prefix)).then(|| shortcut.prefix.clone())
+            })
+    }
+
+    fn search_engine_result(&self, session: &SearchEngineSession) -> Option<SearchResult> {
+        self.results(&session.prefix)
+            .into_iter()
+            .find(|result| result.id == session.id)
     }
 }
 
 impl SearchEngineProvider for ShortcutProvider {
-    fn query(&self, query: &str) -> Vec<SearchResult> {
+    fn query_root(&self, query: &str) -> Vec<SearchResult> {
         self.results(query)
+    }
+
+    fn search_debounce(&self, session: &SearchEngineSession) -> std::time::Duration {
+        if session.mode == SearchEngineMode::Execute {
+            std::time::Duration::ZERO
+        } else {
+            DEFAULT_SEARCH_DEBOUNCE
+        }
     }
 
     fn search_engine(&self, query: &str) -> Option<SearchEngineSession> {
@@ -300,7 +338,13 @@ impl SearchEngineProvider for ShortcutProvider {
     }
 
     fn query_active(&self, session: &SearchEngineSession, query: &str) -> Vec<SearchResult> {
-        self.results(query)
+        // Reconstruct the explicit prefix so an empty session renders its
+        // non-executable preview rather than the root entry-point action.
+        let explicit_query = query
+            .starts_with(session.prefix.as_str())
+            .then(|| query.to_owned())
+            .unwrap_or_else(|| format!("{}{}", session.prefix, query));
+        self.results(&explicit_query)
             .into_iter()
             .filter(|result| result.id == session.id)
             .collect()
@@ -312,6 +356,10 @@ impl SearchEngineProvider for ShortcutProvider {
 
     fn shortcut_hint(&self, item_id: &str) -> Option<String> {
         self.shortcut_hint(item_id)
+    }
+
+    fn search_engine_result(&self, session: &SearchEngineSession) -> Option<SearchResult> {
+        self.search_engine_result(session)
     }
 
     fn replace_config(&mut self, shortcuts: Vec<ShortcutConfig>) {
@@ -360,6 +408,7 @@ mod tests {
             template: "https://example.com/?q={query}".into(),
             target: String::new(),
             arguments: String::new(),
+            description: String::new(),
         }];
 
         let command = session("> cargo test", &configured, "en").expect("command session");
@@ -384,6 +433,7 @@ mod tests {
             template: "https://example.com/?q={query}".into(),
             target: String::new(),
             arguments: String::new(),
+            description: String::new(),
         }];
 
         let panel = session("p ", &configured, "en").expect("panel session");
@@ -401,6 +451,7 @@ mod tests {
             template: "https://example.com/?q={query}".into(),
             target: String::new(),
             arguments: String::new(),
+            description: String::new(),
         }];
         let provider = ShortcutProvider::new(configured);
         let session = provider.search_engine("d rust").expect("search engine");
@@ -409,5 +460,32 @@ mod tests {
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, session.id);
         assert!(active[0].title.starts_with("Search docs"));
+    }
+
+    #[test]
+    fn empty_root_shortcuts_enter_a_session() {
+        let configured = vec![ShortcutConfig {
+            name: "Open notes".into(),
+            prefix: "notes ".into(),
+            shortcut_type: "application".into(),
+            mode: "execute".into(),
+            template: String::new(),
+            target: "notepad.exe".into(),
+            arguments: "{query}".into(),
+            description: String::new(),
+        }];
+        let provider = ShortcutProvider::new(configured);
+
+        for result in provider.results("") {
+            assert!(matches!(
+                result.actions.first(),
+                Some(Action::EnterSearchEngine { .. })
+            ));
+        }
+
+        let session = session("notes ", &provider.configured, "en").expect("notes session");
+        let active = provider.query_active(&session, "");
+        assert_eq!(active.len(), 1);
+        assert!(active[0].actions.is_empty());
     }
 }

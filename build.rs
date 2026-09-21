@@ -52,10 +52,16 @@ fn main() {
     generate_provider_catalog();
 
     #[cfg(windows)]
-    winresource::WindowsResource::new()
-        .set_icon("wowie.ico")
-        .compile()
-        .expect("failed to compile Windows application icon");
+    if std::path::Path::new("wowie.ico").is_file() {
+        winresource::WindowsResource::new()
+            .set_icon("wowie.ico")
+            .compile()
+            .expect("failed to compile Windows application icon");
+    } else {
+        println!(
+            "cargo:warning=wowie.ico is missing; building without an embedded application icon"
+        );
+    }
 
     let config = slint_build::CompilerConfiguration::new().with_bundled_translations("lang");
     slint_build::compile_with_config("ui/launcher.slint", config)
@@ -101,11 +107,14 @@ fn generate_provider_catalog() {
                 .map(|name| format!("#[path = \"{}/{}.rs\"] pub mod {};", detail_dir, name, name))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            details
-                .iter()
-                .map(|name| format!("    {}::register(registry);", name))
-                .collect::<Vec<_>>()
-                .join("\n")
+            format!(
+                "    let _ = registry;\n{}",
+                details
+                    .iter()
+                    .map(|name| format!("    {}::register(registry);", name))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
         ),
     )
     .expect("failed to write detail provider catalog");

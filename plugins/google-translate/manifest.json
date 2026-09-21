@@ -1,0 +1,21 @@
+{
+  "id": "google-translate",
+  "name": "Google Translate",
+  "version": "0.1.0",
+  "api_version": 1,
+  "entry_point": "main.lua",
+  "permissions": ["network"],
+  "engine": {
+    "participates_in_root": true,
+    "respect_global_fuzzy_search": true,
+    "ranking_bias": 0
+  },
+  "commands": [{
+    "id": "translate",
+    "title": "用谷歌翻译搜索",
+    "action_words": ["t"],
+    "mode": "search",
+    "require_separator": true,
+    "icon": {"type": "remote", "url": "https://cdn.simpleicons.org/googletranslate/4285F4"}
+  }]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "steam-games",
+  "name": "Steam Games",
+  "version": "0.1.0",
+  "api_version": 1,
+  "entry_point": "main.lua",
+  "permissions": ["filesystem"],
+  "engine": {
+    "participates_in_root": true,
+    "respect_global_fuzzy_search": true,
+    "ranking_bias": 0
+  }
+}

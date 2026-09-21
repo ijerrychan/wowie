@@ -10,6 +10,57 @@ pub enum Action {
         action_id: String,
         icon: Option<IconSpec>,
     },
+    /// Open the result's detail panel without launching its target.
+    OpenDetail,
+    /// Declaratively update state owned by the active search-engine session.
+    UpdateSession {
+        updates: std::collections::BTreeMap<String, String>,
+    },
+}
+
+/// Broad owner of a result action. System actions are delegated to the
+/// platform, host actions change Wowie's own UI/session state, and plugin
+/// actions are dispatched through the plugin protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionDomain {
+    System,
+    Host,
+    Plugin,
+}
+
+impl Action {
+    pub const fn open_detail() -> Self {
+        Self::OpenDetail
+    }
+
+    pub const fn domain(&self) -> ActionDomain {
+        match self {
+            Self::Launch(_) => ActionDomain::System,
+            Self::Plugin { .. } => ActionDomain::Plugin,
+            Self::EnterSearchEngine { .. } | Self::OpenDetail | Self::UpdateSession { .. } => {
+                ActionDomain::Host
+            }
+        }
+    }
+
+    pub const fn is_open_detail(&self) -> bool {
+        matches!(self, Self::OpenDetail)
+    }
+
+    pub const fn is_plugin(&self) -> bool {
+        matches!(self, Self::Plugin { .. })
+    }
+
+    pub fn plugin_parts(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Plugin {
+                plugin_id,
+                action_id,
+                ..
+            } => Some((plugin_id.as_str(), action_id.as_str())),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +88,25 @@ pub enum ResultPresentation {
     Compact,
     Preview,
     Grid,
+}
+
+/// Controls whether a custom result is eligible for the current query before
+/// matching and ranking. It is useful for session introductions and menus
+/// that should disappear as soon as the user starts typing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ResultVisibility {
+    #[default]
+    Always,
+    EmptyQueryOnly,
+}
+
+impl ResultVisibility {
+    pub const fn allows(self, query: &str) -> bool {
+        match self {
+            Self::Always => true,
+            Self::EmptyQueryOnly => query.is_empty(),
+        }
+    }
 }
 
 impl ResultPresentation {
@@ -96,6 +166,8 @@ pub struct SearchResult {
     pub icon: Option<IconSpec>,
     /// Provider-supplied ranking adjustment consumed generically by SearchCore.
     pub ranking_bias: i32,
+    /// Eligibility independent of text matching and ranking.
+    pub visibility: ResultVisibility,
 }
 
 impl SearchResult {
@@ -115,6 +187,9 @@ pub struct DetailView {
     pub source: String,
     pub preferred_width: Option<i32>,
     pub scrollable: bool,
+    /// Render this detail as the focused full-surface panel even from list
+    /// view. Intended for guides, forms, and other primary content.
+    pub fullscreen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +204,7 @@ pub enum DetailBlock {
     Text {
         text: String,
         color: String,
+        copyable: bool,
     },
     Metric {
         label: String,
@@ -146,6 +222,7 @@ pub enum DetailBlock {
     Markdown {
         markdown: String,
         color: String,
+        copyable: bool,
     },
     Image {
         source: String,
@@ -175,8 +252,6 @@ pub enum DetailBlock {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IconSpec {
-    /// A built-in colored weather glyph used by the weather shortcut.
-    Weather,
     /// A built-in calculator glyph.
     Calculator,
     /// A plugin-owned PNG/ICO resource resolved to an absolute path.
@@ -202,10 +277,24 @@ pub enum IconSpec {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IconRef {
-    Resource { path: String },
-    System { target: String },
-    Named { id: String },
-    Remote { url: String },
+    Resource {
+        path: String,
+    },
+    /// An image file discovered outside the plugin directory. This is
+    /// intended for filesystem-backed provider plugins and requires the
+    /// plugin's `filesystem` permission.
+    File {
+        path: String,
+    },
+    System {
+        target: String,
+    },
+    Named {
+        id: String,
+    },
+    Remote {
+        url: String,
+    },
 }
 
 #[cfg(test)]

@@ -32,6 +32,8 @@ pub struct SearchEngineSession {
     pub prefix: String,
     pub argument: String,
     pub mode: SearchEngineMode,
+    /// Provider-defined ephemeral state for menu-like search sessions.
+    pub state: std::collections::BTreeMap<String, String>,
 }
 
 /// The complete routing decision for one search request.
@@ -66,6 +68,7 @@ mod tests {
             prefix: "t ".into(),
             argument: "query".into(),
             mode: SearchEngineMode::Search,
+            state: Default::default(),
         });
         assert_eq!(
             context.session().map(|session| session.id.as_str()),

@@ -160,7 +160,7 @@ impl SourceLookup {
     }
 }
 
-const PROVIDER_DEFINITIONS: [ProviderDefinition; 6] = [
+const PROVIDER_DEFINITIONS: [ProviderDefinition; 5] = [
     ProviderDefinition {
         source: crate::platform::AppProviderSource::StoreApps,
         enabled: |config| config.store_apps,
@@ -180,11 +180,6 @@ const PROVIDER_DEFINITIONS: [ProviderDefinition; 6] = [
         source: crate::platform::AppProviderSource::ControlPanel,
         enabled: |config| config.control_panel,
         discover: crate::providers::control_panel::discover,
-    },
-    ProviderDefinition {
-        source: crate::platform::AppProviderSource::Steam,
-        enabled: |config| config.steam,
-        discover: crate::providers::steam::discover_with_config,
     },
     ProviderDefinition {
         source: crate::platform::AppProviderSource::CustomDirectories,
@@ -554,6 +549,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: crate::result::ResultVisibility::Always,
         }
     }
 
@@ -1002,6 +998,7 @@ mod tests {
             source: "StartMenu".into(),
             preferred_width: None,
             scrollable: false,
+            fullscreen: false,
         });
         start_menu.description = Some("Start Menu description".into());
         start_menu.ranking_bias = 7;
@@ -1023,6 +1020,7 @@ mod tests {
             source: "AppsFolder".into(),
             preferred_width: None,
             scrollable: false,
+            fullscreen: false,
         });
         apps_folder.description = None;
 

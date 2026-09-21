@@ -41,12 +41,6 @@ pub(super) fn save_window_size(window: &Launcher) {
 }
 
 fn select_renderer(renderer: &str) -> Result<()> {
-    let renderer = match renderer {
-        // Keep the old config value working while selecting the explicit
-        // OpenGL Skia backend that is compiled for this platform.
-        "skia" => "skia-opengl",
-        other => other,
-    };
     slint::BackendSelector::new()
         .with_winit_window_attributes_hook(|attributes| {
             attributes

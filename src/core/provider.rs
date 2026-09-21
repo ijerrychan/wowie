@@ -1,9 +1,9 @@
 //! Runtime provider registry.
 //!
 //! SearchCore owns the search algorithm, while this module owns the list of
-//! dynamic result providers and explicitly entered search engines. Adding a
-//! result provider requires `DynamicProvider`; adding a shortcut-owned engine
-//! requires `SearchEngineProvider`.
+//! search engines. The default (root) search is an aggregator over engines;
+//! entering a session is optional and is never what makes a provider an
+//! engine.
 
 use crate::{
     config::{PluginConfig, ShortcutConfig},
@@ -12,43 +12,83 @@ use crate::{
     result::SearchResult,
 };
 use anyhow::{Context, Result};
-use std::sync::Mutex;
+use serde::Deserialize;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-pub trait DynamicProvider: Send + Sync {
-    fn query(&self, query: &str) -> Vec<SearchResult>;
+/// Default delay for engines that do not opt into an immediate search.
+pub const DEFAULT_SEARCH_DEBOUNCE: Duration = Duration::from_millis(30);
 
-    /// Whether this provider exposes candidates that SearchCore may match
-    /// fuzzily. The matching algorithm and the user setting remain central.
-    fn supports_fuzzy_search(&self) -> bool {
-        false
-    }
-
-    /// Results used only as candidates for fuzzy matching. Providers should
-    /// keep query-specific generation in `query` and return stable searchable
-    /// entries here.
-    fn fuzzy_candidates(&self) -> Vec<SearchResult> {
-        Vec::new()
-    }
-
-    fn replace_config(&mut self, _shortcuts: Vec<ShortcutConfig>) {}
-
-    fn set_language(&mut self, _language: String) {}
+/// Behaviour shared by every search engine, including plugin engines.
+///
+/// `participates_in_root` controls discovery from the root search. It does
+/// not affect whether an engine can be entered through a result action or
+/// another explicit session entry. `respect_global_fuzzy_search` lets an
+/// engine opt out of fuzzy matching while retaining the single matcher and
+/// user preference for engines that opt in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct SearchEngineSettings {
+    pub participates_in_root: bool,
+    pub respect_global_fuzzy_search: bool,
+    /// A bounded, engine-wide tie breaker. It is intentionally applied only
+    /// after lexical relevance, user history and category preference.
+    pub ranking_bias: i32,
 }
 
-/// A search engine owns a query only after a shortcut has selected it.
-///
-/// Keeping this distinct from `DynamicProvider` prevents a result-producing
-/// provider from accidentally becoming a routing mechanism.
+impl Default for SearchEngineSettings {
+    fn default() -> Self {
+        Self {
+            participates_in_root: true,
+            respect_global_fuzzy_search: true,
+            ranking_bias: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EngineSearchResult {
+    pub item: SearchResult,
+    pub settings: SearchEngineSettings,
+}
+
+/// A search engine may own a query after a shortcut has selected it.
 pub trait SearchEngineProvider: Send + Sync {
+    /// Stable engine-level behaviour. Engines without a session still use
+    /// these settings when the root search invokes them.
+    fn settings(&self) -> SearchEngineSettings {
+        SearchEngineSettings::default()
+    }
+
     fn search_engine(&self, query: &str) -> Option<SearchEngineSession>;
-    /// Custom results contributed to the default search engine.
-    fn query(&self, query: &str) -> Vec<SearchResult>;
+    /// Results contributed when the root search invokes this engine. These
+    /// are ordinary results; none is required to be a session entry.
+    fn query_root(&self, query: &str) -> Vec<SearchResult>;
+
+    /// Engines that host several independently configured engines (notably
+    /// the plugin host) may preserve settings per returned result.
+    fn query_root_with_settings(&self, query: &str) -> Vec<EngineSearchResult> {
+        let settings = self.settings();
+        self.query_root(query)
+            .into_iter()
+            .map(|item| EngineSearchResult { item, settings })
+            .collect()
+    }
+
+    /// Delay before dispatching a query to this engine. Providers with local,
+    /// low-latency backends may opt out; remote or expensive engines can use
+    /// a larger value without teaching the UI about provider identities.
+    fn search_debounce(&self, _session: &SearchEngineSession) -> Duration {
+        DEFAULT_SEARCH_DEBOUNCE
+    }
 
     /// Results owned after this engine has been entered. Most search engines
     /// return their normal query results; an action-style engine can narrow
     /// the surface to the result selected by its shortcut.
     fn query_active(&self, _session: &SearchEngineSession, query: &str) -> Vec<SearchResult> {
-        self.query(query)
+        self.query_root(query)
     }
 
     /// Load a subsequent page for an entered engine. `offset` is the number
@@ -74,6 +114,16 @@ pub trait SearchEngineProvider: Send + Sync {
         None
     }
 
+    /// Return the default-engine result that entered this session. The UI
+    /// uses this result's icon for the search field while the session owns it.
+    fn search_engine_result(&self, _session: &SearchEngineSession) -> Option<SearchResult> {
+        None
+    }
+
+    fn preferred_view_mode(&self, _session: &SearchEngineSession) -> &'static str {
+        "list"
+    }
+
     fn replace_config(&mut self, _shortcuts: Vec<ShortcutConfig>) {}
 
     fn set_language(&mut self, _language: String) {}
@@ -83,13 +133,13 @@ pub(crate) fn find_plugin_action<'a>(
     item: &'a SearchResult,
     requested_action_id: &str,
 ) -> Result<(&'a str, &'a str)> {
-    if let Some(action) = item.actions.iter().find_map(|action| match action {
-        crate::result::Action::Plugin {
-            plugin_id,
-            action_id,
-            ..
-        } if action_id == requested_action_id => Some((plugin_id.as_str(), action_id.as_str())),
-        _ => None,
+    if let Some(action) = item.actions.iter().find_map(|action| {
+        if action.domain() != crate::result::ActionDomain::Plugin {
+            return None;
+        }
+        action
+            .plugin_parts()
+            .filter(|(_, action_id)| *action_id == requested_action_id)
     }) {
         return Ok(action);
     }
@@ -113,35 +163,34 @@ pub(crate) fn find_plugin_action<'a>(
 
 pub struct ProviderRegistry {
     plugins: PluginManager,
-    dynamic: Vec<Mutex<Box<dyn DynamicProvider>>>,
     engines: Vec<Mutex<Box<dyn SearchEngineProvider>>>,
+    indexed: Arc<Mutex<Arc<Vec<SearchResult>>>>,
 }
 
 impl ProviderRegistry {
     #[cfg(test)]
     pub fn without_dynamic(plugins: PluginManager) -> Self {
-        Self {
-            plugins,
-            dynamic: Vec::new(),
-            engines: Vec::new(),
-        }
-    }
-
-    pub fn default_providers(plugins: PluginManager, shortcuts: Vec<ShortcutConfig>) -> Self {
+        let indexed = Arc::new(Mutex::new(Arc::new(Vec::new())));
         let mut registry = Self {
             plugins,
-            dynamic: Vec::new(),
             engines: Vec::new(),
+            indexed,
         };
-        crate::providers::dynamic::register_all(&mut registry, shortcuts);
+        registry.register_indexed_engines();
         registry
     }
 
-    pub fn register<P>(&mut self, provider: P)
-    where
-        P: DynamicProvider + 'static,
-    {
-        self.dynamic.push(Mutex::new(Box::new(provider)));
+    pub fn default_providers(plugins: PluginManager, shortcuts: Vec<ShortcutConfig>) -> Self {
+        let plugin_engine = plugins.clone();
+        let mut registry = Self {
+            plugins,
+            engines: Vec::new(),
+            indexed: Arc::new(Mutex::new(Arc::new(Vec::new()))),
+        };
+        registry.register_indexed_engines();
+        registry.register_search_engine(plugin_engine);
+        crate::providers::dynamic::register_all(&mut registry, shortcuts);
+        registry
     }
 
     pub fn register_search_engine<P>(&mut self, engine: P)
@@ -151,43 +200,63 @@ impl ProviderRegistry {
         self.engines.push(Mutex::new(Box::new(engine)));
     }
 
-    pub fn query(
-        &self,
-        context: &SearchContext,
-        query: &str,
-        fuzzy_search: bool,
-    ) -> Vec<SearchResult> {
+    fn register_indexed_engines(&mut self) {
+        // These engines own independent search domains but share the app
+        // index's immutable snapshot. Their lack of a session entry is
+        // intentional: an engine need not manufacture a custom result merely
+        // to exist.
+        self.register_search_engine(IndexedSearchEngine::apps(Arc::clone(&self.indexed)));
+        self.register_search_engine(IndexedSearchEngine::control_panel(Arc::clone(
+            &self.indexed,
+        )));
+    }
+
+    pub fn replace_indexed_results(&self, results: Arc<Vec<SearchResult>>) {
+        if let Ok(mut indexed) = self.indexed.lock() {
+            *indexed = results;
+        }
+    }
+
+    pub fn indexed_len(&self) -> usize {
+        self.indexed.lock().map(|items| items.len()).unwrap_or(0)
+    }
+
+    pub fn indexed_by_id(&self, id: &str) -> Option<SearchResult> {
+        self.indexed
+            .lock()
+            .ok()?
+            .iter()
+            .find(|item| item.id == id)
+            .cloned()
+    }
+
+    pub fn query(&self, context: &SearchContext, query: &str) -> Vec<EngineSearchResult> {
         if let SearchContext::Engine(session) = context {
-            if self.plugins.owns_search_engine_session(session) {
-                return self.plugins.query_active_search_engine(session, query);
-            }
             for engine in &self.engines {
                 if let Ok(engine) = engine.lock() {
                     if engine.owns_session(session) {
-                        return engine.query_active(session, query);
+                        return engine
+                            .query_active(session, query)
+                            .into_iter()
+                            .map(|item| EngineSearchResult {
+                                item,
+                                settings: engine.settings(),
+                            })
+                            .collect();
                     }
                 }
             }
             return Vec::new();
         }
 
-        let mut results = self.plugins.query(query);
-        // Engine-owned custom results remain discoverable from the default
-        // engine. A matching shortcut merely changes the query's owner.
+        let mut results = Vec::new();
+        // Root search merely aggregates opted-in engines. A result that
+        // enters a session is therefore optional, not a special result type.
         for engine in &self.engines {
             if let Ok(engine) = engine.lock() {
-                results.extend(engine.query(query));
-            }
-        }
-        for provider in &self.dynamic {
-            if let Ok(provider) = provider.lock() {
-                results.extend(provider.query(query));
-                if fuzzy_search && !query.trim().is_empty() && provider.supports_fuzzy_search() {
-                    for candidate in provider.fuzzy_candidates() {
-                        if !results.iter().any(|result| result.id == candidate.id) {
-                            results.push(candidate);
-                        }
-                    }
+                let settings = engine.settings();
+                if settings.participates_in_root {
+                    results.extend(engine.query_root_with_settings(query));
                 }
             }
         }
@@ -215,17 +284,39 @@ impl ProviderRegistry {
         Vec::new()
     }
 
+    pub fn search_debounce(&self, context: &SearchContext) -> Duration {
+        let Some(session) = context.session() else {
+            return DEFAULT_SEARCH_DEBOUNCE;
+        };
+        for engine in &self.engines {
+            if let Ok(engine) = engine.lock() {
+                if engine.owns_session(session) {
+                    return engine.search_debounce(session);
+                }
+            }
+        }
+        DEFAULT_SEARCH_DEBOUNCE
+    }
+
     pub fn preferred_view_mode(&self, context: &SearchContext) -> &'static str {
         context
             .session()
-            .map(|session| self.plugins.preferred_view_mode_for_session(session))
+            .map(|session| {
+                self.engines
+                    .iter()
+                    .find_map(|engine| {
+                        engine.lock().ok().and_then(|engine| {
+                            engine
+                                .owns_session(session)
+                                .then(|| engine.preferred_view_mode(session))
+                        })
+                    })
+                    .unwrap_or("list")
+            })
             .unwrap_or("list")
     }
 
     pub fn search_context(&self, query: &str) -> SearchContext {
-        if let Some(session) = self.plugins.search_engine(query) {
-            return SearchContext::Engine(session);
-        }
         self.engines
             .iter()
             .find_map(|engine| {
@@ -247,16 +338,25 @@ impl ProviderRegistry {
         })
     }
 
+    pub fn search_engine_result(&self, session: &SearchEngineSession) -> Option<SearchResult> {
+        self.engines.iter().find_map(|engine| {
+            engine.lock().ok().and_then(|engine| {
+                engine
+                    .owns_session(session)
+                    .then(|| engine.search_engine_result(session))
+                    .flatten()
+            })
+        })
+    }
+
     pub fn is_fallback_result(&self, item: &SearchResult) -> bool {
-        item.ranking_bias < 0 && self.shortcut_hint(&item.id).is_some()
+        if item.ranking_bias >= 0 {
+            return false;
+        }
+        self.shortcut_hint(&item.id).is_some()
     }
 
     pub fn replace_shortcuts(&self, shortcuts: Vec<ShortcutConfig>) {
-        for provider in &self.dynamic {
-            if let Ok(mut provider) = provider.lock() {
-                provider.replace_config(shortcuts.clone());
-            }
-        }
         for engine in &self.engines {
             if let Ok(mut engine) = engine.lock() {
                 engine.replace_config(shortcuts.clone());
@@ -266,11 +366,6 @@ impl ProviderRegistry {
 
     pub fn set_language(&self, language: String) {
         self.plugins.set_locale(language.clone());
-        for provider in &self.dynamic {
-            if let Ok(mut provider) = provider.lock() {
-                provider.set_language(language.clone());
-            }
-        }
         for engine in &self.engines {
             if let Ok(mut engine) = engine.lock() {
                 engine.set_language(language.clone());
@@ -297,5 +392,57 @@ impl ProviderRegistry {
             .unwrap_or_else(|| item.id.rsplit(':').next().unwrap_or_default());
         let output = self.plugins.execute(plugin_id, item_id, action_id)?;
         serde_json::from_str(&output).context("decode plugin execute response")
+    }
+}
+
+struct IndexedSearchEngine {
+    indexed: Arc<Mutex<Arc<Vec<SearchResult>>>>,
+    control_panel: bool,
+}
+
+impl IndexedSearchEngine {
+    fn apps(indexed: Arc<Mutex<Arc<Vec<SearchResult>>>>) -> Self {
+        Self {
+            indexed,
+            control_panel: false,
+        }
+    }
+
+    fn control_panel(indexed: Arc<Mutex<Arc<Vec<SearchResult>>>>) -> Self {
+        Self {
+            indexed,
+            control_panel: true,
+        }
+    }
+}
+
+impl SearchEngineProvider for IndexedSearchEngine {
+    fn settings(&self) -> SearchEngineSettings {
+        SearchEngineSettings {
+            // In a launcher, an installed application or a system setting is
+            // usually a more useful tie-break than a filesystem document.
+            ranking_bias: if self.control_panel { 15 } else { 25 },
+            ..SearchEngineSettings::default()
+        }
+    }
+
+    fn search_engine(&self, _query: &str) -> Option<SearchEngineSession> {
+        None
+    }
+
+    fn query_root(&self, _query: &str) -> Vec<SearchResult> {
+        self.indexed
+            .lock()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| {
+                        matches!(item.category, crate::result::ResultCategory::ControlPanel)
+                            == self.control_panel
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }

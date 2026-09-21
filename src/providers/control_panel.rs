@@ -39,6 +39,7 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
                 package_metadata: None,
                 icon: Some(IconSpec::System(target)),
                 ranking_bias: 0,
+                visibility: crate::result::ResultVisibility::Always,
             }
         })
         .collect()

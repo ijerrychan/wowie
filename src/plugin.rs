@@ -7,10 +7,12 @@
 use crate::{
     config::PluginConfig,
     page::{SearchEngineMode, SearchEngineSession},
+    provider::{EngineSearchResult, SearchEngineSettings},
     result::{Action, IconRef, IconSpec, LaunchEntry, ResultCategory, SearchResult},
 };
 use anyhow::{Context, Result};
 use mlua::{Function, Lua, LuaSerdeExt, Value};
+use nucleo_matcher::{Config as MatcherConfig, Matcher, Utf32Str};
 use serde::{de, Deserialize, Deserializer};
 use std::{
     collections::BTreeMap,
@@ -41,6 +43,10 @@ pub struct PluginManifest {
     pub keywords: Vec<String>,
     #[serde(default)]
     pub commands: Vec<PluginCommand>,
+    /// Standard engine behaviour. Plugins may contribute to root search
+    /// without declaring a command/session entry.
+    #[serde(default)]
+    pub engine: SearchEngineSettings,
     #[serde(default)]
     #[allow(dead_code)]
     pub permissions: Vec<String>,
@@ -219,6 +225,37 @@ impl EmbeddedPlugin {
                 crate::utils::http::get_text(&url, 2 * 1024 * 1024).map_err(mlua::Error::external)
             })?,
         )?;
+        let network_allowed = has_plugin_permission(permissions, "network");
+        wowie.set(
+            "http_post_form_json",
+            lua.create_function(move |lua, (url, form): (String, mlua::Table)| {
+                require_plugin_permission(network_allowed, "network")?;
+                validate_plugin_http_url(&url).map_err(mlua::Error::external)?;
+                let form: BTreeMap<String, String> = lua.from_value(Value::Table(form))?;
+                let value: serde_json::Value = crate::utils::http::post_form_json(&url, &form)
+                    .map_err(mlua::Error::external)?;
+                lua.to_value(&value)
+            })?,
+        )?;
+        let network_allowed = has_plugin_permission(permissions, "network");
+        wowie.set(
+            "http_post_json",
+            lua.create_function(
+                move |lua, (url, body, headers): (String, mlua::Table, Option<mlua::Table>)| {
+                    require_plugin_permission(network_allowed, "network")?;
+                    validate_plugin_http_url(&url).map_err(mlua::Error::external)?;
+                    let body: serde_json::Value = lua.from_value(Value::Table(body))?;
+                    let headers: BTreeMap<String, String> = headers
+                        .map(|headers| lua.from_value(Value::Table(headers)))
+                        .transpose()?
+                        .unwrap_or_default();
+                    let value: serde_json::Value =
+                        crate::utils::http::post_json_with_headers(&url, &body, &headers)
+                            .map_err(mlua::Error::external)?;
+                    lua.to_value(&value)
+                },
+            )?,
+        )?;
         wowie.set(
             "url_encode",
             lua.create_function(|_, value: String| {
@@ -228,6 +265,82 @@ impl EmbeddedPlugin {
         wowie.set(
             "url_encode_path",
             lua.create_function(|_, value: String| Ok(encode_url_path_segment(&value)))?,
+        )?;
+        wowie.set(
+            "fuzzy_match",
+            lua.create_function(|_, (text, query): (String, String)| {
+                if query.trim().is_empty() {
+                    return Ok(true);
+                }
+                let mut matcher = Matcher::new(MatcherConfig::DEFAULT);
+                let mut text_buffer = Vec::new();
+                let mut query_buffer = Vec::new();
+                Ok(matcher
+                    .fuzzy_match(
+                        Utf32Str::new(&text, &mut text_buffer),
+                        Utf32Str::new(&query, &mut query_buffer),
+                    )
+                    .is_some())
+            })?,
+        )?;
+        // File-system access is deliberately generic: plugins can implement
+        // their own local indexes without introducing host-side provider
+        // special cases.  The manifest must opt in with the `filesystem`
+        // permission.
+        let filesystem_allowed = has_plugin_permission(permissions, "filesystem");
+        wowie.set(
+            "env",
+            lua.create_function(move |_, name: String| {
+                require_plugin_permission(filesystem_allowed, "filesystem")?;
+                Ok(std::env::var(name).ok())
+            })?,
+        )?;
+        let filesystem_allowed = has_plugin_permission(permissions, "filesystem");
+        wowie.set(
+            "fs_read_text",
+            lua.create_function(move |_, path: String| {
+                require_plugin_permission(filesystem_allowed, "filesystem")?;
+                let path = PathBuf::from(path);
+                let metadata = match fs::metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(error) => return Err(mlua::Error::external(error)),
+                };
+                if !metadata.is_file() || metadata.len() > 4 * 1024 * 1024 {
+                    return Err(mlua::Error::runtime(
+                        "plugin file is too large or not a file",
+                    ));
+                }
+                Ok(Some(
+                    fs::read_to_string(path).map_err(mlua::Error::external)?,
+                ))
+            })?,
+        )?;
+        let filesystem_allowed = has_plugin_permission(permissions, "filesystem");
+        wowie.set(
+            "fs_list",
+            lua.create_function(move |lua, path: String| {
+                require_plugin_permission(filesystem_allowed, "filesystem")?;
+                let result = lua.create_table()?;
+                let entries = match fs::read_dir(PathBuf::from(path)) {
+                    Ok(entries) => entries,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(result)
+                    }
+                    Err(error) => return Err(mlua::Error::external(error)),
+                };
+                for (index, entry) in entries.take(4096).enumerate() {
+                    let entry = entry.map_err(mlua::Error::external)?;
+                    let metadata = entry.metadata().map_err(mlua::Error::external)?;
+                    let item = lua.create_table()?;
+                    item.set("name", entry.file_name().to_string_lossy().to_string())?;
+                    item.set("path", entry.path().to_string_lossy().to_string())?;
+                    item.set("is_dir", metadata.is_dir())?;
+                    item.set("size", metadata.len())?;
+                    result.set(index + 1, item)?;
+                }
+                Ok(result)
+            })?,
         )?;
         let clipboard_allowed = has_plugin_permission(permissions, "clipboard");
         wowie.set(
@@ -294,6 +407,9 @@ impl EmbeddedPlugin {
             (Some(item_id), Some(action_id)) => {
                 callback.call::<Value>((item_id, action_id, context))?
             }
+            (Some(item_id), None) if method == "detail" => {
+                callback.call::<Value>((item_id, context))?
+            }
             _ if method == "query" => callback.call::<Value>((
                 request
                     .get("query")
@@ -357,10 +473,7 @@ fn encode_url_path_segment(value: &str) -> String {
 }
 
 fn set_clipboard_text(text: &str) -> Result<()> {
-    let mut clipboard = arboard::Clipboard::new().context("open system clipboard")?;
-    clipboard
-        .set_text(text.to_owned())
-        .context("write system clipboard")
+    crate::utils::clipboard::set_text(text)
 }
 
 fn download_plugin_file(url: &str, filename: &str) -> Result<String> {
@@ -419,6 +532,16 @@ struct QueryResponse {
     request_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_plugin_items")]
     items: Vec<PluginItem>,
+    #[serde(default)]
+    error: Option<PluginError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DetailResponse {
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
+    detail: Option<PluginDetailView>,
     #[serde(default)]
     error: Option<PluginError>,
 }
@@ -483,6 +606,8 @@ struct PluginItem {
     id: String,
     title: String,
     #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
     subtitle: String,
     #[serde(default)]
     aliases: Vec<String>,
@@ -496,9 +621,29 @@ struct PluginItem {
     detail: Option<PluginDetailView>,
     #[serde(default)]
     command_id: Option<String>,
+    /// Enter the command's search-engine session instead of executing a
+    /// plugin callback. This lets a plugin expose a normal custom result in
+    /// the default search surface.
+    #[serde(default)]
+    session_entry: bool,
+    #[serde(default)]
+    session_updates: BTreeMap<String, String>,
+    #[serde(default)]
+    ranking_bias: i32,
+    /// Declarative visibility for session menus and introductory rows.
+    #[serde(default)]
+    visible_when: PluginItemVisibility,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum PluginItemVisibility {
+    #[default]
+    Always,
+    EmptyQuery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct PluginDetailView {
     #[serde(default)]
     title: String,
@@ -514,9 +659,11 @@ struct PluginDetailView {
     width: Option<PluginDetailWidth>,
     #[serde(default)]
     scrollable: bool,
+    #[serde(default)]
+    fullscreen: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct PluginDetailWidth {
     preferred: i32,
     #[serde(default = "default_detail_min_width")]
@@ -533,7 +680,7 @@ fn default_detail_max_width() -> i32 {
     640
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct PluginDetailAction {
     id: String,
     #[serde(default)]
@@ -542,13 +689,15 @@ struct PluginDetailAction {
     icon: Option<IconRef>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum PluginDetailBlock {
     Text {
         text: String,
         #[serde(default = "default_detail_color")]
         color: String,
+        #[serde(default)]
+        copyable: bool,
     },
     Metric {
         label: String,
@@ -570,6 +719,8 @@ enum PluginDetailBlock {
         markdown: String,
         #[serde(default = "default_detail_color")]
         color: String,
+        #[serde(default)]
+        copyable: bool,
     },
     Image {
         source: String,
@@ -774,6 +925,13 @@ impl PluginManager {
     }
 
     pub fn query(&self, query: &str) -> Vec<SearchResult> {
+        self.query_with_engine_settings(query)
+            .into_iter()
+            .map(|candidate| candidate.item)
+            .collect()
+    }
+
+    pub fn query_with_engine_settings(&self, query: &str) -> Vec<EngineSearchResult> {
         let locale = self
             .locale
             .lock()
@@ -781,13 +939,29 @@ impl PluginManager {
             .unwrap_or_else(|_| "system".into());
         self.plugins
             .iter()
-            .filter(|plugin| plugin.enabled.load(Ordering::Acquire))
+            .filter(|plugin| {
+                plugin.enabled.load(Ordering::Acquire)
+                    && plugin.manifest.engine.participates_in_root
+            })
             .flat_map(|plugin| {
                 let (plugin_query, command_id) = action_word_query(plugin, query);
-                match query_plugin(plugin, &plugin_query, &locale, command_id.as_deref(), query) {
+                match query_plugin(
+                    plugin,
+                    &plugin_query,
+                    &locale,
+                    command_id.as_deref(),
+                    query,
+                    None,
+                ) {
                     Ok(items) => {
                         mark_success(plugin, "query");
                         items
+                            .into_iter()
+                            .map(|item| EngineSearchResult {
+                                item,
+                                settings: plugin.manifest.engine,
+                            })
+                            .collect()
                     }
                     Err(error) => {
                         mark_failure(plugin, "query", &error);
@@ -801,6 +975,24 @@ impl PluginManager {
 
     pub fn owns_search_engine_session(&self, session: &SearchEngineSession) -> bool {
         self.plugin_command_for_session(session).is_some()
+    }
+
+    /// Return the command shortcut for any result owned by a plugin. This is
+    /// intentionally independent of the item id: all rows produced by a
+    /// command belong to the same shortcut and should display the same hint.
+    pub fn shortcut_hint(&self, result_id: &str) -> Option<String> {
+        let rest = result_id.strip_prefix("plugin:")?;
+        let (plugin_id, _) = rest.split_once(':')?;
+        let plugin = self.plugins.iter().find(|plugin| {
+            plugin.enabled.load(Ordering::Acquire) && plugin.manifest.id == plugin_id
+        })?;
+        plugin
+            .manifest
+            .commands
+            .iter()
+            .flat_map(|command| command.action_words.iter())
+            .next()
+            .map(|word| format!("{} ", word.trim()))
     }
 
     pub fn query_active_search_engine(
@@ -818,10 +1010,11 @@ impl PluginManager {
             .unwrap_or_else(|_| "system".into());
         match query_plugin(
             plugin,
-            &session.argument,
+            raw_query,
             &locale,
             Some(&command_id),
             raw_query,
+            Some(session),
         ) {
             Ok(items) => {
                 mark_success(plugin, "query");
@@ -851,6 +1044,54 @@ impl PluginManager {
             .unwrap_or("list")
     }
 
+    /// Materialize the command-owned result used for the active session's
+    /// search-field icon. This must be resolved through the plugin manager so
+    /// remote/resource command icons work exactly like ordinary plugin rows.
+    pub fn search_engine_result(&self, session: &SearchEngineSession) -> Option<SearchResult> {
+        let (plugin, command_id) = self.plugin_command_for_session(session)?;
+        let command = plugin
+            .manifest
+            .commands
+            .iter()
+            .find(|command| command.id == command_id)?;
+        Some(SearchResult {
+            id: session.id.clone(),
+            identity: session.id.clone(),
+            title: command.title.clone(),
+            category: ResultCategory::Other,
+            aliases: command
+                .action_words
+                .iter()
+                .map(|word| word.clone())
+                .collect(),
+            location: plugin.manifest.name.clone(),
+            launch_target: PathBuf::new(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: format!("plugin:{}", plugin.manifest.id).into(),
+            sources: vec![format!("plugin:{}", plugin.manifest.id).into()],
+            launch_entries: Vec::new(),
+            actions: vec![Action::EnterSearchEngine {
+                prefix: command
+                    .action_words
+                    .first()
+                    .map(|word| format!("{} ", word.trim()))
+                    .unwrap_or_default(),
+            }],
+            detail: None,
+            description: None,
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
+            icon: command
+                .icon
+                .clone()
+                .and_then(|icon| resolve_plugin_icon(&plugin.root, icon)),
+            ranking_bias: -1000,
+            visibility: crate::result::ResultVisibility::Always,
+        })
+    }
+
     fn plugin_command_for_session<'a>(
         &'a self,
         session: &SearchEngineSession,
@@ -870,6 +1111,14 @@ impl PluginManager {
             .then_some((plugin, command_id.to_owned()))
     }
 
+    fn plugin_for_item<'a>(&'a self, item_id: &str) -> Option<&'a InstalledPlugin> {
+        let rest = item_id.strip_prefix("plugin:")?;
+        let (plugin_id, _) = rest.split_once(':')?;
+        self.plugins.iter().find(|plugin| {
+            plugin.enabled.load(Ordering::Acquire) && plugin.manifest.id == plugin_id
+        })
+    }
+
     pub fn search_engine(&self, query: &str) -> Option<SearchEngineSession> {
         self.plugins
             .iter()
@@ -882,7 +1131,7 @@ impl PluginManager {
                     .commands
                     .iter()
                     .find(|command| command.id == command_id)?;
-                let word = query.trim_start().split_whitespace().next()?;
+                let word = query.split_whitespace().next()?;
                 let argument = query
                     .trim_start()
                     .strip_prefix(word)
@@ -903,6 +1152,7 @@ impl PluginManager {
                         .as_deref()
                         .map(SearchEngineMode::from_config)
                         .unwrap_or(SearchEngineMode::Search),
+                    state: Default::default(),
                 })
             })
     }
@@ -944,6 +1194,110 @@ impl PluginManager {
                 mark_failure(plugin, "execute", &error);
                 Err(error)
             }
+        }
+    }
+}
+
+impl crate::provider::SearchEngineProvider for PluginManager {
+    fn search_engine(&self, query: &str) -> Option<SearchEngineSession> {
+        PluginManager::search_engine(self, query)
+    }
+
+    fn query_root(&self, query: &str) -> Vec<SearchResult> {
+        PluginManager::query(self, query)
+    }
+
+    fn query_root_with_settings(&self, query: &str) -> Vec<EngineSearchResult> {
+        self.query_with_engine_settings(query)
+    }
+
+    fn query_active(&self, session: &SearchEngineSession, query: &str) -> Vec<SearchResult> {
+        PluginManager::query_active_search_engine(self, session, query)
+    }
+
+    fn owns_session(&self, session: &SearchEngineSession) -> bool {
+        PluginManager::owns_search_engine_session(self, session)
+    }
+
+    fn shortcut_hint(&self, result_id: &str) -> Option<String> {
+        PluginManager::shortcut_hint(self, result_id)
+    }
+
+    fn search_engine_result(&self, session: &SearchEngineSession) -> Option<SearchResult> {
+        PluginManager::search_engine_result(self, session)
+    }
+
+    fn preferred_view_mode(&self, session: &SearchEngineSession) -> &'static str {
+        PluginManager::preferred_view_mode_for_session(self, session)
+    }
+}
+
+impl crate::details::DynamicDetailProvider for PluginManager {
+    fn matches(&self, item: &SearchResult) -> bool {
+        let Some(plugin) = self.plugin_for_item(&item.id) else {
+            return false;
+        };
+        plugin
+            .embedded
+            .as_ref()
+            .and_then(|embedded| embedded.lock().ok())
+            .and_then(|embedded| embedded.has_handler("detail").ok())
+            .unwrap_or(false)
+    }
+
+    fn cached(&self, _item: &SearchResult, _language: &str) -> Option<crate::result::DetailView> {
+        None
+    }
+
+    fn load(&self, item: &SearchResult, language: &str) -> Result<crate::result::DetailView> {
+        let plugin = self
+            .plugin_for_item(&item.id)
+            .context("plugin detail owner not found")?;
+        let request_id = next_request_id("detail");
+        let request = serde_json::json!({
+            "method": "detail",
+            "request_id": request_id,
+            "item_id": item.id,
+            "api_version": plugin.manifest.api_version,
+            "locale": language,
+            "fallback_locale": plugin.manifest.default_locale,
+            "preferences": plugin_preferences(plugin),
+        });
+        let embedded = plugin
+            .embedded
+            .as_ref()
+            .context("plugin is not initialized")?;
+        let embedded = embedded
+            .lock()
+            .map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?;
+        let output = embedded.call("detail", &request, Some(&item.id), None)?;
+        let response: DetailResponse =
+            serde_json::from_str(&output).context("decode plugin detail response")?;
+        if let Some(error) = response.error {
+            anyhow::bail!("{}: {}", error.code, error.message);
+        }
+        if response.request_id.as_deref() != Some(request_id.as_str()) {
+            anyhow::bail!("plugin detail response request id mismatch");
+        }
+        let detail = response
+            .detail
+            .context("plugin detail response is missing detail")?;
+        Ok(to_detail_view(&plugin.root, detail, language))
+    }
+
+    fn error_view(&self, _item: &SearchResult, language: &str) -> crate::result::DetailView {
+        crate::result::DetailView {
+            title: crate::utils::i18n::tr(language, "Preview unavailable").into(),
+            subtitle: String::new(),
+            source: String::new(),
+            blocks: vec![crate::result::DetailBlock::Error {
+                message: crate::utils::i18n::tr(language, "Preview unavailable").into(),
+                retry_action: None,
+            }],
+            actions: Vec::new(),
+            preferred_width: None,
+            scrollable: false,
+            fullscreen: false,
         }
     }
 }
@@ -994,6 +1348,7 @@ fn query_plugin(
     locale: &str,
     command_id: Option<&str>,
     requested_query: &str,
+    session: Option<&SearchEngineSession>,
 ) -> Result<Vec<SearchResult>> {
     let request_id = next_request_id("query");
     let request = serde_json::json!({
@@ -1005,6 +1360,7 @@ fn query_plugin(
         "locale": locale,
         "fallback_locale": plugin.manifest.default_locale,
         "preferences": plugin_preferences(plugin),
+        "session": session.map(|session| &session.state),
     });
     let embedded = plugin
         .embedded
@@ -1033,6 +1389,9 @@ fn query_plugin(
     Ok(response
         .items
         .into_iter()
+        .filter(|item| {
+            item.visible_when != PluginItemVisibility::EmptyQuery || query.trim().is_empty()
+        })
         .map(|item| to_result(plugin, item, command_id, requested_query, locale))
         .collect())
 }
@@ -1108,7 +1467,11 @@ fn to_result(
     let command_action_words = command
         .map(|command| command.action_words.clone())
         .unwrap_or_default();
-    let command_query_alias = command.is_some().then(|| requested_query.to_owned());
+    // A default-search session entry is a discoverable fallback, not an
+    // exact alias for every query. Treat it like configured custom commands
+    // so ordinary applications and actions remain ahead of it.
+    let command_query_alias =
+        (!item.session_entry && command.is_some()).then(|| requested_query.to_owned());
     let icon = item
         .icon
         .or_else(|| command.and_then(|command| command.icon.clone()));
@@ -1116,21 +1479,46 @@ fn to_result(
     let actions = item
         .actions
         .into_iter()
-        .map(|action| Action::Plugin {
-            plugin_id: plugin.manifest.id.clone(),
-            action_id: action.id,
-            icon: action
-                .icon
-                .and_then(|icon| resolve_plugin_icon(&plugin.root, icon)),
+        .map(|action| {
+            if action.id == "open_detail" {
+                Action::open_detail()
+            } else {
+                Action::Plugin {
+                    plugin_id: plugin.manifest.id.clone(),
+                    action_id: action.id,
+                    icon: action
+                        .icon
+                        .and_then(|icon| resolve_plugin_icon(&plugin.root, icon)),
+                }
+            }
         })
         .collect();
+    let actions = if !item.session_updates.is_empty() {
+        vec![Action::UpdateSession {
+            updates: item.session_updates,
+        }]
+    } else if item.session_entry {
+        command
+            .and_then(|command| command.action_words.first())
+            .map(|word| Action::EnterSearchEngine {
+                prefix: format!("{} ", word.trim()),
+            })
+            .into_iter()
+            .collect()
+    } else {
+        actions
+    };
     SearchResult {
         id: format!("plugin:{}:{}", plugin.manifest.id, item.id),
         identity: format!("plugin:{}:{}", plugin.manifest.id, item.id),
         title: item.title,
         // Command ownership routes the query to a plugin search engine; it
         // does not change what the plugin item is.
-        category: ResultCategory::Application,
+        category: item
+            .category
+            .as_deref()
+            .map(parse_plugin_category)
+            .unwrap_or(ResultCategory::Application),
         aliases: item
             .aliases
             .into_iter()
@@ -1155,13 +1543,39 @@ fn to_result(
         package_family_name: None,
         package_metadata: None,
         icon: icon.and_then(|icon| resolve_plugin_icon(&plugin.root, icon)),
-        ranking_bias: plugin.weight.load(Ordering::Acquire),
+        ranking_bias: plugin
+            .weight
+            .load(Ordering::Acquire)
+            // Plugin-authored item bias is a small tie-breaker, never a way
+            // to bypass root-search relevance. The user-controlled plugin
+            // weight remains a separate explicit preference.
+            .saturating_add(item.ranking_bias.clamp(-100, 100)),
+        visibility: match item.visible_when {
+            PluginItemVisibility::Always => crate::result::ResultVisibility::Always,
+            PluginItemVisibility::EmptyQuery => crate::result::ResultVisibility::EmptyQueryOnly,
+        },
+    }
+}
+
+fn parse_plugin_category(value: &str) -> ResultCategory {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "game" => ResultCategory::Game,
+        "website" => ResultCategory::Website,
+        "calculator" => ResultCategory::Calculator,
+        "control_panel" | "control-panel" => ResultCategory::ControlPanel,
+        "document" => ResultCategory::Document,
+        "other" => ResultCategory::Other,
+        _ => ResultCategory::Application,
     }
 }
 
 fn resolve_plugin_icon(root: &Path, icon: IconRef) -> Option<IconSpec> {
     match icon {
         IconRef::Resource { path } => plugin_resource_path(root, &path).map(IconSpec::Resource),
+        IconRef::File { path } => {
+            let path = PathBuf::from(path);
+            path.is_absolute().then_some(IconSpec::Resource(path))
+        }
         IconRef::System { target } => Some(IconSpec::System(target.into())),
         IconRef::Named { id } => Some(IconSpec::Named(id)),
         IconRef::Remote { url } => validate_plugin_http_url(&url)
@@ -1194,7 +1608,6 @@ fn to_detail_view(
         actions: view
             .actions
             .into_iter()
-            .take(3)
             .map(|action| crate::result::DetailAction {
                 title: if action.title.is_empty() {
                     detail_text(action.id.as_str().into())
@@ -1208,11 +1621,15 @@ fn to_detail_view(
         blocks: view
             .blocks
             .into_iter()
-            .take(10)
             .map(|block| match block {
-                PluginDetailBlock::Text { text, color } => crate::result::DetailBlock::Text {
+                PluginDetailBlock::Text {
+                    text,
+                    color,
+                    copyable,
+                } => crate::result::DetailBlock::Text {
                     text: detail_text(text),
                     color: detail_color(&color),
+                    copyable,
                 },
                 PluginDetailBlock::Metric {
                     label,
@@ -1236,12 +1653,15 @@ fn to_detail_view(
                         _ => "cloud".into(),
                     },
                 },
-                PluginDetailBlock::Markdown { markdown, color } => {
-                    crate::result::DetailBlock::Markdown {
-                        markdown: detail_text(markdown),
-                        color: detail_color(&color),
-                    }
-                }
+                PluginDetailBlock::Markdown {
+                    markdown,
+                    color,
+                    copyable,
+                } => crate::result::DetailBlock::Markdown {
+                    markdown: detail_text(markdown),
+                    color: detail_color(&color),
+                    copyable,
+                },
                 PluginDetailBlock::Image { source, alt } => {
                     let Some(path) = plugin_resource_path(root, &source) else {
                         return crate::result::DetailBlock::Error {
@@ -1257,14 +1677,13 @@ fn to_detail_view(
                 }
                 PluginDetailBlock::Code { language, code } => crate::result::DetailBlock::Code {
                     language: detail_text(language),
-                    code: code.chars().take(8_192).collect(),
+                    code,
                 },
                 PluginDetailBlock::Table { columns, rows } => crate::result::DetailBlock::Table {
-                    columns: columns.into_iter().take(8).map(detail_text).collect(),
+                    columns: columns.into_iter().map(detail_text).collect(),
                     rows: rows
                         .into_iter()
-                        .take(32)
-                        .map(|row| row.into_iter().take(8).map(detail_text).collect())
+                        .map(|row| row.into_iter().map(detail_text).collect())
                         .collect(),
                 },
                 PluginDetailBlock::Link { label, url } => {
@@ -1304,11 +1723,14 @@ fn to_detail_view(
                 .clamp(width.min.min(width.max), width.max.max(width.min))
         }),
         scrollable: view.scrollable,
+        fullscreen: view.fullscreen,
     }
 }
 
 fn detail_text(value: String) -> String {
-    value.chars().take(512).collect()
+    // Translation and other preview text can legitimately span many lines;
+    // the detail Flickable owns scrolling, so do not truncate it at 512 chars.
+    value
 }
 
 fn detail_color(value: &str) -> String {
@@ -1407,6 +1829,7 @@ mod tests {
                     require_separator: false,
                     icon: None,
                 }],
+                engine: SearchEngineSettings::default(),
                 permissions: Vec::new(),
                 default_locale: "en".into(),
             },
@@ -1458,6 +1881,18 @@ mod tests {
     fn empty_lua_item_tables_are_treated_as_empty_plugin_results() {
         let response: QueryResponse = serde_json::from_str(r#"{"items":{}}"#).unwrap();
         assert!(response.items.is_empty());
+    }
+
+    #[test]
+    fn plugin_items_can_be_limited_to_an_empty_query() {
+        let response: QueryResponse = serde_json::from_str(
+            r#"{"items":[{"id":"menu","title":"Menu","visible_when":"empty_query"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            response.items[0].visible_when,
+            PluginItemVisibility::EmptyQuery
+        );
     }
 
     #[test]
@@ -1550,11 +1985,30 @@ mod tests {
     }
 
     #[test]
-    fn plugin_discovery_is_empty_when_no_plugins_are_installed() {
+    fn plugin_discovery_reads_project_plugins() {
         let manager = PluginManager::discover_with_config("en", &Default::default());
+        assert!(manager
+            .query("")
+            .iter()
+            .any(|item| item.id == "plugin:google-translate:entry"
+                && item.visibility == crate::result::ResultVisibility::EmptyQueryOnly));
         assert!(manager.search_engine("eng").is_none());
-        assert!(manager.query("eng ").is_empty());
-        assert!(manager.statuses().is_empty());
+        assert!(manager
+            .query("eng ")
+            .iter()
+            .any(|item| item.title.starts_with("用谷歌翻译搜索")));
+        let items = manager.query("t hello");
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().any(|item| item.id.ends_with(":source")));
+        assert!(items.iter().any(|item| item.id.ends_with(":target")));
+        assert!(manager
+            .statuses()
+            .iter()
+            .any(|status| status.id == "google-translate"));
+        assert_eq!(
+            manager.shortcut_hint("plugin:google-translate:entry"),
+            Some("t ".into())
+        );
     }
 
     #[test]
@@ -1584,6 +2038,7 @@ mod tests {
             crate::result::DetailBlock::Text {
                 text: "ignored".into(),
                 color: "secondary".into(),
+                copyable: false,
             }
         );
     }

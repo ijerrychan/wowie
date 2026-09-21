@@ -1,6 +1,6 @@
 use crate::{
     platform::SourceId,
-    provider::{DynamicProvider, ProviderRegistry},
+    provider::{ProviderRegistry, SearchEngineProvider, SearchEngineSettings},
     result::{IconSpec, ResultCategory, SearchResult},
 };
 use std::path::PathBuf;
@@ -29,11 +29,27 @@ impl Default for CalculatorProvider {
 }
 
 pub fn register(registry: &mut ProviderRegistry, _shortcuts: Vec<crate::config::ShortcutConfig>) {
-    registry.register(CalculatorProvider::new());
+    registry.register_search_engine(CalculatorProvider::new());
 }
 
-impl DynamicProvider for CalculatorProvider {
-    fn query(&self, query: &str) -> Vec<SearchResult> {
+impl SearchEngineProvider for CalculatorProvider {
+    fn settings(&self) -> SearchEngineSettings {
+        // Arithmetic is only emitted for an explicit expression, so a small
+        // tie-breaker makes the immediate answer feel responsive without
+        // competing with ordinary text queries.
+        SearchEngineSettings {
+            ranking_bias: 40,
+            ..SearchEngineSettings::default()
+        }
+    }
+
+    // Calculator deliberately has no session entry. It is still a complete
+    // search engine because root search can invoke it directly.
+    fn search_engine(&self, _query: &str) -> Option<crate::page::SearchEngineSession> {
+        None
+    }
+
+    fn query_root(&self, query: &str) -> Vec<SearchResult> {
         result(query, &self.language).into_iter().collect()
     }
 
@@ -82,6 +98,7 @@ fn result(query: &str, language: &str) -> Option<SearchResult> {
         package_metadata: None,
         icon: Some(IconSpec::Calculator),
         ranking_bias: 0,
+        visibility: crate::result::ResultVisibility::Always,
     })
 }
 

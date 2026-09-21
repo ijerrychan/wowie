@@ -12,9 +12,9 @@ include!(concat!(env!("OUT_DIR"), "/detail_providers.rs"));
 
 pub trait DynamicDetailProvider: Send + Sync {
     fn matches(&self, item: &SearchResult) -> bool;
-    fn cached(&self, language: &str) -> Option<DetailView>;
-    fn load(&self, language: &str) -> Result<DetailView>;
-    fn error_view(&self, language: &str) -> DetailView;
+    fn cached(&self, _item: &SearchResult, _language: &str) -> Option<DetailView>;
+    fn load(&self, item: &SearchResult, language: &str) -> Result<DetailView>;
+    fn error_view(&self, _item: &SearchResult, language: &str) -> DetailView;
 }
 
 #[derive(Clone, Default)]

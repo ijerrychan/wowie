@@ -47,7 +47,7 @@ pub(super) fn request_dynamic_detail_with_id(
     let Some(provider) = registry.provider_for(&item) else {
         return;
     };
-    if let Some(cached) = provider.cached(&language) {
+    if let Some(cached) = provider.cached(&item, &language) {
         if let Some(window) = weak.upgrade() {
             set_detail_view(&window, Some(&cached), &icon_service);
             window.set_detail_panel_visible(true);
@@ -66,13 +66,14 @@ pub(super) fn request_dynamic_detail_with_id(
             actions: Vec::new(),
             preferred_width: None,
             scrollable: false,
+            fullscreen: false,
         };
         set_detail_view(&window, Some(&loading), &icon_service);
         window.set_detail_panel_visible(true);
     }
 
     std::thread::spawn(move || {
-        let result = provider.load(&language);
+        let result = provider.load(&item, &language);
         let _ = slint::invoke_from_event_loop(move || {
             if generation.load(Ordering::Acquire) != request_id {
                 return;
@@ -87,7 +88,7 @@ pub(super) fn request_dynamic_detail_with_id(
                 }
                 Err(error) => {
                     eprintln!("dynamic detail request failed: {error:#}");
-                    let detail = provider.error_view(&language);
+                    let detail = provider.error_view(&item, &language);
                     set_detail_view(&window, Some(&detail), &icon_service);
                     window.set_detail_panel_visible(true);
                 }
@@ -107,6 +108,8 @@ pub(super) fn set_detail_view(
         window.set_detail_source(view.source.clone().into());
         window.set_detail_panel_preferred_width(view.preferred_width.unwrap_or(0));
         window.set_detail_panel_scrollable(view.scrollable);
+        window.set_detail_panel_fullscreen(view.fullscreen);
+        window.set_detail_content_height(detail_content_height(view) as f32);
         window.set_detail_blocks(detail_blocks_model(view, icon_service));
         window.set_detail_actions(detail_actions_model(view, icon_service));
     } else {
@@ -114,7 +117,9 @@ pub(super) fn set_detail_view(
         window.set_detail_subtitle(String::new().into());
         window.set_detail_source(String::new().into());
         window.set_detail_panel_preferred_width(0);
+        window.set_detail_content_height(0.0);
         window.set_detail_panel_scrollable(false);
+        window.set_detail_panel_fullscreen(false);
         window.set_detail_blocks(ModelRc::from(Rc::new(VecModel::from(
             Vec::<DetailBlock>::new(),
         ))));
@@ -129,13 +134,18 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
         .blocks
         .iter()
         .map(|block| match block {
-            ResultDetailBlock::Text { text, color } => DetailBlock {
-                kind: "text".into(),
+            ResultDetailBlock::Text {
+                text,
+                color,
+                copyable,
+            } => DetailBlock {
+                kind: if *copyable { "text-copyable" } else { "text" }.into(),
                 label: String::new().into(),
                 value: text.clone().into(),
                 color: color.clone().into(),
                 secondary: String::new().into(),
                 icon: slint::Image::default(),
+                height: detail_block_height(block),
             },
             ResultDetailBlock::Metric {
                 label,
@@ -148,6 +158,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 color: color.clone().into(),
                 secondary: String::new().into(),
                 icon: slint::Image::default(),
+                height: detail_block_height(block),
             },
             ResultDetailBlock::Icon { glyph, color, icon } => DetailBlock {
                 kind: "icon".into(),
@@ -160,6 +171,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                     .and_then(|icon| icon_service.resolve_spec_at(icon, 40))
                     .map(|icon| icon_to_image(icon.as_ref()))
                     .unwrap_or_default(),
+                height: detail_block_height(block),
             },
             ResultDetailBlock::Weather { value } => DetailBlock {
                 kind: "weather".into(),
@@ -168,14 +180,25 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 color: String::new().into(),
                 secondary: String::new().into(),
                 icon: slint::Image::default(),
+                height: detail_block_height(block),
             },
-            ResultDetailBlock::Markdown { markdown, color } => DetailBlock {
-                kind: "markdown".into(),
+            ResultDetailBlock::Markdown {
+                markdown,
+                color,
+                copyable,
+            } => DetailBlock {
+                kind: if *copyable {
+                    "markdown-copyable"
+                } else {
+                    "markdown"
+                }
+                .into(),
                 label: String::new().into(),
                 value: markdown.clone().into(),
                 color: color.clone().into(),
                 secondary: String::new().into(),
                 icon: slint::Image::default(),
+                height: detail_block_height(block),
             },
             ResultDetailBlock::Image { source, alt } => DetailBlock {
                 kind: "image".into(),
@@ -185,6 +208,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 secondary: alt.clone().into(),
                 icon: slint::Image::load_from_path(std::path::Path::new(source))
                     .unwrap_or_default(),
+                height: detail_block_height(block),
             },
             ResultDetailBlock::Code { language, code } => DetailBlock {
                 kind: "code".into(),
@@ -193,6 +217,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 color: String::new().into(),
                 secondary: String::new().into(),
                 icon: slint::Image::default(),
+                height: detail_block_height(block),
             },
             ResultDetailBlock::Table { columns, rows } => DetailBlock {
                 kind: "table".into(),
@@ -206,6 +231,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 color: String::new().into(),
                 secondary: String::new().into(),
                 icon: slint::Image::default(),
+                height: detail_block_height(block),
             },
             ResultDetailBlock::Link { label, url } => DetailBlock {
                 kind: "link".into(),
@@ -214,6 +240,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 color: "accent".into(),
                 secondary: String::new().into(),
                 icon: slint::Image::default(),
+                height: detail_block_height(block),
             },
             ResultDetailBlock::Loading { message } => DetailBlock {
                 kind: "loading".into(),
@@ -222,6 +249,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 color: String::new().into(),
                 secondary: String::new().into(),
                 icon: slint::Image::default(),
+                height: detail_block_height(block),
             },
             ResultDetailBlock::Error {
                 message,
@@ -233,6 +261,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 color: String::new().into(),
                 secondary: String::new().into(),
                 icon: slint::Image::default(),
+                height: detail_block_height(block),
             },
             ResultDetailBlock::Separator => DetailBlock {
                 kind: "separator".into(),
@@ -241,10 +270,43 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 color: String::new().into(),
                 secondary: String::new().into(),
                 icon: slint::Image::default(),
+                height: detail_block_height(block),
             },
         })
         .collect::<Vec<_>>();
     ModelRc::from(Rc::new(VecModel::from(blocks)))
+}
+
+fn detail_block_height(block: &ResultDetailBlock) -> i32 {
+    fn wrapped_lines(text: &str, width: usize) -> i32 {
+        let lines = text
+            .lines()
+            .map(|line| (line.chars().count().max(1) + width - 1) / width)
+            .sum::<usize>()
+            .max(1);
+        // CJK characters occupy more width than ASCII; overestimate slightly
+        // so wrapped translations are not clipped. Long content can scroll.
+        (lines as i32 * 18 + 8).max(24)
+    }
+    match block {
+        ResultDetailBlock::Text { text, .. } => wrapped_lines(text, 28),
+        ResultDetailBlock::Markdown { markdown, .. } => wrapped_lines(markdown, 28),
+        ResultDetailBlock::Code { code, .. } => code.lines().count().max(1) as i32 * 16 + 28,
+        ResultDetailBlock::Table { rows, .. } => rows.len().max(1) as i32 * 20 + 28,
+        ResultDetailBlock::Metric { .. } => 48,
+        ResultDetailBlock::Weather { .. } => 48,
+        ResultDetailBlock::Icon { .. } => 40,
+        ResultDetailBlock::Image { .. } => 120,
+        ResultDetailBlock::Link { label, url } => wrapped_lines(&format!("{label} {url}"), 28),
+        ResultDetailBlock::Loading { message } => wrapped_lines(message, 28),
+        ResultDetailBlock::Error { message, .. } => wrapped_lines(message, 28),
+        ResultDetailBlock::Separator => 1,
+    }
+}
+
+fn detail_content_height(view: &DetailView) -> i32 {
+    view.blocks.iter().map(detail_block_height).sum::<i32>()
+        + view.blocks.len().saturating_sub(1) as i32 * 6
 }
 
 fn detail_actions_model(

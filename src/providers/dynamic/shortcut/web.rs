@@ -1,5 +1,6 @@
 use super::{
-    build_result, expand_url_template, result_id, ShortcutQuery, ShortcutSpec, WEB_PREFIX,
+    build_result, configured_description, expand_url_template, result_id, ShortcutQuery,
+    ShortcutSpec, WEB_PREFIX,
 };
 use crate::{
     config::ShortcutConfig,
@@ -14,6 +15,7 @@ pub(super) fn builtin(query: ShortcutQuery<'_>) -> Option<SearchResult> {
         crate::utils::i18n::tr(query.language, "Open website").into(),
         WEB_PREFIX,
         String::new(),
+        None,
         1,
     )
 }
@@ -30,6 +32,7 @@ pub(super) fn configured(
         shortcut.name.clone(),
         &shortcut.prefix,
         shortcut.template.clone(),
+        Some(shortcut),
         index,
     )
 }
@@ -39,6 +42,7 @@ fn render(
     name: String,
     prefix: &str,
     template: String,
+    shortcut: Option<&ShortcutConfig>,
     index: usize,
 ) -> Option<SearchResult> {
     let argument = query.resolve_argument(prefix);
@@ -62,9 +66,9 @@ fn render(
         });
     let target = PathBuf::from(target_value);
     let location = if is_builtin_web {
-        web_target.clone().unwrap_or_default()
+        crate::utils::i18n::tr(query.language, "Visit the internet with your default browser").into()
     } else {
-        target.display().to_string()
+        configured_description(query, shortcut.expect("configured shortcut must be present"))
     };
     let display_argument = web_target
         .clone()
@@ -200,6 +204,7 @@ mod tests {
     fn preview_uses_the_default_browser_icon() {
         let preview = builtin(query("w ")).expect("web preview");
         assert_eq!(preview.title, "Open website");
+        assert_eq!(preview.location, "Visit the internet with your default browser");
         assert!(preview.actions.is_empty());
         assert!(matches!(preview.icon, Some(IconSpec::DefaultOpen(_))));
     }
@@ -214,11 +219,29 @@ mod tests {
             template: "https://www.google.com/search?q={query}".into(),
             target: String::new(),
             arguments: String::new(),
+            description: String::new(),
         };
         let item = configured(query("g rust lang"), &shortcut, 2).expect("configured URL");
         assert_eq!(
             item.launch_target,
             PathBuf::from("https://www.google.com/search?q=rust+lang")
         );
+        assert_eq!(item.location, "Custom shortcut");
+    }
+
+    #[test]
+    fn configured_url_uses_its_description_instead_of_the_generated_url() {
+        let shortcut = ShortcutConfig {
+            name: "Search docs".into(),
+            prefix: "d".into(),
+            shortcut_type: "url".into(),
+            mode: "execute".into(),
+            template: "https://example.com/?q={query}".into(),
+            target: String::new(),
+            arguments: String::new(),
+            description: "Search documentation for {query}".into(),
+        };
+        let item = configured(query("d engine settings"), &shortcut, 2).expect("configured URL");
+        assert_eq!(item.location, "Search documentation for engine settings");
     }
 }

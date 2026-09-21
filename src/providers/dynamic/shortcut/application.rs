@@ -1,4 +1,4 @@
-use super::{build_result, expand_raw_template, result_id, ShortcutQuery, ShortcutSpec};
+use super::{build_result, configured_description, expand_raw_template, result_id, ShortcutQuery, ShortcutSpec};
 use crate::{config::ShortcutConfig, result::SearchResult};
 use std::path::PathBuf;
 
@@ -21,7 +21,7 @@ pub(super) fn configured(
             prefix: shortcut.prefix.clone(),
             argument: argument.value.to_owned(),
             display_argument: argument.value.to_owned(),
-            location: target.display().to_string(),
+            location: configured_description(query, shortcut),
             target,
             launch_arguments,
             preview,
@@ -45,6 +45,7 @@ mod tests {
             template: String::new(),
             target: "notepad.exe".into(),
             arguments: "{query}".into(),
+            description: String::new(),
         };
         let item = configured(
             ShortcutQuery {

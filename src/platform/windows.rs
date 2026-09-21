@@ -606,34 +606,6 @@ pub(crate) fn discover_control_panel_items() -> Vec<super::ControlPanelItem> {
     result
 }
 
-/// Find Steam's installation root without assuming the default drive. Steam
-/// stores this value in the per-user registry in normal installations.
-pub(crate) fn steam_install_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    for (hive, subkey) in [
-        (HKEY_CURRENT_USER, r"Software\Valve\Steam"),
-        (
-            windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\WOW6432Node\Valve\Steam",
-        ),
-        (
-            windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Valve\Steam",
-        ),
-    ] {
-        let Some(key) = open_registry_key(hive, subkey) else {
-            continue;
-        };
-        if let Some(path) = read_registry_string(key, "SteamPath")
-            .or_else(|| read_registry_string(key, "InstallPath"))
-        {
-            roots.push(PathBuf::from(path));
-        }
-        unsafe { RegCloseKey(key) };
-    }
-    roots
-}
-
 fn open_registry_key(hive: HKEY, subkey: &str) -> Option<HKEY> {
     let wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
     let mut key = std::ptr::null_mut();

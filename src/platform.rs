@@ -51,7 +51,6 @@ pub enum AppProviderSource {
     StartMenu,
     Desktop,
     ControlPanel,
-    Steam,
     CustomDirectories,
 }
 
@@ -62,7 +61,6 @@ pub enum SourceId {
     StartMenu,
     Desktop,
     ControlPanel,
-    Steam,
     ExecutionAlias,
     Shortcut,
     CustomDirectories,
@@ -77,7 +75,6 @@ impl SourceId {
             Self::StartMenu => Cow::Borrowed("StartMenu"),
             Self::Desktop => Cow::Borrowed("Desktop"),
             Self::ControlPanel => Cow::Borrowed("ControlPanel"),
-            Self::Steam => Cow::Borrowed("Steam"),
             Self::ExecutionAlias => Cow::Borrowed("ExecutionAlias"),
             Self::Shortcut => Cow::Borrowed("Shortcut"),
             Self::CustomDirectories => Cow::Borrowed("CustomDirectories"),
@@ -93,7 +90,6 @@ impl SourceId {
             Self::Desktop => 3,
             Self::ExecutionAlias
             | Self::Shortcut
-            | Self::Steam
             | Self::ControlPanel
             | Self::CustomDirectories
             | Self::Custom(_) => 4,
@@ -123,7 +119,6 @@ impl From<&str> for SourceId {
             "StartMenu" => Self::StartMenu,
             "Desktop" => Self::Desktop,
             "ControlPanel" => Self::ControlPanel,
-            "Steam" => Self::Steam,
             "ExecutionAlias" => Self::ExecutionAlias,
             "Shortcut" => Self::Shortcut,
             "CustomDirectories" => Self::CustomDirectories,
@@ -155,7 +150,6 @@ pub mod source_ids {
     pub const START_MENU: &str = "StartMenu";
     pub const DESKTOP: &str = "Desktop";
     pub const CONTROL_PANEL: &str = "ControlPanel";
-    pub const STEAM: &str = "Steam";
     pub const CUSTOM_DIRECTORIES: &str = "CustomDirectories";
 }
 
@@ -482,17 +476,6 @@ pub fn discover_control_panel_items() -> Vec<ControlPanelItem> {
     #[cfg(windows)]
     {
         windows::discover_control_panel_items()
-    }
-    #[cfg(not(windows))]
-    {
-        Vec::new()
-    }
-}
-
-pub fn steam_install_roots() -> Vec<std::path::PathBuf> {
-    #[cfg(windows)]
-    {
-        windows::steam_install_roots()
     }
     #[cfg(not(windows))]
     {

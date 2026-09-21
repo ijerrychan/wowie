@@ -91,7 +91,6 @@ fn presentation_name(presentation: ResultPresentation) -> &'static str {
 
 pub(super) fn static_icon_kind(icon: Option<&IconSpec>) -> &'static str {
     match icon {
-        Some(IconSpec::Weather) => "weather",
         Some(IconSpec::Calculator) => "calculator",
         Some(IconSpec::Named(name)) => match name.as_str() {
             "book" | "wowie" => "book",

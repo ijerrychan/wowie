@@ -22,7 +22,9 @@ pub(super) fn context_actions(
             shortcut: "Ctrl+O".into(),
         });
     }
-    if is_filesystem_target || is_store_shell_target {
+    if is_store_shell_target
+        || (is_filesystem_target && is_supported_admin_target(&item.launch_target))
+    {
         actions.push(ContextActionRow {
             id: "run-as-admin".into(),
             title: "Run as administrator".into(),
@@ -217,6 +219,13 @@ fn is_supported_filesystem_target(target: &std::path::Path) -> bool {
         && !target.to_string_lossy().contains("://")
 }
 
+fn is_supported_admin_target(target: &std::path::Path) -> bool {
+    target
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "exe" | "lnk"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +267,15 @@ mod tests {
         let width = context_menu_width(&[section], "en");
 
         assert!(width >= approximate_text_width("Other launch entries", 13) + 68);
+    }
+
+    #[test]
+    fn administrator_action_only_supports_launchable_file_types() {
+        assert!(is_supported_admin_target(std::path::Path::new("tool.exe")));
+        assert!(is_supported_admin_target(std::path::Path::new("tool.LNK")));
+        assert!(!is_supported_admin_target(std::path::Path::new(
+            "notes.txt"
+        )));
+        assert!(!is_supported_admin_target(std::path::Path::new("folder")));
     }
 }

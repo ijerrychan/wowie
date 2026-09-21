@@ -72,6 +72,34 @@ msgid "Open website"
 msgstr "打开网址"
 
 msgctxt "Launcher"
+msgid "Visit the internet with your default browser"
+msgstr "使用默认浏览器访问互联网"
+
+msgctxt "Launcher"
+msgid "Run a command using your default shell"
+msgstr "使用默认 Shell 运行命令"
+
+msgctxt "Launcher"
+msgid "Custom shortcut"
+msgstr "自定义快捷命令"
+
+msgctxt "Launcher"
+msgid "Search files with Everything; all Everything syntax is supported"
+msgstr "使用 Everything 搜索文件，支持所有 Everything 语法"
+
+msgctxt "Launcher"
+msgid "Search files with Everything; all Everything syntax is supported. Press Enter to view the usage guide."
+msgstr "使用 Everything 搜索文件，支持所有 Everything 语法。按 Enter 查看使用说明。"
+
+msgctxt "Launcher"
+msgid "Everything search syntax"
+msgstr "Everything 搜索语法"
+
+msgctxt "Launcher"
+msgid "Everything accepts its complete native query syntax, including filename filters, paths, operators, and regular expressions."
+msgstr "Everything 支持完整的原生查询语法，包括文件名筛选、路径、运算符和正则表达式。"
+
+msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  导航     Enter  打开     Esc  隐藏"
 
@@ -94,6 +122,22 @@ msgstr "↑ ↓  导航     Enter  打开     Ctrl+M  菜单     Esc  隐藏"
 msgctxt "Launcher"
 msgid "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
 msgstr "↑ ↓ ← →  导航     Enter  打开     Ctrl+M  菜单     Esc  隐藏"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Enter  Open     Esc  Back"
+msgstr "↑ ↓  导航     Enter  打开     Esc  返回"
+
+msgctxt "Launcher"
+msgid "↑ ↓ ← →  Navigate     Enter  Open     Esc  Back"
+msgstr "↑ ↓ ← →  导航     Enter  打开     Esc  返回"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"
+msgstr "↑ ↓  导航     Enter  打开     Ctrl+M  菜单     Esc  返回"
+
+msgctxt "Launcher"
+msgid "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"
+msgstr "↑ ↓ ← →  导航     Enter  打开     Ctrl+M  菜单     Esc  返回"
 
 msgctxt "ContextMenu"
 msgid "Open containing folder"

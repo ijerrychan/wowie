@@ -1,7 +1,7 @@
 use crate::plugin::PluginManager;
 use crate::provider::ProviderRegistry;
 use crate::ranking::Ranker;
-use crate::result::SearchResult;
+use crate::result::{ResultVisibility, SearchResult};
 use anyhow::{Context, Result};
 use nucleo_matcher::{Config as MatcherConfig, Matcher, Utf32Str};
 use std::sync::{
@@ -10,7 +10,6 @@ use std::sync::{
 };
 
 pub struct SearchCore {
-    results: Mutex<Arc<Vec<SearchResult>>>,
     providers: ProviderRegistry,
     dynamic_results: Mutex<Vec<SearchResult>>,
     ranker: Ranker,
@@ -21,7 +20,6 @@ impl SearchCore {
     #[cfg(test)]
     pub fn new(results: Vec<SearchResult>) -> Self {
         Self {
-            results: Mutex::new(Arc::new(results)),
             providers: ProviderRegistry::without_dynamic(PluginManager::discover_with_config(
                 "en",
                 &std::collections::BTreeMap::new(),
@@ -30,6 +28,7 @@ impl SearchCore {
             ranker: Ranker::in_memory(),
             fuzzy_search: AtomicBool::new(true),
         }
+        .with_indexed_results(results)
     }
 
     pub fn with_plugins_and_shortcuts(
@@ -38,12 +37,17 @@ impl SearchCore {
         shortcuts: Vec<crate::config::ShortcutConfig>,
     ) -> Self {
         Self {
-            results: Mutex::new(Arc::new(results)),
             providers: ProviderRegistry::default_providers(plugins, shortcuts),
             dynamic_results: Mutex::new(Vec::new()),
             ranker: Ranker::load(),
             fuzzy_search: AtomicBool::new(true),
         }
+        .with_indexed_results(results)
+    }
+
+    fn with_indexed_results(self, results: Vec<SearchResult>) -> Self {
+        self.providers.replace_indexed_results(Arc::new(results));
+        self
     }
 
     pub fn replace_shortcuts(&self, shortcuts: Vec<crate::config::ShortcutConfig>) {
@@ -62,12 +66,23 @@ impl SearchCore {
         self.providers.preferred_view_mode(context)
     }
 
+    pub fn search_debounce(&self, context: &crate::page::SearchContext) -> std::time::Duration {
+        self.providers.search_debounce(context)
+    }
+
     pub fn search_context(&self, query: &str) -> crate::page::SearchContext {
         self.providers.search_context(query)
     }
 
     pub fn shortcut_hint(&self, result_id: &str) -> Option<String> {
         self.providers.shortcut_hint(result_id)
+    }
+
+    pub fn search_engine_result(
+        &self,
+        session: &crate::page::SearchEngineSession,
+    ) -> Option<SearchResult> {
+        self.providers.search_engine_result(session)
     }
 
     pub fn replace_plugin_config(
@@ -81,26 +96,18 @@ impl SearchCore {
         self.ranker.record_success(item_id, query);
     }
     pub fn by_id(&self, id: &str) -> Option<SearchResult> {
-        self.results
-            .lock()
-            .ok()?
-            .iter()
-            .find(|x| x.id == id)
-            .cloned()
-            .or_else(|| {
-                self.dynamic_results
-                    .lock()
-                    .ok()?
-                    .iter()
-                    .find(|x| x.id == id)
-                    .cloned()
-            })
+        self.providers.indexed_by_id(id).or_else(|| {
+            self.dynamic_results
+                .lock()
+                .ok()?
+                .iter()
+                .find(|x| x.id == id)
+                .cloned()
+        })
     }
 
     pub fn replace_results(&self, results: Arc<Vec<SearchResult>>) {
-        if let Ok(mut indexed) = self.results.lock() {
-            *indexed = results;
-        }
+        self.providers.replace_indexed_results(results);
     }
 
     pub fn execute_action(&self, item_id: &str) -> Result<crate::plugin::ExecuteResponse> {
@@ -108,11 +115,7 @@ impl SearchCore {
         let action_id = item
             .actions
             .iter()
-            .find_map(|action| match action {
-                crate::result::Action::Plugin { action_id, .. } => Some(action_id.as_str()),
-                crate::result::Action::Launch(_)
-                | crate::result::Action::EnterSearchEngine { .. } => None,
-            })
+            .find_map(|action| action.plugin_parts().map(|(_, action_id)| action_id))
             .context("result has no plugin action")?;
         self.execute_plugin_action(item_id, action_id)
     }
@@ -125,6 +128,18 @@ impl SearchCore {
         let item = self.by_id(item_id).context("result not found")?;
         let (_, action_id) = crate::provider::find_plugin_action(&item, requested_action_id)?;
         self.providers.execute_plugin_action(&item, action_id)
+    }
+
+    /// Execute a plugin action on a transient UI result, such as an empty
+    /// search-engine session introduction. Unlike indexed results, transient
+    /// results are deliberately not returned by `by_id`.
+    pub fn execute_transient_plugin_action(
+        &self,
+        item: &SearchResult,
+        requested_action_id: &str,
+    ) -> Result<crate::plugin::ExecuteResponse> {
+        let (_, action_id) = crate::provider::find_plugin_action(item, requested_action_id)?;
+        self.providers.execute_plugin_action(item, action_id)
     }
 
     /// Convenience wrapper retained for unit tests and small in-process
@@ -167,16 +182,10 @@ impl SearchCore {
         query: &str,
     ) -> Vec<SearchResult> {
         let input = query.to_owned();
-        // An active engine owns the prefix. Its result titles are matched
-        // against the argument only (`e report` searches `report`), rather
-        // than against the launcher syntax including `e `.
-        let raw_query = context
-            .session()
-            .map(|session| session.argument.trim())
-            .unwrap_or_else(|| input.trim())
-            .to_owned();
-        let query = raw_query.to_lowercase();
-        let search_engine_active = context.session().is_some();
+        // An active engine receives the text currently shown in the input
+        // field. The UI stores the selected engine separately, so the field
+        // no longer needs to contain or be parsed for its shortcut prefix.
+        let query = input.trim().to_lowercase();
         let fuzzy_search = self.fuzzy_search.load(Ordering::Acquire);
         let mut matcher = Matcher::new(MatcherConfig::DEFAULT);
         let mut matcher_buffer = Vec::new();
@@ -186,39 +195,37 @@ impl SearchCore {
             eprintln!(
                 "[search] query={:?} indexed_records={}",
                 query,
-                self.results
-                    .lock()
-                    .map(|results| results.len())
-                    .unwrap_or(0)
+                self.providers.indexed_len()
             );
         }
-        let dynamic = self.providers.query(context, &input, fuzzy_search);
+        let dynamic = self
+            .providers
+            .query(context, &input)
+            .into_iter()
+            .filter(|candidate| {
+                candidate.item.visibility.allows(&input)
+                    && (!matches!(context, crate::page::SearchContext::Default)
+                        || !input.is_empty()
+                        || candidate.item.visibility == ResultVisibility::EmptyQueryOnly)
+            })
+            .collect::<Vec<_>>();
         // Launch callbacks resolve rows by id after the search worker returns.
         // Keep only the current query's dynamic records so a repeated shortcut
         // id cannot resolve to an older command or URL.
         if let Ok(mut cached) = self.dynamic_results.lock() {
             cached.clear();
-            cached.extend(dynamic.iter().cloned());
+            cached.extend(dynamic.iter().map(|candidate| candidate.item.clone()));
         }
-        let indexed = if search_engine_active {
-            None
-        } else {
-            self.results
-                .lock()
-                .ok()
-                .map(|indexed| Arc::clone(&*indexed))
-        };
-        let mut ranked: Vec<(RankKey, &SearchResult)> = indexed
-            .as_ref()
-            .map(|results| results.iter())
-            .into_iter()
-            .flatten()
-            .chain(dynamic.iter())
-            .filter_map(|item| {
+        let mut ranked: Vec<(RankKey, &SearchResult)> = dynamic.iter().filter_map(|candidate| {
+                let item = &candidate.item;
+                // Every provider contributes ordinary SearchResults. The
+                // central matcher is the single place that decides whether a
+                // result is visible and how strongly it matches.
+                let engine_fuzzy_search = candidate.settings.respect_global_fuzzy_search && fuzzy_search;
                 let title_score = match_score(
                     &query,
                     &item.title,
-                    fuzzy_search,
+                    engine_fuzzy_search,
                     &mut matcher,
                     &mut matcher_buffer,
                     &mut needle_buffer,
@@ -230,7 +237,7 @@ impl SearchCore {
                         let score = match_score(
                             &query,
                             alias,
-                            fuzzy_search,
+                            engine_fuzzy_search,
                             &mut matcher,
                             &mut matcher_buffer,
                             &mut needle_buffer,
@@ -244,10 +251,9 @@ impl SearchCore {
                     .max_by_key(|score| (score.class, score.quality));
                 if debug && score.is_some() {
                     eprintln!(
-                        "[search] candidate title={:?} title_score={:?} alias_score={:?} matched={} identity={:?} sources={:?} location={:?} launch_target={:?} args={:?}",
+                        "[search] candidate title={:?} score={:?} matched={} identity={:?} sources={:?} location={:?} launch_target={:?} args={:?}",
                         item.title,
-                        title_score,
-                        alias_score,
+                        score,
                         score.is_some(),
                         item.identity,
                         item.sources,
@@ -273,6 +279,8 @@ impl SearchCore {
                             match_class: score.class,
                             match_quality: score.quality,
                             behavior: self.ranker.score(&item.id, &query),
+                            category_bias: category_bias(item.category),
+                            engine_bias: candidate.settings.ranking_bias.clamp(-100, 100),
                             provider_bias: item.ranking_bias,
                         },
                         item,
@@ -286,6 +294,8 @@ impl SearchCore {
                 .then_with(|| b.0.match_class.cmp(&a.0.match_class))
                 .then_with(|| b.0.match_quality.cmp(&a.0.match_quality))
                 .then_with(|| b.0.behavior.cmp(&a.0.behavior))
+                .then_with(|| b.0.category_bias.cmp(&a.0.category_bias))
+                .then_with(|| b.0.engine_bias.cmp(&a.0.engine_bias))
                 .then_with(|| b.0.provider_bias.cmp(&a.0.provider_bias))
                 .then_with(|| a.1.title.cmp(&b.1.title))
                 .then_with(|| a.1.id.cmp(&b.1.id))
@@ -324,7 +334,25 @@ struct RankKey {
     match_class: u8,
     match_quality: i32,
     behavior: i32,
+    category_bias: i16,
+    engine_bias: i32,
     provider_bias: i32,
+}
+
+/// Conservative defaults used only to break otherwise equivalent matches.
+/// A category is content metadata, not user intent, so it must never outrank
+/// a stronger textual match or learned selection.
+fn category_bias(category: crate::result::ResultCategory) -> i16 {
+    use crate::result::ResultCategory;
+    match category {
+        ResultCategory::Calculator => 35,
+        ResultCategory::Application => 30,
+        ResultCategory::ControlPanel => 20,
+        ResultCategory::Game => 15,
+        ResultCategory::Document => 5,
+        ResultCategory::Unclassified | ResultCategory::Other => 0,
+        ResultCategory::Website => -10,
+    }
 }
 
 fn match_score(
@@ -422,6 +450,33 @@ fn ascii_bytes_eq_ignore_case(left: &[u8], right: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::result::ResultCategory;
+
+    fn result(id: &str, title: &str, category: ResultCategory) -> SearchResult {
+        SearchResult {
+            id: id.into(),
+            identity: id.into(),
+            title: title.into(),
+            category,
+            aliases: vec![],
+            location: String::new(),
+            launch_target: title.into(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: "test".into(),
+            sources: vec!["test".into()],
+            launch_entries: vec![],
+            actions: vec![],
+            detail: None,
+            description: None,
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
+            icon: None,
+            ranking_bias: 0,
+            visibility: ResultVisibility::Always,
+        }
+    }
+
     #[test]
     fn ranks_prefix_first() {
         let make = |id: &str, title: &str| SearchResult {
@@ -445,9 +500,30 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![make("1", "Calculator"), make("2", "Calendar")]);
         assert_eq!(core.search("calc")[0].title, "Calculator");
+    }
+
+    #[test]
+    fn stronger_match_beats_category_preference() {
+        let app = result("app", "Alphabet", ResultCategory::Application);
+        let website = result("site", "alpha", ResultCategory::Website);
+        assert_eq!(
+            SearchCore::new(vec![app, website]).search("alpha")[0].id,
+            "site"
+        );
+    }
+
+    #[test]
+    fn application_breaks_an_equal_match_tie_before_website() {
+        let app = result("app", "alpha", ResultCategory::Application);
+        let website = result("site", "alpha", ResultCategory::Website);
+        assert_eq!(
+            SearchCore::new(vec![website, app]).search("alpha")[0].id,
+            "app"
+        );
     }
     #[test]
     fn fuzzy_search_matches_typo_by_default() {
@@ -472,6 +548,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         assert_eq!(
             SearchCore::new(vec![item]).search("ntpd")[0].title,
@@ -502,6 +579,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![item]);
         core.replace_fuzzy_search(false);
@@ -531,6 +609,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![make("fuzzy", "Notepad"), make("exact", "ntpd")]);
         assert_eq!(core.search("ntpd")[0].id, "exact");
@@ -559,6 +638,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         assert_eq!(SearchCore::new(vec![item]).search("calc").len(), 1);
     }
@@ -587,6 +667,7 @@ mod tests {
                 package_metadata: None,
                 icon: None,
                 ranking_bias: 0,
+                visibility: ResultVisibility::Always,
             }
         };
         let mut game = make("game", "Portal 2", "Steam", vec!["steam"]);
@@ -620,6 +701,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         assert_eq!(SearchCore::new(vec![item]).search("calc").len(), 1);
     }
@@ -647,6 +729,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         assert!(SearchCore::new(vec![item]).search("weixin").is_empty());
     }
@@ -674,6 +757,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![
             make("long", "My Calculator Tool"),
@@ -705,6 +789,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![make("a", "Calculator A"), make("b", "Calculator B")]);
         core.record_success("b", "calculator");
@@ -734,6 +819,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![
             make("exact", "calc"),
@@ -768,6 +854,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         let core = SearchCore::with_plugins_and_shortcuts(
             vec![notepad],
@@ -803,6 +890,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         let core = SearchCore::with_plugins_and_shortcuts(
             vec![ordinary],
@@ -867,6 +955,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: ResultVisibility::Always,
         };
         let second = SearchResult {
             id: "2".into(),

@@ -21,9 +21,8 @@ tiny-skia = "0.12"
 nucleo-matcher = "0.3.1"
 linkify = "0.11"
 fasteval = "0.2.4"
-steam-vdf-parser = "0.1.1"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
-slint = { version = "~1.18.0", default-features = false, features = ["std", "compat-1-18", "backend-winit", "unstable-winit-030", "renderer-femtovg", "renderer-skia-opengl", "renderer-software", "raw-window-handle-06"] }
+slint = { version = "~1.18.0", default-features = false, features = ["std", "compat-1-18", "backend-winit", "unstable-winit-030", "renderer-femtovg", "renderer-femtovg-wgpu", "renderer-skia", "renderer-skia-opengl", "renderer-software", "raw-window-handle-06"] }
 raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]

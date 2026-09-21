@@ -1,5 +1,5 @@
 use super::{
-    build_result, expand_raw_template, join_command_and_arguments, result_id, ShortcutQuery,
+    build_result, configured_description, expand_raw_template, join_command_and_arguments, result_id, ShortcutQuery,
     ShortcutSpec, COMMAND_PREFIX,
 };
 use crate::{config::ShortcutConfig, platform, result::SearchResult};
@@ -16,12 +16,16 @@ pub(super) fn builtin(query: ShortcutQuery<'_>) -> Option<SearchResult> {
             prefix: COMMAND_PREFIX.into(),
             argument: argument.value.into(),
             display_argument: argument.value.into(),
-            location: shell.label,
+            location: format!(
+                "{} ({})",
+                crate::utils::i18n::tr(query.language, "Run a command using your default shell"),
+                shell.label
+            ),
             target: shell.path,
             launch_arguments: platform::command_shell_arguments(argument.value),
             preview: argument.explicit && argument.value.is_empty(),
             include_query_alias: argument.explicit,
-            icon: None,
+            icon: Some(crate::result::IconSpec::Named("console-line".into())),
         },
     ))
 }
@@ -54,12 +58,12 @@ pub(super) fn configured(
             prefix: shortcut.prefix.clone(),
             argument: argument.value.to_owned(),
             display_argument: argument.value.to_owned(),
-            location: shell.label,
+            location: configured_description(query, shortcut),
             target: shell.path,
             launch_arguments,
             preview,
             include_query_alias: argument.explicit,
-            icon: None,
+            icon: Some(crate::result::IconSpec::Named("console-line".into())),
         },
     ))
 }
@@ -115,6 +119,7 @@ mod tests {
             template: String::new(),
             target: "git".into(),
             arguments: "status --short {query}".into(),
+            description: String::new(),
         };
         let item = configured(query("gs wowie"), &shortcut, 2).expect("configured command");
         assert!(item.launch_arguments.contains("git status --short wowie"));

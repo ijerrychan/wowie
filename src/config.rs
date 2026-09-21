@@ -58,6 +58,10 @@ pub struct ShortcutConfig {
     pub target: String,
     #[serde(default)]
     pub arguments: String,
+    /// Human-facing subtitle for a configured shortcut. Unlike `template`,
+    /// this is presentation data and is never exposed as a generated URL.
+    #[serde(default)]
+    pub description: String,
 }
 
 fn default_shortcut_mode() -> String {
@@ -89,9 +93,6 @@ pub struct ProviderConfig {
     pub start_menu: bool,
     pub desktop: bool,
     pub control_panel: bool,
-    pub steam: bool,
-    pub steam_excluded_app_ids: Vec<String>,
-    pub steam_excluded_name_markers: Vec<String>,
     pub indexed_directories: Vec<PathBuf>,
     pub indexed_extensions: Vec<String>,
 }
@@ -103,9 +104,6 @@ impl Default for ProviderConfig {
             start_menu: true,
             desktop: true,
             control_panel: true,
-            steam: true,
-            steam_excluded_app_ids: vec!["228980".into()],
-            steam_excluded_name_markers: vec!["redistributable".into()],
             indexed_directories: Vec::new(),
             indexed_extensions: vec!["lnk".into(), "url".into(), "exe".into()],
         }
@@ -136,6 +134,7 @@ impl Default for Config {
                 template: "https://www.google.com/search?q={query}".into(),
                 target: String::new(),
                 arguments: String::new(),
+                description: String::new(),
             }],
             plugins: BTreeMap::new(),
             providers: ProviderConfig::default(),
@@ -169,6 +168,7 @@ impl Config {
             self.hotkey = DEFAULT_HOTKEY.into();
         }
         if self.renderer != "femtovg"
+            && self.renderer != "femtovg-wgpu"
             && self.renderer != "skia"
             && self.renderer != "skia-opengl"
             && self.renderer != "software"
@@ -203,6 +203,7 @@ impl Config {
             shortcut.template = shortcut.template.trim().to_string();
             shortcut.target = shortcut.target.trim().to_string();
             shortcut.arguments = shortcut.arguments.trim().to_string();
+            shortcut.description = shortcut.description.trim().to_string();
         }
         self.shortcuts.retain(|shortcut| {
             !shortcut.name.is_empty()
@@ -230,12 +231,6 @@ impl Config {
                 Some((id, plugin))
             })
             .collect();
-        self.providers
-            .steam_excluded_app_ids
-            .retain(|value| !value.trim().is_empty());
-        self.providers
-            .steam_excluded_name_markers
-            .retain(|value| !value.trim().is_empty());
         let mut seen_directories = HashSet::new();
         self.providers.indexed_directories.retain(|path| {
             if path.as_os_str().is_empty() || !path.is_dir() {
@@ -337,7 +332,6 @@ mod tests {
             .shortcuts
             .iter()
             .any(|shortcut| { shortcut.prefix == "g " && shortcut.name == "Search with Google" }));
-        assert!(config.providers.steam);
         assert!(config.providers.desktop);
         assert!(config.providers.indexed_directories.is_empty());
         assert!(config
@@ -346,6 +340,18 @@ mod tests {
             .iter()
             .any(|extension| extension == "exe"));
         assert!(config.plugins.is_empty());
+    }
+
+    #[test]
+    fn supported_renderers_are_preserved_by_normalization() {
+        for renderer in ["femtovg", "femtovg-wgpu", "skia", "skia-opengl", "software"] {
+            let mut config = Config {
+                renderer: renderer.into(),
+                ..Config::default()
+            };
+            config.normalize();
+            assert_eq!(config.renderer, renderer);
+        }
     }
 
     #[test]
@@ -390,6 +396,7 @@ mod tests {
                 template: "https://example.com/?q={query}".into(),
                 target: String::new(),
                 arguments: String::new(),
+                description: String::new(),
             }],
             ..Config::default()
         };

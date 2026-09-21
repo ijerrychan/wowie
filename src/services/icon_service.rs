@@ -16,7 +16,7 @@ use std::{
 const MAX_ICON_DIMENSION: u32 = 128;
 const MAX_EXTERNAL_ICON_DIMENSION: u32 = 64;
 const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_REMOTE_ICON_BYTES: usize = 1 * 1024 * 1024;
+const MAX_REMOTE_ICON_BYTES: usize = 1024 * 1024;
 const MAX_CACHED_ICON_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CACHED_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -303,7 +303,6 @@ fn resolve_spec_with_cache(
     sources: &Mutex<SourceCache>,
 ) -> Option<IconData> {
     match spec {
-        IconSpec::Weather => named_icon("weather", size),
         IconSpec::Calculator => named_icon("calculator", size),
         IconSpec::System(target) => crate::platform::application_icon(target),
         IconSpec::SystemIndexed { path, index } => {
@@ -359,6 +358,9 @@ fn named_icon(name: &str, size: u32) -> Option<IconData> {
             include_bytes!("../../assets/icons/shield-account-outline.svg"),
             size,
         ),
+        "console-line" => {
+            load_svg_bytes(include_bytes!("../../assets/icons/console-line.svg"), size)
+        }
         _ => None,
     }
 }
@@ -473,7 +475,6 @@ fn icon_spec_key(icon: &IconSpec) -> String {
             };
             format!("default-open:{extension}")
         }
-        IconSpec::Weather => "weather".into(),
         IconSpec::Calculator => "calculator".into(),
         IconSpec::Named(name) => format!("named:{name}"),
         IconSpec::Remote(url) => format!("remote:{url}"),
@@ -570,6 +571,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: crate::result::ResultVisibility::Always,
         };
         assert_eq!(icon_source_key(&item), icon_source_key(&item));
     }
@@ -582,6 +584,15 @@ mod tests {
         first.icon = Some(icon.clone());
         second.icon = Some(icon);
         assert_eq!(icon_source_key(&first), icon_source_key(&second));
+    }
+
+    #[test]
+    fn different_system_targets_do_not_share_an_icon_cache_key() {
+        let mut first = test_result("one");
+        let mut second = test_result("two");
+        first.icon = Some(IconSpec::System(PathBuf::from(r"C:\Apps\one.exe")));
+        second.icon = Some(IconSpec::System(PathBuf::from(r"C:\Apps\two.exe")));
+        assert_ne!(icon_source_key(&first), icon_source_key(&second));
     }
 
     #[test]
@@ -620,7 +631,7 @@ mod tests {
 
     #[test]
     fn bundled_svg_icons_render_to_icon_data() {
-        for spec in [IconSpec::Calculator, IconSpec::Weather] {
+        for spec in [IconSpec::Calculator] {
             let icon = resolve_spec(&spec, 40).unwrap();
             assert_eq!((icon.width, icon.height), (40, 40));
             assert!(icon.rgba.iter().any(|channel| *channel != 0));
@@ -710,6 +721,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            visibility: crate::result::ResultVisibility::Always,
         }
     }
 }

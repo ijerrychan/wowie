@@ -23,13 +23,55 @@ fn request(url: &str, timeout: Duration) -> Result<RequestBuilder> {
 }
 
 pub fn get_json<T: for<'de> serde::Deserialize<'de>>(url: &str) -> Result<T> {
-    request(url, Duration::from_secs(4))?
+    let response = request(url, Duration::from_secs(4))?
         .send()
-        .with_context(|| format!("request {url}"))?
-        .error_for_status()
-        .with_context(|| format!("HTTP request failed for {url}"))?
-        .json()
-        .context("decode HTTP JSON")
+        .with_context(|| format!("request {url}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("HTTP request failed for {url} ({status})");
+    }
+    response.json().context("decode HTTP JSON")
+}
+
+/// Submit a small URL-encoded form through the shared bounded HTTP client.
+/// Script plugins use this for APIs, such as DeepL, that intentionally expose
+/// translation only through POST endpoints.
+pub fn post_form_json<T: for<'de> serde::Deserialize<'de>>(
+    url: &str,
+    form: &std::collections::BTreeMap<String, String>,
+) -> Result<T> {
+    let response = client()?
+        .post(url)
+        .timeout(Duration::from_secs(4))
+        .form(form)
+        .send()
+        .with_context(|| format!("request {url}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("HTTP request failed for {url} ({status})");
+    }
+    response.json().context("decode HTTP JSON")
+}
+
+/// Submit a JSON object through the shared bounded HTTP client.
+pub fn post_json_with_headers<T: for<'de> serde::Deserialize<'de>>(
+    url: &str,
+    body: &serde_json::Value,
+    headers: &std::collections::BTreeMap<String, String>,
+) -> Result<T> {
+    let mut request = client()?.post(url).timeout(Duration::from_secs(4));
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
+    let response = request
+        .json(body)
+        .send()
+        .with_context(|| format!("request {url}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("HTTP request failed for {url} ({status})");
+    }
+    response.json().context("decode HTTP JSON")
 }
 
 pub fn get_bytes(url: &str, max_bytes: usize) -> Result<Vec<u8>> {

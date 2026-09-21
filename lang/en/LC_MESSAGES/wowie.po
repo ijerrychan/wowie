@@ -72,6 +72,34 @@ msgid "Open website"
 msgstr "Open website"
 
 msgctxt "Launcher"
+msgid "Visit the internet with your default browser"
+msgstr "Visit the internet with your default browser"
+
+msgctxt "Launcher"
+msgid "Run a command using your default shell"
+msgstr "Run a command using your default shell"
+
+msgctxt "Launcher"
+msgid "Custom shortcut"
+msgstr "Custom shortcut"
+
+msgctxt "Launcher"
+msgid "Search files with Everything; all Everything syntax is supported"
+msgstr "Search files with Everything; all Everything syntax is supported"
+
+msgctxt "Launcher"
+msgid "Search files with Everything; all Everything syntax is supported. Press Enter to view the usage guide."
+msgstr "Search files with Everything; all Everything syntax is supported. Press Enter to view the usage guide."
+
+msgctxt "Launcher"
+msgid "Everything search syntax"
+msgstr "Everything search syntax"
+
+msgctxt "Launcher"
+msgid "Everything accepts its complete native query syntax, including filename filters, paths, operators, and regular expressions."
+msgstr "Everything accepts its complete native query syntax, including filename filters, paths, operators, and regular expressions."
+
+msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 
@@ -94,6 +122,22 @@ msgstr "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
 msgctxt "Launcher"
 msgid "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
 msgstr "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Enter  Open     Esc  Back"
+msgstr "↑ ↓  Navigate     Enter  Open     Esc  Back"
+
+msgctxt "Launcher"
+msgid "↑ ↓ ← →  Navigate     Enter  Open     Esc  Back"
+msgstr "↑ ↓ ← →  Navigate     Enter  Open     Esc  Back"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"
+msgstr "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"
+
+msgctxt "Launcher"
+msgid "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"
+msgstr "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"
 
 msgctxt "ContextMenu"
 msgid "Open containing folder"
