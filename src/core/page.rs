@@ -7,7 +7,7 @@
 ///
 /// A shortcut is only the syntax that selects this engine. It is not a
 /// result category and does not describe a row in the result list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SearchEngineMode {
     Execute,
     Search,
@@ -25,10 +25,14 @@ impl SearchEngineMode {
 }
 
 /// State for the currently active non-default search engine.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SearchEngineSession {
     pub id: String,
     pub title: String,
+    /// Text shown in the launcher input while this engine owns the query.
+    /// Older persisted sessions fall back to their title in the UI.
+    #[serde(default)]
+    pub placeholder: String,
     pub prefix: String,
     pub argument: String,
     pub mode: SearchEngineMode,
@@ -65,6 +69,7 @@ mod tests {
         let context = SearchContext::Engine(SearchEngineSession {
             id: "test:engine".into(),
             title: "Test".into(),
+            placeholder: "Search test".into(),
             prefix: "t ".into(),
             argument: "query".into(),
             mode: SearchEngineMode::Search,

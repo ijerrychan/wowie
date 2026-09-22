@@ -1,6 +1,6 @@
 import { VerticalBox, ListView } from "std-widgets.slint";
 
-export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, icon_kind: string, shortcut_prefix: string, shortcut_prefix_width: int, presentation: string }
+export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, icon_kind: string, favorite: bool, shortcut_prefix: string, shortcut_prefix_width: int, presentation: string }
 export struct ContextActionRow { id: string, title: string, subtitle: string, kind: string, icon: image, icon_kind: string, shortcut: string }
 export struct DetailBlock { kind: string, label: string, value: string, color: string, secondary: string, icon: image, height: int }
 
@@ -14,6 +14,9 @@ component BuiltinIcon inherits Image {
         : root.kind == "checklist" ? @image-url("../assets/icons/list-checks.svg")
         : root.kind == "folder-open" ? @image-url("../assets/icons/folder-open-outline.svg")
         : root.kind == "shield-account" ? @image-url("../assets/icons/shield-account-outline.svg")
+        : root.kind == "content-copy" ? @image-url("../assets/icons/content-copy.svg")
+        : root.kind == "star" ? @image-url("../assets/icons/star.svg")
+        : root.kind == "magnify" ? @image-url("../assets/icons/magnify.svg")
         : root.kind == "arrow-left-dark" ? @image-url("../assets/icons/arrow-left-dark.svg")
         : root.kind == "arrow-left-light" ? @image-url("../assets/icons/arrow-left-light.svg")
         : @image-url("../wowie.png");
@@ -88,11 +91,11 @@ export component Launcher inherits Window {
     // With details open, both columns contribute to the window's required
     // height. Using only the detail card here clipped long result lists to a
     // short plugin detail content.
-    preferred-height: search-field.text == "" && !root.shortcut-session-active && root.results.length == 0 ? root.empty-window-height : root.result-window-height;
+    preferred-height: root.empty-root-collapsed ? root.empty-window-height : root.result-window-height;
     // Keep the empty launcher compact. Once a query has results, preserve
     // enough room for five rows while allowing the user to resize larger.
-    min-height: search-field.text == "" && !root.shortcut-session-active && root.results.length == 0 ? root.empty-window-height : root.minimum-results-window-height;
-    max-height: search-field.text == "" && !root.shortcut-session-active && root.results.length == 0 ? root.empty-window-height : 1000000px;
+    min-height: root.empty-root-collapsed ? root.empty-window-height : root.minimum-results-window-height;
+    max-height: root.empty-root-collapsed ? root.empty-window-height : 1000000px;
     background: transparent;
 
     in-out property <int> window-width: 900;
@@ -109,6 +112,11 @@ export component Launcher inherits Window {
     in property <bool> search-icon-animation-enabled: true;
     in-out property <bool> search-icon-is-shortcut: false;
     in-out property <bool> detail-panel-visible: false;
+    in-out property <bool> empty-state-detail-active: false;
+    in property <string> empty-state-title: "";
+    in property <string> empty-state-description: "";
+    in property <image> empty-state-icon;
+    in property <string> empty-state-icon-kind: "";
     in property <string> detail-title: "";
     in property <string> detail-subtitle: "";
     in property <string> detail-source: "";
@@ -127,8 +135,10 @@ export component Launcher inherits Window {
     in-out property <int> query-history-restore-id: 0;
     in-out property <int> query-history-cursor: 0;
     in property <bool> shortcut-session-active: false;
+    in property <bool> show-results-on-empty-query: true;
     in property <bool> shortcut-session-execute-mode: false;
     in property <string> shortcut-session-prefix: "";
+    in property <string> shortcut-session-placeholder: "";
     in property <bool> context-menu-open: false;
     in property <bool> context-menu-available: false;
     in-out property <int> selected-index: -1;
@@ -150,6 +160,7 @@ export component Launcher inherits Window {
     callback shortcut-back-requested;
     callback search-back-requested;
     callback session-execute-requested;
+    callback empty-state-activated;
 
     changed query-history-restore-id => {
         search-field.set-selection-offsets(root.query-history-cursor, root.query-history-cursor);
@@ -166,14 +177,15 @@ export component Launcher inherits Window {
     private property <length> result-row-height: root.list-item-height;
     private property <length> result-icon-size: 24px;
     private property <length> empty-state-padding: 8px;
-    private property <length> content-bottom-padding: search-field.text == "" && !root.shortcut-session-active && root.results.length == 0 ? root.empty-state-padding : 4px;
+    private property <bool> empty-root-collapsed: search-field.text == "" && !root.shortcut-session-active && root.selected-index < 0 && !root.show-results-on-empty-query;
+    private property <length> content-bottom-padding: root.empty-root-collapsed ? root.empty-state-padding : 4px;
     private property <length> empty-window-height: 2 * root.window-inset + root.search-row-height + 2 * root.empty-state-padding;
     private property <length> minimum-results-window-height: 100px + 5 * root.result-row-height;
     in-out property <length> result-window-height: root.minimum-results-window-height;
-    out property <bool> result-mode: search-field.text != "" || root.shortcut-session-active || root.results.length > 0;
+    out property <bool> result-mode: search-field.text != "" || root.shortcut-session-active || root.selected-index >= 0 || root.show-results-on-empty-query;
     private property <length> operation-hint-height: 24px;
     private property <length> context-menu-gap: 6px;
-    private property <length> no-results-height: 76px;
+    private property <length> no-results-height: 160px;
     private property <length> window-inset: 4px;
     private property <length> content-padding: 10px;
     private property <length> content-spacing: 8px;
@@ -208,8 +220,8 @@ export component Launcher inherits Window {
     private property <length> detail-block-spacing: 6px;
     private property <length> detail-action-footer-extra: 50px;
     private property <length> detail-panel-content-height: root.detail-content-footer-height + root.detail-content-height + (root.detail-actions.length > 0 ? root.detail-action-footer-extra : 0px);
-    private property <length> operation-hint-spacing: search-field.text != "" || root.shortcut-session-active ? root.content-spacing + root.operation-hint-height : 0px;
-    private property <length> no-results-spacing: (search-field.text != "" || root.shortcut-session-active) && root.results.length == 0 ? root.content-spacing + root.no-results-height + root.content-spacing : 0px;
+    private property <length> operation-hint-spacing: root.result-mode ? root.content-spacing + root.operation-hint-height : 0px;
+    private property <length> no-results-spacing: 0px;
     // Keep the session transition geometry together so the search field and
     // both icons always move as one unit.
     private property <length> session-back-width: 22px;
@@ -217,15 +229,22 @@ export component Launcher inherits Window {
     private property <length> default-icon-x: 14px;
     private property <length> session-input-x: 60px;
     private property <length> default-input-x: 48px;
+    private property <length> search-input-scroll-x: 0px;
     private property <duration> session-transition-duration: 150ms;
     private property <duration> session-fade-duration: 100ms;
     private property <bool> grid-detail-active: (root.view-mode == "grid" || root.detail-panel-fullscreen) && root.detail-panel-active;
     private property <length> available-results-height: max(0px, root.height - 2 * root.window-inset - root.empty-state-padding - root.content-bottom-padding - (root.grid-detail-active ? 0px : root.search-row-height) - root.content-spacing - root.operation-hint-spacing - root.no-results-spacing);
     private property <length> visible-results-area-height: root.available-results-height;
-    private property <bool> detail-visible: root.detail-panel-visible && root.selected-index >= 0;
+    private property <bool> detail-visible: root.detail-panel-visible && (root.selected-index >= 0 || root.empty-state-detail-active);
     private property <float> detail-progress: root.detail-visible ? 1.0 : 0.0;
     animate detail-progress { duration: 180ms; easing: ease-out-back; }
     private property <float> detail-visual-progress: min(1.0, max(0.0, root.detail-progress));
+    // Fade and lift the result surface into view when the compact root search
+    // expands. This stays inside the clipped results area, so the native
+    // window resize and its screen-position correction remain independent.
+    private property <float> results-reveal-progress: root.result-mode ? 1.0 : 0.0;
+    animate results-reveal-progress { duration: 180ms; easing: ease-out-back; }
+    private property <length> results-reveal-offset: (1.0 - root.results-reveal-progress) * 10px;
     private property <length> detail-panel-width: (root.width - 2 * root.window-inset - 2 * root.content-padding) * root.detail-panel-share - root.detail-panel-alignment-shift;
     private property <bool> detail-panel-active: root.detail-visible || root.detail-progress > 0.0;
     private property <length> grid-icon-size: 44px;
@@ -338,10 +357,9 @@ export component Launcher inherits Window {
             search-field.focus();
         }
     }
-    // Re-emit after replacing the model even when the calculated range stays
-    // unchanged. Without this, newly visible rows can wait for a selection
-    // or scroll event before their asynchronous icons are requested.
-    changed results => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
+    // Result-model changes are re-emitted by the host on the next event-loop
+    // turn. Keeping this out of the synchronous change-handler chain avoids
+    // recursive ListView instantiation when a page is appended.
     changed visible-results-area-height => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
 
     Rectangle {
@@ -380,7 +398,9 @@ export component Launcher inherits Window {
                     Rectangle {
                         x: 0px; y: 6px; width: root.session-back-width; height: 28px;
                         border-radius: 7px;
-                        background: back-hit.has-hover ? root.surface-hover : transparent;
+                        // Do not let the hover pill linger while this button
+                        // slides out after returning from a search engine.
+                        background: root.shortcut-session-active && back-hit.has-hover ? root.surface-hover : transparent;
                         BuiltinIcon { x: 5px; y: 8px; width: 12px; height: 12px; kind: root.dark-mode ? "arrow-left-light" : "arrow-left-dark"; }
                     }
                 }
@@ -394,55 +414,76 @@ export component Launcher inherits Window {
                     transition-progress: root.search-icon-transition-progress;
                     transition-animation-enabled: root.search-icon-animation-enabled;
                 }
-                Text { x: root.shortcut-session-active ? root.session-input-x : root.default-input-x; y: 0px; width: parent.width - 126px; height: parent.height; text: @tr("Search applications"); color: root.text-tertiary; font-size: 16px; vertical-alignment: center; visible: search-field.text == ""; animate x { duration: root.session-transition-duration; easing: ease-out-back; } }
-                search-field := TextInput {
+                Rectangle {
                     x: root.shortcut-session-active ? root.session-input-x : root.default-input-x; y: 0px; width: parent.width - (root.shortcut-session-active ? 138px : 126px); height: root.search-row-height;
-                    color: root.text-primary; font-size: 16px; vertical-alignment: center; single-line: true;
+                    background: transparent;
+                    clip: true;
                     animate x { duration: root.session-transition-duration; easing: ease-out-back; }
                     animate width { duration: root.session-transition-duration; easing: ease-out-back; }
-                    selection-background-color: root.accent-color;
-                    selection-foreground-color: #ffffff;
-                    text <=> root.query-text;
-                    edited => {
-                        let normalized = root.normalize-query(self.text);
-                        if (normalized != self.text) {
-                            self.text = normalized;
-                        }
-                        root.query-changed(self.text);
+                    Text {
+                        x: root.search-input-scroll-x; y: 0px; width: parent.width - root.search-input-scroll-x; height: parent.height;
+                        text: root.shortcut-session-active ? root.shortcut-session-placeholder : @tr("Search apps, files, settings, and more");
+                        color: root.text-tertiary; font-size: 16px; vertical-alignment: center;
+                        visible: search-field.text == "";
                     }
-                    key-pressed(event) => {
-                        if (event.text == Key.DownArrow) {
-                            root.move-selection-down();
-                            EventResult.accept
-                        } else if (event.text == Key.UpArrow) {
-                            root.move-selection-up();
-                            EventResult.accept
-                        } else if (root.view-mode == "grid" && event.text == Key.LeftArrow) {
-                            root.move-grid-selection-left();
-                            EventResult.accept
-                        } else if (root.view-mode == "grid" && event.text == Key.RightArrow) {
-                            root.move-grid-selection-right();
-                            EventResult.accept
-                        } else if ((event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) || (event.text == "m" && event.modifiers.control)) && root.selected-index >= 0) {
-                            root.context-menu-requested(root.selected-index, true);
-                            EventResult.accept
-                        } else if (event.text == Key.Return && root.shortcut-session-execute-mode) {
-                            root.session-execute-requested();
-                            EventResult.accept
-                        } else if (event.text == Key.Return && root.selected-index >= 0) {
-                            root.launch-requested(root.selected-index);
-                            EventResult.accept
-                            } else if (event.text == Key.Escape) {
-                            if (root.grid-detail-active) {
-                                root.detail-back-requested();
-                            } else if (root.shortcut-session-active) {
-                                root.shortcut-back-requested();
-                            } else {
-                                root.dismiss-requested();
+                    search-field := TextInput {
+                        x: root.search-input-scroll-x; y: 0px; width: max(parent.width, self.preferred-width); height: parent.height;
+                        color: root.text-primary; font-size: 16px; vertical-alignment: center; horizontal-alignment: left; single-line: true;
+                        selection-background-color: root.accent-color;
+                        selection-foreground-color: #ffffff;
+                        text <=> root.query-text;
+                        cursor-position-changed(cursor-position) => {
+                            let margin = 6px;
+                            if (cursor-position.x + root.search-input-scroll-x < margin) {
+                                root.search-input-scroll-x = margin - cursor-position.x;
+                            } else if (cursor-position.x + root.search-input-scroll-x > parent.width - margin - self.text-cursor-width) {
+                                root.search-input-scroll-x = parent.width - margin - cursor-position.x - self.text-cursor-width;
                             }
-                            EventResult.accept
-                        } else {
-                            EventResult.reject
+                        }
+                        edited => {
+                            let normalized = root.normalize-query(self.text);
+                            if (normalized != self.text) {
+                                self.text = normalized;
+                            }
+                            root.query-changed(self.text);
+                        }
+                        key-pressed(event) => {
+                            if (event.text == Key.DownArrow) {
+                                root.move-selection-down();
+                                EventResult.accept
+                            } else if (event.text == Key.UpArrow) {
+                                root.move-selection-up();
+                                EventResult.accept
+                            } else if (root.view-mode == "grid" && event.text == Key.LeftArrow) {
+                                root.move-grid-selection-left();
+                                EventResult.accept
+                            } else if (root.view-mode == "grid" && event.text == Key.RightArrow) {
+                                root.move-grid-selection-right();
+                                EventResult.accept
+                            } else if ((event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) || (event.text == "m" && event.modifiers.control)) && root.selected-index >= 0) {
+                                root.context-menu-requested(root.selected-index, true);
+                                EventResult.accept
+                            } else if (event.text == Key.Return && root.shortcut-session-execute-mode) {
+                                root.session-execute-requested();
+                                EventResult.accept
+                            } else if (event.text == Key.Return && root.selected-index < 0 && root.empty-state-title != "") {
+                                root.empty-state-activated();
+                                EventResult.accept
+                            } else if (event.text == Key.Return && root.selected-index >= 0) {
+                                root.launch-requested(root.selected-index);
+                                EventResult.accept
+                            } else if (event.text == Key.Escape) {
+                                if (root.grid-detail-active) {
+                                    root.detail-back-requested();
+                                } else if (root.shortcut-session-active) {
+                                    root.shortcut-back-requested();
+                                } else {
+                                    root.dismiss-requested();
+                                }
+                                EventResult.accept
+                            } else {
+                                EventResult.reject
+                            }
                         }
                     }
                 }
@@ -455,7 +496,8 @@ export component Launcher inherits Window {
 
                 results-list := ListView {
                     visible: root.view-mode == "list";
-                    x: 0px; y: 0px;
+                    x: 0px; y: root.results-reveal-offset;
+                    opacity: min(1.0, max(0.0, root.results-reveal-progress));
                     // Grid mode keeps its full width because the detail view
                     // overlays the grid instead of becoming a side column.
                     width: root.view-mode == "grid"
@@ -505,7 +547,7 @@ export component Launcher inherits Window {
                     BuiltinIcon { visible: row.icon_kind != ""; x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; kind: row.icon_kind; }
                     if row.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row.icon; image-fit: contain; }
                     Rectangle {
-                        x: 60px; y: 0px; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px : parent.width - 60px - parent.shortcut-card-width; height: parent.height; background: transparent;
+                        x: 60px; y: 0px; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px - (row.favorite ? 22px : 0px) : parent.width - 60px - parent.shortcut-card-width - (row.favorite ? 40px : 0px); height: parent.height; background: transparent;
                         Text { x: 0px; y: row-text-top; width: parent.width; height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 13px : row.presentation == "grid" ? 15px : 14px; font-weight: row.presentation == "grid" ? 400 : 500; vertical-alignment: center; overflow: elide; }
                         Text { x: 0px; y: row-text-top + row-title-height + row-text-gap; width: parent.width - 4px; height: row-description-height; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "control-panel" ? @tr("Control Panel") : row.location_kind == "application" && row.location == "" ? @tr("Application") : row.location; color: root.text-secondary; font-size: row.presentation == "compact" ? 10px : 11px; vertical-alignment: center; overflow: elide; }
                     }
@@ -516,12 +558,19 @@ export component Launcher inherits Window {
                         visible: row.shortcut_prefix != "" && !root.detail-visible;
                         Text { width: parent.width - 8px; height: parent.height; x: 4px; text: row.shortcut_prefix; color: root.text-secondary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
                     }
+                    if row.favorite : BuiltinIcon {
+                        x: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 26px : parent.width - shortcut-card-width - 32px;
+                        y: (root.result-row-height - 16px) / 2;
+                        width: 16px; height: 16px; kind: "star";
+                    }
                 }
                 }
 
                 grid-results := Flickable {
                     visible: root.view-mode == "grid";
-                    x: 0px; y: 0px; width: results-list.width; height: parent.height;
+                    x: 0px; y: root.results-reveal-offset;
+                    opacity: min(1.0, max(0.0, root.results-reveal-progress));
+                    width: results-list.width; height: parent.height;
                     content-width: self.width;
                     content-height: max(self.height, root.grid-row-count * root.grid-row-height + root.grid-gap);
                     interactive: self.content-height > self.height;
@@ -566,6 +615,12 @@ export component Launcher inherits Window {
                             }
                             BuiltinIcon { visible: row.icon_kind != ""; x: (parent.width - root.grid-icon-size) / 2; y: root.grid-icon-top; width: root.grid-icon-size; height: root.grid-icon-size; kind: row.icon_kind; }
                             if row.icon_kind == "" : Image { x: (parent.width - root.grid-icon-size) / 2; y: root.grid-icon-top; width: root.grid-icon-size; height: root.grid-icon-size; source: row.icon; image-fit: contain; }
+                            if row.favorite : Rectangle {
+                                x: parent.width - 24px; y: 7px; width: 18px; height: 18px;
+                                border-radius: 9px;
+                                background: root.dark-mode ? #503b1c : #fff0c4;
+                                BuiltinIcon { x: 3px; y: 3px; width: 12px; height: 12px; kind: "star"; }
+                            }
                             Text {
                                 x: root.grid-title-inset;
                                 y: root.grid-title-top;
@@ -732,14 +787,23 @@ export component Launcher inherits Window {
                         detail-back-button := TouchArea {
                             clicked => { root.detail-back-requested(); }
                         }
-                        Text { width: parent.width; height: parent.height; text: "←"; color: root.text-secondary; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
+                        BuiltinIcon { x: 12px; y: 10px; width: 12px; height: 12px; kind: root.dark-mode ? "arrow-left-light" : "arrow-left-dark"; }
                     }
+                }
+                if (root.results.length == 0 && (search-field.text != "" || root.shortcut-session-active) && !root.detail-visible) : Rectangle {
+                    x: 0px;
+                    y: max(0px, (parent.height - root.no-results-height) / 2);
+                    width: parent.width; height: root.no-results-height; background: transparent;
+                    TouchArea { clicked => { if (root.empty-state-title != "") { root.empty-state-activated(); } } }
+                    if root.empty-state-icon-kind != "" : BuiltinIcon { x: (parent.width - 44px) / 2; y: 0px; width: 44px; height: 44px; kind: root.empty-state-icon-kind; }
+                    if root.empty-state-icon-kind == "" && root.empty-state-icon.width > 0 : Image { x: (parent.width - 44px) / 2; y: 0px; width: 44px; height: 44px; source: root.empty-state-icon; image-fit: contain; }
+                    if root.empty-state-icon-kind == "" && root.empty-state-icon.width == 0 : BuiltinIcon { x: (parent.width - 36px) / 2; y: 4px; width: 36px; height: 36px; kind: "magnify"; }
+                    Text { x: 24px; y: 52px; width: parent.width - 48px; height: 40px; text: root.empty-state-title != "" ? root.empty-state-title : @tr("No results"); color: root.text-secondary; font-size: 15px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; overflow: clip; }
+                    if root.empty-state-description != "" : Text { x: 24px; y: 98px; width: parent.width - 48px; height: 58px; text: root.empty-state-description; color: root.text-tertiary; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; overflow: clip; }
                 }
             }
 
-            if (root.results.length == 0 && (search-field.text != "" || root.shortcut-session-active)) : Rectangle { height: root.no-results-height; background: transparent; Text { text: @tr("No results"); color: root.text-secondary; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; } }
-
-            if (search-field.text != "" || root.shortcut-session-active) : Rectangle {
+            if (root.result-mode) : Rectangle {
                 height: root.operation-hint-height; background: transparent;
                 Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: root.border; }
                 Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.view-mode == "grid" ? (root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓ ← →  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓ ← →  Navigate     Enter  Open     Esc  Hide"))) : (root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Esc  Hide"))); color: root.text-tertiary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
@@ -846,7 +910,7 @@ export component ContextMenu inherits Window {
             Text {
                 x: 36px; y: action.subtitle == "" ? 0px : 2px; width: action.shortcut == "" ? parent.width - 50px : parent.width - 162px;
                 height: action.subtitle == "" ? parent.height : 16px;
-                text: action.kind == "section" ? @tr("Other launch entries") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.title;
+                text: action.kind == "section" ? @tr("Other launch entries") : action.id == "add-favorite" ? @tr("Add to favorites") : action.id == "remove-favorite" ? @tr("Remove from favorites") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.id == "copy-title" ? @tr("Copy title") : action.id == "copy-path" ? @tr("Copy path") : action.id == "copy-url" ? @tr("Copy URL") : action.title;
                 color: action.kind == "section" ? root.text-secondary : root.text-primary;
                 font-size: action.kind == "section" ? 11px : 13px;
                 vertical-alignment: center; overflow: elide;

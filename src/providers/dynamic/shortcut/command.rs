@@ -114,6 +114,7 @@ mod tests {
         let shortcut = ShortcutConfig {
             name: "Git status".into(),
             prefix: "gs".into(),
+            placeholder: String::new(),
             shortcut_type: "command".into(),
             mode: "execute".into(),
             template: String::new(),

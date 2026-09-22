@@ -20,6 +20,7 @@ use std::{
 
 /// Default delay for engines that do not opt into an immediate search.
 pub const DEFAULT_SEARCH_DEBOUNCE: Duration = Duration::from_millis(30);
+const MAX_SEARCH_DEBOUNCE_MS: u64 = 2_000;
 
 /// Behaviour shared by every search engine, including plugin engines.
 ///
@@ -36,6 +37,12 @@ pub struct SearchEngineSettings {
     /// A bounded, engine-wide tie breaker. It is intentionally applied only
     /// after lexical relevance, user history and category preference.
     pub ranking_bias: i32,
+    /// Number of recent successful session queries retained for this engine.
+    /// Zero disables query history. Values are capped by the host.
+    pub history_limit: usize,
+    /// Delay interactive session queries until input has been idle for this
+    /// many milliseconds. This is useful for remote APIs that charge per call.
+    pub search_debounce_ms: u64,
 }
 
 impl Default for SearchEngineSettings {
@@ -44,8 +51,19 @@ impl Default for SearchEngineSettings {
             participates_in_root: true,
             respect_global_fuzzy_search: true,
             ranking_bias: 0,
+            history_limit: 0,
+            search_debounce_ms: DEFAULT_SEARCH_DEBOUNCE.as_millis() as u64,
         }
     }
+}
+
+/// A recent query persisted after a successful action in a search-engine
+/// session. `result_id` is stable for that engine/query pair and lets an
+/// engine materialize independently actionable history rows.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct SearchHistoryEntry {
+    pub query: String,
+    pub result_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +85,13 @@ pub trait SearchEngineProvider: Send + Sync {
     /// are ordinary results; none is required to be a session entry.
     fn query_root(&self, query: &str) -> Vec<SearchResult>;
 
+    /// Optional content for an empty result surface. This is presentation
+    /// state, not a selectable result row, so engines can describe a session
+    /// without manufacturing an intro item.
+    fn empty_state(&self, _context: &SearchContext, _query: &str) -> Option<SearchResult> {
+        None
+    }
+
     /// Engines that host several independently configured engines (notably
     /// the plugin host) may preserve settings per returned result.
     fn query_root_with_settings(&self, query: &str) -> Vec<EngineSearchResult> {
@@ -80,8 +105,12 @@ pub trait SearchEngineProvider: Send + Sync {
     /// Delay before dispatching a query to this engine. Providers with local,
     /// low-latency backends may opt out; remote or expensive engines can use
     /// a larger value without teaching the UI about provider identities.
-    fn search_debounce(&self, _session: &SearchEngineSession) -> Duration {
-        DEFAULT_SEARCH_DEBOUNCE
+    fn search_debounce(&self, session: &SearchEngineSession) -> Duration {
+        Duration::from_millis(
+            self.settings_for_session(session)
+                .search_debounce_ms
+                .min(MAX_SEARCH_DEBOUNCE_MS),
+        )
     }
 
     /// Results owned after this engine has been entered. Most search engines
@@ -89,6 +118,37 @@ pub trait SearchEngineProvider: Send + Sync {
     /// the surface to the result selected by its shortcut.
     fn query_active(&self, _session: &SearchEngineSession, query: &str) -> Vec<SearchResult> {
         self.query_root(query)
+    }
+
+    /// Optional results shown for an empty session query. Providers that
+    /// support persistent history can turn the stored queries into ordinary,
+    /// actionable SearchResults. Plugin engines receive the entries in the
+    /// query callback's `search_history` field instead.
+    fn query_history(
+        &self,
+        _session: &SearchEngineSession,
+        _history: &[SearchHistoryEntry],
+    ) -> Vec<SearchResult> {
+        Vec::new()
+    }
+
+    fn query_active_with_history(
+        &self,
+        session: &SearchEngineSession,
+        query: &str,
+        history: &[SearchHistoryEntry],
+    ) -> Vec<SearchResult> {
+        let mut results = self.query_active(session, query);
+        if query.trim().is_empty() && !history.is_empty() {
+            results.extend(self.query_history(session, history));
+        }
+        results
+    }
+
+    /// Engine-specific settings may vary by selected session (for example,
+    /// each plugin can declare a different history limit).
+    fn settings_for_session(&self, _session: &SearchEngineSession) -> SearchEngineSettings {
+        self.settings()
     }
 
     /// Load a subsequent page for an entered engine. `offset` is the number
@@ -133,6 +193,26 @@ pub(crate) fn find_plugin_action<'a>(
     item: &'a SearchResult,
     requested_action_id: &str,
 ) -> Result<(&'a str, &'a str)> {
+    if let Some(context_action_id) = requested_action_id.strip_prefix("context-menu:") {
+        if let Some((plugin_id, action_id)) = item.actions.iter().find_map(|action| {
+            let crate::result::Action::ContextMenu(action) = action else {
+                return None;
+            };
+            if action.id != context_action_id {
+                return None;
+            }
+            match &action.behavior {
+                crate::result::ContextMenuBehavior::Plugin {
+                    plugin_id,
+                    action_id,
+                } => Some((plugin_id.as_str(), action_id.as_str())),
+                _ => None,
+            }
+        }) {
+            return Ok((plugin_id, action_id));
+        }
+    }
+
     if let Some(action) = item.actions.iter().find_map(|action| {
         if action.domain() != crate::result::ActionDomain::Plugin {
             return None;
@@ -230,13 +310,18 @@ impl ProviderRegistry {
             .cloned()
     }
 
-    pub fn query(&self, context: &SearchContext, query: &str) -> Vec<EngineSearchResult> {
+    pub fn query(
+        &self,
+        context: &SearchContext,
+        query: &str,
+        history: &[SearchHistoryEntry],
+    ) -> Vec<EngineSearchResult> {
         if let SearchContext::Engine(session) = context {
             for engine in &self.engines {
                 if let Ok(engine) = engine.lock() {
                     if engine.owns_session(session) {
                         return engine
-                            .query_active(session, query)
+                            .query_active_with_history(session, query, history)
                             .into_iter()
                             .map(|item| EngineSearchResult {
                                 item,
@@ -261,6 +346,36 @@ impl ProviderRegistry {
             }
         }
         results
+    }
+
+    pub fn history_limit(&self, session: &SearchEngineSession) -> usize {
+        self.engines
+            .iter()
+            .find_map(|engine| {
+                engine.lock().ok().and_then(|engine| {
+                    engine
+                        .owns_session(session)
+                        .then(|| engine.settings_for_session(session).history_limit)
+                })
+            })
+            .unwrap_or_default()
+            .min(crate::ranking::MAX_ENGINE_SEARCH_HISTORY)
+    }
+
+    pub fn empty_state(&self, context: &SearchContext, query: &str) -> Option<SearchResult> {
+        for engine in &self.engines {
+            if let Ok(engine) = engine.lock() {
+                if context
+                    .session()
+                    .is_none_or(|session| engine.owns_session(session))
+                {
+                    if let Some(state) = engine.empty_state(context, query) {
+                        return Some(state);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Request more rows only from the provider that owns an entered search
@@ -444,5 +559,67 @@ impl SearchEngineProvider for IndexedSearchEngine {
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod context_action_tests {
+    use super::find_plugin_action;
+    use crate::result::{
+        Action, ContextMenuAction, ContextMenuBehavior, ResultCategory, ResultVisibility,
+        SearchResult,
+    };
+
+    #[test]
+    fn plugin_context_actions_use_a_separate_action_id_namespace() {
+        let item = SearchResult {
+            id: "plugin:weather:current".into(),
+            identity: "plugin:weather:current".into(),
+            title: "Weather".into(),
+            category: ResultCategory::Other,
+            aliases: Vec::new(),
+            location: String::new(),
+            launch_target: Default::default(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: "plugin:weather".into(),
+            sources: vec!["plugin:weather".into()],
+            launch_entries: Vec::new(),
+            actions: vec![
+                Action::Plugin {
+                    plugin_id: "other-plugin".into(),
+                    action_id: "refresh".into(),
+                    icon: None,
+                },
+                Action::ContextMenu(ContextMenuAction {
+                    id: "refresh-weather".into(),
+                    title: "Refresh".into(),
+                    subtitle: String::new(),
+                    icon: None,
+                    behavior: ContextMenuBehavior::Plugin {
+                        plugin_id: "weather".into(),
+                        action_id: "refresh".into(),
+                    },
+                }),
+            ],
+            detail: None,
+            description: None,
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
+            icon: None,
+            ranking_bias: 0,
+            allow_favorite: true,
+            visibility: ResultVisibility::Always,
+        };
+
+        assert_eq!(
+            find_plugin_action(&item, "context-menu:refresh-weather").unwrap(),
+            ("weather", "refresh")
+        );
+        assert_eq!(
+            find_plugin_action(&item, "refresh").unwrap(),
+            ("other-plugin", "refresh")
+        );
     }
 }

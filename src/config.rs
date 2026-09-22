@@ -37,6 +37,7 @@ pub struct Config {
     pub hide_on_focus_loss: bool,
     pub show_advanced_details: bool,
     pub show_advanced_launch_entries: bool,
+    pub show_results_on_empty_query: bool,
     pub fuzzy_search: bool,
     pub shortcuts: Vec<ShortcutConfig>,
     pub plugins: BTreeMap<String, PluginConfig>,
@@ -47,6 +48,9 @@ pub struct Config {
 pub struct ShortcutConfig {
     pub name: String,
     pub prefix: String,
+    /// Optional text shown in the launcher input after entering this engine.
+    #[serde(default)]
+    pub placeholder: String,
     #[serde(rename = "type", default)]
     pub shortcut_type: String,
     /// Interaction mode after the prefix is recognized. Existing shortcut
@@ -125,10 +129,12 @@ impl Default for Config {
             hide_on_focus_loss: true,
             show_advanced_details: false,
             show_advanced_launch_entries: false,
+            show_results_on_empty_query: true,
             fuzzy_search: true,
             shortcuts: vec![ShortcutConfig {
                 name: "Search with Google".into(),
                 prefix: "g ".into(),
+                placeholder: String::new(),
                 shortcut_type: "url".into(),
                 mode: "execute".into(),
                 template: "https://www.google.com/search?q={query}".into(),
@@ -192,6 +198,7 @@ impl Config {
         for shortcut in &mut self.shortcuts {
             shortcut.name = shortcut.name.trim().to_string();
             shortcut.prefix = normalize_shortcut_prefix(&shortcut.prefix);
+            shortcut.placeholder = shortcut.placeholder.trim().to_string();
             shortcut.shortcut_type = shortcut.shortcut_type.trim().to_ascii_lowercase();
             if shortcut.shortcut_type.is_empty() {
                 shortcut.shortcut_type = "url".into();
@@ -391,6 +398,7 @@ mod tests {
             shortcuts: vec![ShortcutConfig {
                 name: "Search".into(),
                 prefix: "  g  ".into(),
+                placeholder: String::new(),
                 shortcut_type: "url".into(),
                 mode: "execute".into(),
                 template: "https://example.com/?q={query}".into(),

@@ -8,25 +8,47 @@ use crate::{
     config::PluginConfig,
     page::{SearchEngineMode, SearchEngineSession},
     provider::{EngineSearchResult, SearchEngineSettings},
-    result::{Action, IconRef, IconSpec, LaunchEntry, ResultCategory, SearchResult},
+    result::{
+        Action, ContextMenuAction, ContextMenuBehavior, IconRef, IconSpec, LaunchEntry,
+        ResultCategory, SearchResult,
+    },
 };
 use anyhow::{Context, Result};
-use mlua::{Function, Lua, LuaSerdeExt, Value};
+use mlua::{Function, HookTriggers, Lua, LuaSerdeExt, Value, VmState};
 use nucleo_matcher::{Config as MatcherConfig, Matcher, Utf32Str};
+use rayon::prelude::*;
 use serde::{de, Deserialize, Deserializer};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fs,
     fs::OpenOptions,
     io::Write,
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
-        Arc, Mutex, TryLockError,
+        Arc, Mutex, OnceLock, TryLockError,
     },
+    time::{Duration, Instant},
 };
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+static PLUGIN_QUERY_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+
+/// Keep an individual plugin from flooding the root aggregator. Plugins should
+/// return their most relevant rows first; the host still performs the final
+/// fuzzy match and ranking over this bounded contribution.
+const MAX_ROOT_PLUGIN_RESULTS: usize = 128;
+const MAX_SESSION_PLUGIN_RESULTS: usize = 256;
+const MAX_PLUGIN_CONTEXT_ACTIONS: usize = 16;
+const MAX_PLUGIN_CONTEXT_ACTION_ID_BYTES: usize = 128;
+const MAX_PLUGIN_CONTEXT_TITLE_CHARS: usize = 160;
+const MAX_PLUGIN_CONTEXT_SUBTITLE_CHARS: usize = 240;
+const ROOT_PLUGIN_QUERY_BUDGET: Duration = Duration::from_millis(150);
+const SESSION_PLUGIN_QUERY_BUDGET: Duration = Duration::from_millis(750);
+const QUERY_HOOK_INSTRUCTION_INTERVAL: u32 = 10_000;
+const QUERY_CANCELLED: &str = "plugin query cancelled";
+const QUERY_TIMED_OUT: &str = "plugin query timed out";
+const MAX_EVERYTHING_IPC_RESULTS: usize = 256;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PluginManifest {
@@ -59,6 +81,9 @@ pub struct PluginCommand {
     pub id: String,
     #[serde(default)]
     pub title: String,
+    /// Optional search-field hint for this command's session.
+    #[serde(default)]
+    pub placeholder: Option<String>,
     #[serde(default)]
     pub keywords: Vec<String>,
     #[serde(default)]
@@ -104,6 +129,9 @@ struct PluginRuntimeStatus {
     last_method: Option<String>,
     last_error: Option<String>,
     failure_count: u32,
+    last_query_ms: u64,
+    last_query_results: usize,
+    query_truncations: u64,
 }
 
 #[allow(dead_code)]
@@ -117,6 +145,36 @@ pub struct PluginStatus {
     pub last_method: Option<String>,
     pub last_error: Option<String>,
     pub failure_count: u32,
+    pub last_query_ms: u64,
+    pub last_query_results: usize,
+    pub query_truncations: u64,
+}
+
+#[derive(Clone)]
+struct QueryCancellation {
+    epoch: Arc<AtomicU64>,
+    expected_epoch: u64,
+    budget: Duration,
+}
+
+struct PluginQueryOptions<'a> {
+    command_id: Option<&'a str>,
+    requested_query: &'a str,
+    session: Option<&'a SearchEngineSession>,
+    search_history: &'a [crate::provider::SearchHistoryEntry],
+    offset: usize,
+    max_results: usize,
+    cancellation: Option<QueryCancellation>,
+}
+
+impl QueryCancellation {
+    fn new(epoch: &Arc<AtomicU64>, expected_epoch: u64, budget: Duration) -> Self {
+        Self {
+            epoch: Arc::clone(epoch),
+            expected_epoch,
+            budget,
+        }
+    }
 }
 
 struct EmbeddedPlugin {
@@ -146,6 +204,7 @@ impl EmbeddedPlugin {
             manifest.default_locale.as_str(),
             preferences,
             &manifest.permissions,
+            Some(plugin_storage_dir(&manifest.id)),
         )
     }
 
@@ -156,6 +215,7 @@ impl EmbeddedPlugin {
         fallback_locale: &str,
         preferences: &BTreeMap<String, serde_json::Value>,
         permissions: &[String],
+        storage_dir: Option<PathBuf>,
     ) -> Result<Self> {
         let lua = Lua::new();
         let wowie = lua.create_table()?;
@@ -266,6 +326,37 @@ impl EmbeddedPlugin {
             "url_encode_path",
             lua.create_function(|_, value: String| Ok(encode_url_path_segment(&value)))?,
         )?;
+        let read_storage_dir = storage_dir.clone();
+        wowie.set(
+            "storage_read",
+            lua.create_function(move |lua, key: String| {
+                let path = plugin_storage_path(read_storage_dir.as_deref(), &key)?;
+                match fs::metadata(&path) {
+                    Ok(metadata) if metadata.len() <= MAX_PLUGIN_STORAGE_VALUE_BYTES as u64 => {}
+                    Ok(_) => return Err(mlua::Error::runtime("plugin storage value is too large")),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(error) => return Err(mlua::Error::external(error)),
+                }
+                let bytes = fs::read(path).map_err(mlua::Error::external)?;
+                let value: serde_json::Value =
+                    serde_json::from_slice(&bytes).map_err(mlua::Error::external)?;
+                lua.to_value(&value).map(Some)
+            })?,
+        )?;
+        let write_storage_dir = storage_dir.clone();
+        wowie.set(
+            "storage_write",
+            lua.create_function(move |lua, (key, value): (String, Value)| {
+                let value: serde_json::Value = lua.from_value(value)?;
+                let bytes = serde_json::to_vec(&value).map_err(mlua::Error::external)?;
+                if bytes.len() > MAX_PLUGIN_STORAGE_VALUE_BYTES {
+                    return Err(mlua::Error::runtime("plugin storage value is too large"));
+                }
+                let path = plugin_storage_path(write_storage_dir.as_deref(), &key)?;
+                crate::utils::atomic_write(&path, &bytes).map_err(mlua::Error::external)?;
+                Ok(())
+            })?,
+        )?;
         wowie.set(
             "fuzzy_match",
             lua.create_function(|_, (text, query): (String, String)| {
@@ -340,6 +431,38 @@ impl EmbeddedPlugin {
                     result.set(index + 1, item)?;
                 }
                 Ok(result)
+            })?,
+        )?;
+        let everything_allowed = has_plugin_permission(permissions, "everything");
+        wowie.set(
+            "everything_search",
+            lua.create_function(
+                move |lua, (query, offset, limit): (String, Option<u64>, Option<u64>)| {
+                    require_plugin_permission(everything_allowed, "everything")?;
+                    let offset = offset.unwrap_or_default().min(usize::MAX as u64) as usize;
+                    let limit = limit
+                        .unwrap_or(30)
+                        .clamp(1, MAX_EVERYTHING_IPC_RESULTS as u64)
+                        as usize;
+                    let rows =
+                        query_everything(&query, offset, limit).map_err(mlua::Error::external)?;
+                    let result = lua.create_table()?;
+                    for (index, (name, path)) in rows.into_iter().enumerate() {
+                        let item = lua.create_table()?;
+                        item.set("name", name)?;
+                        item.set("path", path)?;
+                        result.set(index + 1, item)?;
+                    }
+                    Ok(result)
+                },
+            )?,
+        )?;
+        let everything_allowed = has_plugin_permission(permissions, "everything");
+        wowie.set(
+            "everything_icon_target",
+            lua.create_function(move |_, _: ()| {
+                require_plugin_permission(everything_allowed, "everything")?;
+                Ok(everything_icon_target())
             })?,
         )?;
         let clipboard_allowed = has_plugin_permission(permissions, "clipboard");
@@ -426,6 +549,66 @@ impl EmbeddedPlugin {
         };
         Ok(serde_json::to_string(&value)?)
     }
+
+    fn call_query(
+        &self,
+        request: &serde_json::Value,
+        cancellation: Option<QueryCancellation>,
+    ) -> Result<String> {
+        let Some(cancellation) = cancellation else {
+            return self.call("query", request, None, None);
+        };
+
+        let deadline = Instant::now() + cancellation.budget;
+        let expected_epoch = cancellation.expected_epoch;
+        let epoch = cancellation.epoch;
+        self.lua.set_hook(
+            HookTriggers::new().every_nth_instruction(QUERY_HOOK_INSTRUCTION_INTERVAL),
+            move |_lua, _debug| {
+                if epoch.load(Ordering::Acquire) != expected_epoch {
+                    Err(mlua::Error::runtime(QUERY_CANCELLED))
+                } else if Instant::now() >= deadline {
+                    Err(mlua::Error::runtime(QUERY_TIMED_OUT))
+                } else {
+                    Ok(VmState::Continue)
+                }
+            },
+        );
+        let result = self.call("query", request, None, None);
+        self.lua.remove_hook();
+        result
+    }
+}
+
+const MAX_PLUGIN_STORAGE_VALUE_BYTES: usize = 8 * 1024 * 1024;
+
+fn plugin_storage_dir(plugin_id: &str) -> PathBuf {
+    let id = plugin_id
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Wowie")
+        .join("plugin-data")
+        .join(id)
+}
+
+fn plugin_storage_path(storage_dir: Option<&Path>, key: &str) -> mlua::Result<PathBuf> {
+    if key.is_empty()
+        || key.len() > 128
+        || key == "."
+        || key == ".."
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(mlua::Error::runtime("invalid plugin storage key"));
+    }
+    storage_dir
+        .map(|dir| dir.join(format!("{key}.json")))
+        .ok_or_else(|| mlua::Error::runtime("plugin storage is unavailable"))
 }
 
 fn has_plugin_permission(permissions: &[String], requested: &str) -> bool {
@@ -474,6 +657,81 @@ fn encode_url_path_segment(value: &str) -> String {
 
 fn set_clipboard_text(text: &str) -> Result<()> {
     crate::utils::clipboard::set_text(text)
+}
+
+fn query_everything(
+    query: &str,
+    offset: usize,
+    max_results: usize,
+) -> Result<Vec<(String, String)>> {
+    #[cfg(windows)]
+    {
+        use everything_ipc::wm::{EverythingClient, RequestFlags};
+
+        let client = EverythingClient::new().context("Everything IPC is unavailable")?;
+        let list = client
+            .query_wait(query)
+            .request_flags(RequestFlags::FileName | RequestFlags::Path)
+            .offset(offset.min(u32::MAX as usize) as u32)
+            .max_results(max_results.min(u32::MAX as usize) as u32)
+            .call()
+            .context("Everything IPC query failed")?;
+        Ok(list
+            .iter()
+            .filter_map(|item| {
+                let name = item.get_string(RequestFlags::FileName)?;
+                let path = item.get_string(RequestFlags::Path)?;
+                let full = PathBuf::from(path).join(&name);
+                Some((name, full.to_string_lossy().into_owned()))
+            })
+            .collect())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (query, offset, max_results);
+        Ok(Vec::new())
+    }
+}
+
+fn everything_icon_target() -> Option<String> {
+    #[cfg(windows)]
+    {
+        static TARGET: OnceLock<Option<String>> = OnceLock::new();
+        TARGET
+            .get_or_init(|| {
+                find_everything_executable().map(|path| path.to_string_lossy().into_owned())
+            })
+            .clone()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn find_everything_executable() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates
+            .extend(std::env::split_paths(&path).map(|directory| directory.join("Everything.exe")));
+    }
+    for variable in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+        if let Some(root) = std::env::var_os(variable) {
+            let root = PathBuf::from(root);
+            candidates.push(root.join("Everything").join("Everything.exe"));
+            if let Ok(entries) = fs::read_dir(&root) {
+                candidates.extend(entries.flatten().filter_map(|entry| {
+                    let name = entry.file_name();
+                    name.to_string_lossy()
+                        .to_ascii_lowercase()
+                        .starts_with("everything")
+                        .then(|| entry.path().join("Everything.exe"))
+                }));
+            }
+        }
+    }
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 fn download_plugin_file(url: &str, filename: &str) -> Result<String> {
@@ -542,6 +800,32 @@ struct DetailResponse {
     request_id: Option<String>,
     #[serde(default)]
     detail: Option<PluginDetailView>,
+    #[serde(default)]
+    error: Option<PluginError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmptyStateResponse {
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    icon: Option<IconRef>,
+    #[serde(default)]
+    detail: Option<PluginDetailView>,
+    #[serde(default)]
+    error: Option<PluginError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchEngineIconResponse {
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
+    icon: Option<IconRef>,
     #[serde(default)]
     error: Option<PluginError>,
 }
@@ -616,6 +900,8 @@ struct PluginItem {
     #[serde(default)]
     actions: Vec<PluginAction>,
     #[serde(default)]
+    context_actions: Vec<PluginContextAction>,
+    #[serde(default)]
     icon: Option<IconRef>,
     #[serde(default)]
     detail: Option<PluginDetailView>,
@@ -628,6 +914,9 @@ struct PluginItem {
     session_entry: bool,
     #[serde(default)]
     session_updates: BTreeMap<String, String>,
+    /// Optional favorite policy. Session menu rows default to non-favoritable.
+    #[serde(default)]
+    allow_favorite: Option<bool>,
     #[serde(default)]
     ranking_bias: i32,
     /// Declarative visibility for session menus and introductory rows.
@@ -770,10 +1059,22 @@ struct PluginAction {
     icon: Option<IconRef>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PluginContextAction {
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    subtitle: String,
+    #[serde(default)]
+    icon: Option<IconRef>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginManager {
     plugins: Vec<InstalledPlugin>,
     locale: Arc<Mutex<String>>,
+    query_epoch: Arc<AtomicU64>,
 }
 
 impl PluginManager {
@@ -812,6 +1113,9 @@ impl PluginManager {
                             last_method: None,
                             last_error: None,
                             failure_count: 0,
+                            last_query_ms: 0,
+                            last_query_results: 0,
+                            query_truncations: 0,
                         }));
                         let embedded = match EmbeddedPlugin::from_file(
                             &dir,
@@ -857,6 +1161,7 @@ impl PluginManager {
         Self {
             plugins,
             locale: Arc::new(Mutex::new(locale.to_owned())),
+            query_epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -864,6 +1169,14 @@ impl PluginManager {
         if let Ok(mut current) = self.locale.lock() {
             *current = crate::utils::i18n::effective_language(&locale);
         }
+    }
+
+    fn begin_query(&self) -> u64 {
+        self.query_epoch.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    fn query_is_current(&self, epoch: u64) -> bool {
+        self.query_epoch.load(Ordering::Acquire) == epoch
     }
 
     pub fn replace_config(
@@ -909,6 +1222,9 @@ impl PluginManager {
                         last_method: None,
                         last_error: Some("plugin status lock poisoned".into()),
                         failure_count: 1,
+                        last_query_ms: 0,
+                        last_query_results: 0,
+                        query_truncations: 0,
                     });
                 PluginStatus {
                     id: plugin.manifest.id.clone(),
@@ -919,6 +1235,9 @@ impl PluginManager {
                     last_method: runtime.last_method,
                     last_error: runtime.last_error,
                     failure_count: runtime.failure_count,
+                    last_query_ms: runtime.last_query_ms,
+                    last_query_results: runtime.last_query_results,
+                    query_truncations: runtime.query_truncations,
                 }
             })
             .collect()
@@ -937,44 +1256,112 @@ impl PluginManager {
             .lock()
             .map(|locale| locale.clone())
             .unwrap_or_else(|_| "system".into());
-        self.plugins
+        let locale = locale.as_str();
+        let epoch = self.begin_query();
+        let plugins = self
+            .plugins
             .iter()
             .filter(|plugin| {
                 plugin.enabled.load(Ordering::Acquire)
                     && plugin.manifest.engine.participates_in_root
             })
-            .flat_map(|plugin| {
-                let (plugin_query, command_id) = action_word_query(plugin, query);
-                match query_plugin(
+            .collect::<Vec<_>>();
+        if plugins.len() <= 1 {
+            return plugins
+                .into_iter()
+                .flat_map(|plugin| self.query_root_plugin(plugin, query, locale, epoch))
+                .collect();
+        }
+
+        // Each plugin owns an independent Lua VM. Query them concurrently so
+        // one slow plugin cannot serialize every other root contribution, but
+        // collect by the original manifest order to keep stable tie-breaking.
+        let results = plugin_query_pool().install(|| {
+            plugins
+                .par_iter()
+                .map(|plugin| self.query_root_plugin(plugin, query, locale, epoch))
+                .collect::<Vec<_>>()
+        });
+        results.into_iter().flatten().collect()
+    }
+
+    fn query_root_plugin(
+        &self,
+        plugin: &InstalledPlugin,
+        query: &str,
+        locale: &str,
+        epoch: u64,
+    ) -> Vec<EngineSearchResult> {
+        if !self.query_is_current(epoch) {
+            return Vec::new();
+        }
+        let (plugin_query, command_id) = action_word_query(plugin, query);
+        let started = Instant::now();
+        let query_budget = if command_id.is_some() {
+            SESSION_PLUGIN_QUERY_BUDGET
+        } else {
+            ROOT_PLUGIN_QUERY_BUDGET
+        };
+        match query_plugin(
+            plugin,
+            &plugin_query,
+            locale,
+            PluginQueryOptions {
+                command_id: command_id.as_deref(),
+                requested_query: query,
+                session: None,
+                search_history: &[],
+                offset: 0,
+                max_results: MAX_ROOT_PLUGIN_RESULTS,
+                cancellation: Some(QueryCancellation::new(
+                    &self.query_epoch,
+                    epoch,
+                    query_budget,
+                )),
+            },
+        ) {
+            Ok(items) => {
+                record_query_metrics(
                     plugin,
-                    &plugin_query,
-                    &locale,
-                    command_id.as_deref(),
-                    query,
-                    None,
-                ) {
-                    Ok(items) => {
-                        mark_success(plugin, "query");
-                        items
-                            .into_iter()
-                            .map(|item| EngineSearchResult {
-                                item,
-                                settings: plugin.manifest.engine,
-                            })
-                            .collect()
-                    }
-                    Err(error) => {
-                        mark_failure(plugin, "query", &error);
-                        eprintln!("[plugin:{}] query failed: {error:#}", plugin.manifest.id);
-                        Vec::new()
-                    }
+                    started.elapsed(),
+                    items.len(),
+                    MAX_ROOT_PLUGIN_RESULTS,
+                );
+                mark_success(plugin, "query");
+                if !self.query_is_current(epoch) {
+                    return Vec::new();
                 }
-            })
-            .collect()
+                items
+                    .into_iter()
+                    .map(|item| EngineSearchResult {
+                        item,
+                        settings: plugin.manifest.engine,
+                    })
+                    .collect()
+            }
+            Err(error) => {
+                record_query_metrics(plugin, started.elapsed(), 0, MAX_ROOT_PLUGIN_RESULTS);
+                if is_query_abort(&error) {
+                    return Vec::new();
+                }
+                mark_failure(plugin, "query", &error);
+                eprintln!("[plugin:{}] query failed: {error:#}", plugin.manifest.id);
+                Vec::new()
+            }
+        }
     }
 
     pub fn owns_search_engine_session(&self, session: &SearchEngineSession) -> bool {
         self.plugin_command_for_session(session).is_some()
+    }
+
+    pub fn search_engine_settings_for_session(
+        &self,
+        session: &SearchEngineSession,
+    ) -> SearchEngineSettings {
+        self.plugin_command_for_session(session)
+            .map(|(plugin, _)| plugin.manifest.engine)
+            .unwrap_or_default()
     }
 
     /// Return the command shortcut for any result owned by a plugin. This is
@@ -1000,6 +1387,15 @@ impl PluginManager {
         session: &SearchEngineSession,
         raw_query: &str,
     ) -> Vec<SearchResult> {
+        self.query_active_search_engine_with_history(session, raw_query, &[])
+    }
+
+    pub fn query_active_search_engine_with_history(
+        &self,
+        session: &SearchEngineSession,
+        raw_query: &str,
+        search_history: &[crate::provider::SearchHistoryEntry],
+    ) -> Vec<SearchResult> {
         let Some((plugin, command_id)) = self.plugin_command_for_session(session) else {
             return Vec::new();
         };
@@ -1008,22 +1404,109 @@ impl PluginManager {
             .lock()
             .map(|locale| locale.clone())
             .unwrap_or_else(|_| "system".into());
+        let epoch = self.begin_query();
+        let started = Instant::now();
         match query_plugin(
             plugin,
             raw_query,
             &locale,
-            Some(&command_id),
-            raw_query,
-            Some(session),
+            PluginQueryOptions {
+                command_id: Some(&command_id),
+                requested_query: raw_query,
+                session: Some(session),
+                search_history,
+                offset: 0,
+                max_results: MAX_SESSION_PLUGIN_RESULTS,
+                cancellation: Some(QueryCancellation::new(
+                    &self.query_epoch,
+                    epoch,
+                    SESSION_PLUGIN_QUERY_BUDGET,
+                )),
+            },
         ) {
             Ok(items) => {
+                record_query_metrics(
+                    plugin,
+                    started.elapsed(),
+                    items.len(),
+                    MAX_SESSION_PLUGIN_RESULTS,
+                );
+                if !self.query_is_current(epoch) {
+                    return Vec::new();
+                }
                 mark_success(plugin, "query");
                 items
             }
             Err(error) => {
+                record_query_metrics(plugin, started.elapsed(), 0, MAX_SESSION_PLUGIN_RESULTS);
+                if is_query_abort(&error) {
+                    return Vec::new();
+                }
                 mark_failure(plugin, "query", &error);
                 eprintln!(
                     "[plugin:{}] search engine query failed: {error:#}",
+                    plugin.manifest.id
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn query_active_search_engine_page(
+        &self,
+        session: &SearchEngineSession,
+        raw_query: &str,
+        offset: usize,
+    ) -> Vec<SearchResult> {
+        let Some((plugin, command_id)) = self.plugin_command_for_session(session) else {
+            return Vec::new();
+        };
+        let locale = self
+            .locale
+            .lock()
+            .map(|locale| locale.clone())
+            .unwrap_or_else(|_| "system".into());
+        let epoch = self.begin_query();
+        let started = Instant::now();
+        match query_plugin(
+            plugin,
+            raw_query,
+            &locale,
+            PluginQueryOptions {
+                command_id: Some(&command_id),
+                requested_query: raw_query,
+                session: Some(session),
+                search_history: &[],
+                offset,
+                max_results: MAX_SESSION_PLUGIN_RESULTS,
+                cancellation: Some(QueryCancellation::new(
+                    &self.query_epoch,
+                    epoch,
+                    SESSION_PLUGIN_QUERY_BUDGET,
+                )),
+            },
+        ) {
+            Ok(items) => {
+                record_query_metrics(
+                    plugin,
+                    started.elapsed(),
+                    items.len(),
+                    MAX_SESSION_PLUGIN_RESULTS,
+                );
+                if !self.query_is_current(epoch) {
+                    return Vec::new();
+                }
+                mark_success(plugin, "query");
+                items
+            }
+            Err(error) => {
+                record_query_metrics(plugin, started.elapsed(), 0, MAX_SESSION_PLUGIN_RESULTS);
+                if is_query_abort(&error) {
+                    return Vec::new();
+                }
+                mark_failure(plugin, "query", &error);
+                eprintln!(
+                    "[plugin:{}] search engine page failed: {error:#}",
                     plugin.manifest.id
                 );
                 Vec::new()
@@ -1044,6 +1527,98 @@ impl PluginManager {
             .unwrap_or("list")
     }
 
+    fn empty_state_for_session(
+        &self,
+        session: &SearchEngineSession,
+        query: &str,
+    ) -> Option<SearchResult> {
+        let (plugin, command_id) = self.plugin_command_for_session(session)?;
+        let embedded = plugin.embedded.as_ref()?;
+        let embedded = embedded.lock().ok()?;
+        if !embedded.has_handler("empty_state").ok()? {
+            return None;
+        }
+        let request_id = next_request_id("empty-state");
+        let locale = self
+            .locale
+            .lock()
+            .map(|locale| locale.clone())
+            .unwrap_or_else(|_| "system".into());
+        let request = serde_json::json!({
+            "method": "empty_state",
+            "request_id": request_id,
+            "api_version": plugin.manifest.api_version,
+            "command_id": command_id,
+            "query": query,
+            "locale": locale,
+            "fallback_locale": plugin.manifest.default_locale,
+            "preferences": plugin_preferences(plugin),
+            "session": session.state,
+        });
+        let output = match embedded.call("empty_state", &request, None, None) {
+            Ok(output) => output,
+            Err(error) => {
+                eprintln!(
+                    "[plugin:{}] empty-state callback failed: {error:#}",
+                    plugin.manifest.id
+                );
+                return None;
+            }
+        };
+        let response: EmptyStateResponse = match serde_json::from_str(&output) {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!(
+                    "[plugin:{}] invalid empty-state response: {error}",
+                    plugin.manifest.id
+                );
+                return None;
+            }
+        };
+        if let Err(error) = validate_response_id(response.request_id.as_deref(), &request_id) {
+            eprintln!(
+                "[plugin:{}] invalid empty-state response: {error:#}",
+                plugin.manifest.id
+            );
+            return None;
+        }
+        if let Some(error) = response.error {
+            eprintln!(
+                "[plugin:{}] empty-state callback error: {}",
+                plugin.manifest.id, error.message
+            );
+            return None;
+        }
+        Some(SearchResult {
+            id: format!("plugin:{}:{}:empty-state", plugin.manifest.id, command_id),
+            identity: format!("plugin:{}:{}:empty-state", plugin.manifest.id, command_id),
+            title: response.title,
+            category: ResultCategory::Other,
+            aliases: Vec::new(),
+            location: response.description.clone(),
+            launch_target: PathBuf::new(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: format!("plugin:{}", plugin.manifest.id).into(),
+            sources: vec![format!("plugin:{}", plugin.manifest.id).into()],
+            launch_entries: Vec::new(),
+            actions: Vec::new(),
+            detail: response
+                .detail
+                .map(|detail| to_detail_view(&plugin.root, detail, &locale)),
+            description: Some(response.description),
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
+            icon: response
+                .icon
+                .and_then(|icon| resolve_plugin_icon(&plugin.root, icon)),
+            ranking_bias: 0,
+            allow_favorite: true,
+            visibility: crate::result::ResultVisibility::Always,
+        })
+    }
+
     /// Materialize the command-owned result used for the active session's
     /// search-field icon. This must be resolved through the plugin manager so
     /// remote/resource command icons work exactly like ordinary plugin rows.
@@ -1054,16 +1629,43 @@ impl PluginManager {
             .commands
             .iter()
             .find(|command| command.id == command_id)?;
+        let icon = plugin
+            .embedded
+            .as_ref()
+            .and_then(|embedded| embedded.lock().ok())
+            .and_then(|embedded| {
+                if !embedded.has_handler("search_engine_icon").ok()? {
+                    return None;
+                }
+                let request_id = next_request_id("search-engine-icon");
+                let request = serde_json::json!({
+                    "method": "search_engine_icon",
+                    "request_id": request_id,
+                    "command_id": command_id,
+                    "locale": self.locale.lock().ok().map(|locale| locale.clone()).unwrap_or_else(|| "system".into()),
+                    "fallback_locale": plugin.manifest.default_locale,
+                    "preferences": plugin_preferences(plugin),
+                });
+                let output = embedded.call("search_engine_icon", &request, None, None).ok()?;
+                let response: SearchEngineIconResponse = serde_json::from_str(&output).ok()?;
+                validate_response_id(response.request_id.as_deref(), &request_id).ok()?;
+                if response.error.is_some() {
+                    return None;
+                }
+                response.icon.and_then(|icon| resolve_plugin_icon(&plugin.root, icon))
+            })
+            .or_else(|| {
+                command
+                    .icon
+                    .clone()
+                    .and_then(|icon| resolve_plugin_icon(&plugin.root, icon))
+            });
         Some(SearchResult {
             id: session.id.clone(),
             identity: session.id.clone(),
             title: command.title.clone(),
             category: ResultCategory::Other,
-            aliases: command
-                .action_words
-                .iter()
-                .map(|word| word.clone())
-                .collect(),
+            aliases: command.action_words.to_vec(),
             location: plugin.manifest.name.clone(),
             launch_target: PathBuf::new(),
             launch_arguments: String::new(),
@@ -1083,11 +1685,9 @@ impl PluginManager {
             app_user_model_id: None,
             package_family_name: None,
             package_metadata: None,
-            icon: command
-                .icon
-                .clone()
-                .and_then(|icon| resolve_plugin_icon(&plugin.root, icon)),
+            icon,
             ranking_bias: -1000,
+            allow_favorite: true,
             visibility: crate::result::ResultVisibility::Always,
         })
     }
@@ -1144,6 +1744,12 @@ impl PluginManager {
                 };
                 Some(SearchEngineSession {
                     id: format!("plugin:{}:{}", plugin.manifest.id, command.id),
+                    placeholder: command
+                        .placeholder
+                        .as_deref()
+                        .filter(|placeholder| !placeholder.trim().is_empty())
+                        .unwrap_or(&title)
+                        .to_owned(),
                     title,
                     prefix: format!("{word} "),
                     argument: argument.into(),
@@ -1211,12 +1817,43 @@ impl crate::provider::SearchEngineProvider for PluginManager {
         self.query_with_engine_settings(query)
     }
 
+    fn empty_state(
+        &self,
+        context: &crate::page::SearchContext,
+        query: &str,
+    ) -> Option<SearchResult> {
+        let session = context.session()?;
+        self.empty_state_for_session(session, query)
+    }
+
     fn query_active(&self, session: &SearchEngineSession, query: &str) -> Vec<SearchResult> {
         PluginManager::query_active_search_engine(self, session, query)
     }
 
+    fn query_active_with_history(
+        &self,
+        session: &SearchEngineSession,
+        query: &str,
+        history: &[crate::provider::SearchHistoryEntry],
+    ) -> Vec<SearchResult> {
+        PluginManager::query_active_search_engine_with_history(self, session, query, history)
+    }
+
+    fn query_active_page(
+        &self,
+        session: &SearchEngineSession,
+        query: &str,
+        offset: usize,
+    ) -> Vec<SearchResult> {
+        PluginManager::query_active_search_engine_page(self, session, query, offset)
+    }
+
     fn owns_session(&self, session: &SearchEngineSession) -> bool {
         PluginManager::owns_search_engine_session(self, session)
+    }
+
+    fn settings_for_session(&self, session: &SearchEngineSession) -> SearchEngineSettings {
+        PluginManager::search_engine_settings_for_session(self, session)
     }
 
     fn shortcut_hint(&self, result_id: &str) -> Option<String> {
@@ -1319,6 +1956,26 @@ fn mark_failure(plugin: &InstalledPlugin, method: &str, error: &anyhow::Error) {
     }
 }
 
+fn record_query_metrics(
+    plugin: &InstalledPlugin,
+    elapsed: Duration,
+    result_count: usize,
+    max_results: usize,
+) {
+    if let Ok(mut status) = plugin.status.lock() {
+        status.last_query_ms = elapsed.as_millis().min(u64::MAX as u128) as u64;
+        status.last_query_results = result_count;
+        if result_count >= max_results {
+            status.query_truncations = status.query_truncations.saturating_add(1);
+        }
+    }
+}
+
+fn is_query_abort(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains(QUERY_CANCELLED) || message.contains(QUERY_TIMED_OUT)
+}
+
 fn action_word_query(plugin: &InstalledPlugin, query: &str) -> (String, Option<String>) {
     let mut parts = query.trim_start().splitn(2, char::is_whitespace);
     let Some(word) = parts.next() else {
@@ -1346,21 +2003,22 @@ fn query_plugin(
     plugin: &InstalledPlugin,
     query: &str,
     locale: &str,
-    command_id: Option<&str>,
-    requested_query: &str,
-    session: Option<&SearchEngineSession>,
+    options: PluginQueryOptions<'_>,
 ) -> Result<Vec<SearchResult>> {
     let request_id = next_request_id("query");
     let request = serde_json::json!({
         "method": "query",
         "request_id": request_id,
         "query": query,
-        "command_id": command_id,
+        "command_id": options.command_id,
         "api_version": plugin.manifest.api_version,
         "locale": locale,
         "fallback_locale": plugin.manifest.default_locale,
         "preferences": plugin_preferences(plugin),
-        "session": session.map(|session| &session.state),
+        "session": options.session.map(|session| &session.state),
+        "search_history": options.search_history,
+        "offset": options.offset,
+        "limit": options.max_results,
     });
     let embedded = plugin
         .embedded
@@ -1369,7 +2027,7 @@ fn query_plugin(
     // A stale shortcut request may still be waiting on network I/O while the
     // user has already returned to ordinary search. Do not make that ordinary
     // search wait for the plugin VM; the plugin is optional for this query.
-    let embedded = if command_id.is_none() {
+    let embedded = if options.command_id.is_none() {
         match embedded.try_lock() {
             Ok(embedded) => embedded,
             Err(TryLockError::WouldBlock) => return Ok(Vec::new()),
@@ -1382,7 +2040,7 @@ fn query_plugin(
             .lock()
             .map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?
     };
-    let output = embedded.call("query", &request, None, None)?;
+    let output = embedded.call_query(&request, options.cancellation)?;
     let response: QueryResponse =
         serde_json::from_str(&output).context("decode plugin response")?;
     validate_query_response(&response, &request_id)?;
@@ -1392,7 +2050,16 @@ fn query_plugin(
         .filter(|item| {
             item.visible_when != PluginItemVisibility::EmptyQuery || query.trim().is_empty()
         })
-        .map(|item| to_result(plugin, item, command_id, requested_query, locale))
+        .take(options.max_results)
+        .map(|item| {
+            to_result(
+                plugin,
+                item,
+                options.command_id,
+                options.requested_query,
+                locale,
+            )
+        })
         .collect())
 }
 
@@ -1401,6 +2068,21 @@ fn next_request_id(method: &str) -> String {
         "{method}-{}",
         NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+fn plugin_query_pool() -> &'static rayon::ThreadPool {
+    PLUGIN_QUERY_POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(
+                std::thread::available_parallelism()
+                    .map(|count| count.get())
+                    .unwrap_or(4)
+                    .clamp(1, 8),
+            )
+            .thread_name(|index| format!("wowie-plugin-{index}"))
+            .build()
+            .expect("plugin query thread pool must initialize")
+    })
 }
 
 fn plugin_preferences(
@@ -1476,6 +2158,40 @@ fn to_result(
         .icon
         .or_else(|| command.and_then(|command| command.icon.clone()));
     let target = item.target.map(PathBuf::from).unwrap_or_default();
+    let mut seen_context_action_ids = HashSet::new();
+    let context_actions = item
+        .context_actions
+        .into_iter()
+        .take(MAX_PLUGIN_CONTEXT_ACTIONS)
+        .filter(|action| {
+            !action.id.trim().is_empty()
+                && action.id.len() <= MAX_PLUGIN_CONTEXT_ACTION_ID_BYTES
+                && seen_context_action_ids.insert(action.id.clone())
+        })
+        .map(|action| {
+            let action_id = action.id;
+            let icon = action
+                .icon
+                .and_then(|icon| resolve_plugin_icon(&plugin.root, icon));
+            Action::ContextMenu(ContextMenuAction {
+                id: action_id.clone(),
+                title: if action.title.trim().is_empty() {
+                    limit_context_text(&action_id, MAX_PLUGIN_CONTEXT_TITLE_CHARS)
+                } else {
+                    limit_context_text(&detail_text(action.title), MAX_PLUGIN_CONTEXT_TITLE_CHARS)
+                },
+                subtitle: limit_context_text(
+                    &detail_text(action.subtitle),
+                    MAX_PLUGIN_CONTEXT_SUBTITLE_CHARS,
+                ),
+                icon: icon.clone(),
+                behavior: ContextMenuBehavior::Plugin {
+                    plugin_id: plugin.manifest.id.clone(),
+                    action_id,
+                },
+            })
+        })
+        .collect::<Vec<_>>();
     let actions = item
         .actions
         .into_iter()
@@ -1493,7 +2209,10 @@ fn to_result(
             }
         })
         .collect();
-    let actions = if !item.session_updates.is_empty() {
+    let allow_favorite = item
+        .allow_favorite
+        .unwrap_or(item.session_updates.is_empty());
+    let mut actions = if !item.session_updates.is_empty() {
         vec![Action::UpdateSession {
             updates: item.session_updates,
         }]
@@ -1508,6 +2227,7 @@ fn to_result(
     } else {
         actions
     };
+    actions.extend(context_actions);
     SearchResult {
         id: format!("plugin:{}:{}", plugin.manifest.id, item.id),
         identity: format!("plugin:{}:{}", plugin.manifest.id, item.id),
@@ -1550,6 +2270,7 @@ fn to_result(
             // to bypass root-search relevance. The user-controlled plugin
             // weight remains a separate explicit preference.
             .saturating_add(item.ranking_bias.clamp(-100, 100)),
+        allow_favorite,
         visibility: match item.visible_when {
             PluginItemVisibility::Always => crate::result::ResultVisibility::Always,
             PluginItemVisibility::EmptyQuery => crate::result::ResultVisibility::EmptyQueryOnly,
@@ -1733,6 +2454,10 @@ fn detail_text(value: String) -> String {
     value
 }
 
+fn limit_context_text(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
 fn detail_color(value: &str) -> String {
     match value {
         "primary" | "secondary" | "tertiary" | "accent" => value.into(),
@@ -1757,6 +2482,18 @@ mod tests {
             serde_json::from_str(r#"{"id":"x","name":"X","entry_point":"main.lua"}"#).unwrap();
         assert_eq!(m.api_version, 1);
         assert_eq!(m.version, "0.1.0");
+        assert_eq!(m.engine.history_limit, 0);
+        assert_eq!(m.engine.search_debounce_ms, 30);
+    }
+
+    #[test]
+    fn manifest_engine_can_opt_into_persistent_search_history() {
+        let manifest: PluginManifest = serde_json::from_str(
+            r#"{"id":"x","name":"X","entry_point":"main.lua","engine":{"history_limit":12,"search_debounce_ms":400}}"#,
+        )
+        .unwrap();
+        assert_eq!(manifest.engine.history_limit, 12);
+        assert_eq!(manifest.engine.search_debounce_ms, 400);
     }
 
     #[test]
@@ -1822,6 +2559,7 @@ mod tests {
                 commands: vec![PluginCommand {
                     id: "search".into(),
                     title: "Search GitHub".into(),
+                    placeholder: None,
                     keywords: vec!["gh".into()],
                     action_words: vec!["gh".into()],
                     presentation: None,
@@ -1842,6 +2580,9 @@ mod tests {
                 last_method: None,
                 last_error: None,
                 failure_count: 0,
+                last_query_ms: 0,
+                last_query_results: 0,
+                query_truncations: 0,
             })),
         };
         assert_eq!(
@@ -1896,6 +2637,31 @@ mod tests {
     }
 
     #[test]
+    fn plugin_items_support_independent_context_menu_actions() {
+        let response: QueryResponse = serde_json::from_str(
+            r#"{
+                "items":[{
+                    "id":"repository",
+                    "title":"Wowie",
+                    "context_actions":[{
+                        "id":"copy-clone-url",
+                        "title":"Copy clone URL",
+                        "subtitle":"Copy the HTTPS clone address",
+                        "icon":{"type":"named","id":"content-copy"}
+                    }]
+                }]
+            }"#,
+        )
+        .unwrap();
+        let action = &response.items[0].context_actions[0];
+
+        assert_eq!(action.id, "copy-clone-url");
+        assert_eq!(action.title, "Copy clone URL");
+        assert_eq!(action.subtitle, "Copy the HTTPS clone address");
+        assert!(matches!(action.icon, Some(IconRef::Named { .. })));
+    }
+
+    #[test]
     fn embedded_lua_can_query_and_execute_with_preferences() {
         let source = r#"
             wowie.on("query", function(query, context)
@@ -1905,7 +2671,14 @@ mod tests {
                         wowie.result({
                             id = "demo",
                             title = "Lua " .. query,
-                            subtitle = context.preferences.token
+                            subtitle = context.preferences.token,
+                            context_actions = {
+                                {
+                                    id = "copy-token",
+                                    title = "Copy token",
+                                    subtitle = "Copy the configured token"
+                                }
+                            }
                         })
                     }
                 }
@@ -1920,9 +2693,16 @@ mod tests {
         "#;
         let mut preferences = std::collections::BTreeMap::new();
         preferences.insert("token".into(), serde_json::json!("from-preferences"));
-        let plugin =
-            EmbeddedPlugin::from_source(source, "test.lua", "zh-Hans", "en", &preferences, &[])
-                .unwrap();
+        let plugin = EmbeddedPlugin::from_source(
+            source,
+            "test.lua",
+            "zh-Hans",
+            "en",
+            &preferences,
+            &[],
+            None,
+        )
+        .unwrap();
         let query = serde_json::json!({
             "request_id": "query-test",
             "query": "hello",
@@ -1933,6 +2713,8 @@ mod tests {
         assert_eq!(response.request_id.as_deref(), Some("query-test"));
         assert_eq!(response.items[0].title, "Lua hello");
         assert_eq!(response.items[0].subtitle, "from-preferences");
+        assert_eq!(response.items[0].context_actions[0].id, "copy-token");
+        assert_eq!(response.items[0].context_actions[0].title, "Copy token");
 
         let execute = serde_json::json!({
             "request_id": "execute-test",
@@ -1970,7 +2752,8 @@ mod tests {
         "#;
         let preferences = std::collections::BTreeMap::new();
         let plugin =
-            EmbeddedPlugin::from_source(source, "test.lua", "en", "en", &preferences, &[]).unwrap();
+            EmbeddedPlugin::from_source(source, "test.lua", "en", "en", &preferences, &[], None)
+                .unwrap();
         let query = serde_json::json!({
             "request_id": "query-detail",
             "query": "hello",
@@ -1985,29 +2768,94 @@ mod tests {
     }
 
     #[test]
+    fn embedded_lua_query_hook_cancels_stale_work() {
+        let source = r#"
+            wowie.on("query", function(query, context)
+                while true do end
+            end)
+        "#;
+        let plugin = EmbeddedPlugin::from_source(
+            source,
+            "test.lua",
+            "en",
+            "en",
+            &BTreeMap::new(),
+            &[],
+            None,
+        )
+        .unwrap();
+        let epoch = Arc::new(AtomicU64::new(0));
+        let error = plugin
+            .call_query(
+                &serde_json::json!({"query": "stale"}),
+                Some(QueryCancellation::new(&epoch, 1, Duration::from_secs(1))),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains(QUERY_CANCELLED));
+    }
+
+    #[test]
     fn plugin_discovery_reads_project_plugins() {
         let manager = PluginManager::discover_with_config("en", &Default::default());
         assert!(manager
             .query("")
             .iter()
-            .any(|item| item.id == "plugin:google-translate:entry"
+            .any(|item| item.id == "plugin:tencent-translate:entry"
                 && item.visibility == crate::result::ResultVisibility::EmptyQueryOnly));
-        assert!(manager.search_engine("eng").is_none());
         assert!(manager
-            .query("eng ")
+            .query("")
             .iter()
-            .any(|item| item.title.starts_with("用谷歌翻译搜索")));
-        let items = manager.query("t hello");
-        assert_eq!(items.len(), 3);
-        assert!(items.iter().any(|item| item.id.ends_with(":source")));
-        assert!(items.iter().any(|item| item.id.ends_with(":target")));
+            .any(|item| item.id == "plugin:everything:entry"
+                && item.visibility == crate::result::ResultVisibility::EmptyQueryOnly));
+
+        let everything_session = manager.search_engine("e ").unwrap();
+        assert!(manager
+            .search_engine_result(&everything_session)
+            .is_some_and(|item| item.icon.is_some()));
+        assert!(manager
+            .query_active_search_engine(&everything_session, "")
+            .is_empty());
+        let empty_state = crate::provider::SearchEngineProvider::empty_state(
+            &manager,
+            &crate::page::SearchContext::Engine(everything_session),
+            "",
+        )
+        .expect("Everything should provide its custom empty page");
+        assert!(empty_state.detail.is_some());
+        assert!(empty_state
+            .description
+            .unwrap_or_default()
+            .contains("Press Enter"));
+
+        assert!(manager.search_engine("eng").is_none());
+        let translation_session = manager.search_engine("tmt ").unwrap();
+        assert_eq!(
+            crate::provider::SearchEngineProvider::search_debounce(&manager, &translation_session,),
+            Duration::from_millis(400)
+        );
+        assert!(manager
+            .query("tmt ")
+            .iter()
+            .any(|item| item.id == "plugin:tencent-translate:source"));
+        let translation_items = manager
+            .query("tmt hello")
+            .into_iter()
+            .filter(|item| item.id.starts_with("plugin:tencent-translate:"))
+            .collect::<Vec<_>>();
+        assert!(translation_items.len() >= 3);
+        assert!(translation_items
+            .iter()
+            .any(|item| item.id.ends_with(":source")));
+        assert!(translation_items
+            .iter()
+            .any(|item| item.id.ends_with(":target")));
         assert!(manager
             .statuses()
             .iter()
-            .any(|status| status.id == "google-translate"));
+            .any(|status| status.id == "tencent-translate"));
         assert_eq!(
-            manager.shortcut_hint("plugin:google-translate:entry"),
-            Some("t ".into())
+            manager.shortcut_hint("plugin:tencent-translate:entry"),
+            Some("tmt ".into())
         );
     }
 

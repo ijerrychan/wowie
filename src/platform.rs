@@ -45,8 +45,13 @@ pub struct TrayRegistration {
     pub updates: std::sync::mpsc::Sender<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum AppProviderSource {
+    AppsFolder,
+    PackagedApps,
+    /// Legacy source ID retained for compatibility with older snapshots.
     StoreApps,
     StartMenu,
     Desktop,
@@ -54,7 +59,7 @@ pub enum AppProviderSource {
     CustomDirectories,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SourceId {
     AppsFolder,
     Package,
@@ -358,7 +363,7 @@ pub struct ShortcutInfo {
     pub icon_index: Option<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PackageMetadata {
     pub full_name: Option<String>,
     pub install_location: Option<std::path::PathBuf>,
@@ -461,14 +466,36 @@ pub fn resolve_shortcut(path: &std::path::Path) -> ShortcutInfo {
     }
 }
 
-pub fn discover_store_applications() -> Vec<StoreApplication> {
+pub fn discover_apps_folder_applications() -> Vec<StoreApplication> {
     #[cfg(windows)]
     {
-        windows::discover_store_applications()
+        windows::discover_apps_folder_applications()
     }
     #[cfg(not(windows))]
     {
         Vec::new()
+    }
+}
+
+pub fn discover_packaged_applications() -> Vec<StoreApplication> {
+    #[cfg(windows)]
+    {
+        windows::discover_packaged_applications()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+pub fn package_inventory_fingerprint() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        windows::package_inventory_fingerprint()
+    }
+    #[cfg(not(windows))]
+    {
+        None
     }
 }
 

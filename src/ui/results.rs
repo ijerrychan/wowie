@@ -19,6 +19,7 @@ pub(super) struct ResultRowPayload {
     location_kind: String,
     icon: Option<crate::platform::IconData>,
     icon_kind: String,
+    favorite: bool,
     shortcut_prefix: String,
     shortcut_prefix_width: i32,
     presentation: String,
@@ -29,6 +30,7 @@ impl ResultRowPayload {
         item: &SearchResult,
         show_advanced_details: bool,
         shortcut_hint: Option<&str>,
+        favorite: bool,
     ) -> Self {
         let location = display_location(item, show_advanced_details);
         let shortcut_prefix = shortcut_hint.unwrap_or_default().trim_end();
@@ -49,6 +51,7 @@ impl ResultRowPayload {
             .into(),
             icon: None,
             icon_kind: static_icon_kind(item.icon.as_ref()).into(),
+            favorite,
             shortcut_prefix_width: shortcut_prefix_width(shortcut_prefix),
             shortcut_prefix: shortcut_prefix.into(),
             presentation: presentation_name(item.recommended_presentation()).into(),
@@ -79,6 +82,7 @@ pub(super) fn matches_model(model: &ModelRc<ResultRow>, payloads: &[ResultRowPay
             && row.location.as_str() == payload.location
             && row.location_kind.as_str() == payload.location_kind
             && row.icon_kind.as_str() == payload.icon_kind
+            && row.favorite == payload.favorite
             && row.shortcut_prefix.as_str() == payload.shortcut_prefix
             && row.shortcut_prefix_width == payload.shortcut_prefix_width
             && row.presentation.as_str() == payload.presentation
@@ -97,6 +101,8 @@ pub(super) fn static_icon_kind(icon: Option<&IconSpec>) -> &'static str {
             "checklist" => "checklist",
             "folder-open" => "folder-open",
             "shield-account" => "shield-account",
+            "content-copy" => "content-copy",
+            "star" => "star",
             "weather" => "weather",
             "calculator" => "calculator",
             _ => "",
@@ -229,6 +235,7 @@ impl From<ResultRowPayload> for ResultRow {
             location_kind: payload.location_kind.into(),
             icon,
             icon_kind: payload.icon_kind.into(),
+            favorite: payload.favorite,
             shortcut_prefix: payload.shortcut_prefix.into(),
             shortcut_prefix_width: payload.shortcut_prefix_width,
             presentation: payload.presentation.into(),

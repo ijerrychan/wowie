@@ -8,6 +8,18 @@ msgid "Search applications"
 msgstr "搜索应用"
 
 msgctxt "Launcher"
+msgid "Search apps, files, settings, and more"
+msgstr "搜索应用、文件、设置及更多内容"
+
+msgctxt "Launcher"
+msgid "Enter a command"
+msgstr "输入要执行的命令"
+
+msgctxt "Launcher"
+msgid "Enter a URL or search term"
+msgstr "输入网址或搜索内容"
+
+msgctxt "Launcher"
 msgid "List view"
 msgstr "列表视图"
 
@@ -144,12 +156,36 @@ msgid "Open containing folder"
 msgstr "打开所在目录"
 
 msgctxt "ContextMenu"
+msgid "Add to favorites"
+msgstr "添加到收藏"
+
+msgctxt "ContextMenu"
+msgid "Remove from favorites"
+msgstr "从收藏中移除"
+
+msgctxt "ContextMenu"
+msgid "Maximum number of favorites reached"
+msgstr "收藏数量已达上限"
+
+msgctxt "ContextMenu"
 msgid "Run as administrator"
 msgstr "以管理员身份运行"
 
 msgctxt "ContextMenu"
 msgid "Other launch entries"
 msgstr "其他启动入口"
+
+msgctxt "ContextMenu"
+msgid "Copy title"
+msgstr "复制名称"
+
+msgctxt "ContextMenu"
+msgid "Copy path"
+msgstr "复制路径"
+
+msgctxt "ContextMenu"
+msgid "Copy URL"
+msgstr "复制网址"
 
 msgctxt "Launcher"
 msgid "Loading preview"

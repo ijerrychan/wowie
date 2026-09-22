@@ -281,7 +281,7 @@ fn detail_block_height(block: &ResultDetailBlock) -> i32 {
     fn wrapped_lines(text: &str, width: usize) -> i32 {
         let lines = text
             .lines()
-            .map(|line| (line.chars().count().max(1) + width - 1) / width)
+            .map(|line| line.chars().count().max(1).div_ceil(width))
             .sum::<usize>()
             .max(1);
         // CJK characters occupy more width than ASCII; overestimate slightly

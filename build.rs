@@ -98,6 +98,14 @@ fn generate_provider_catalog() {
         ),
     ).expect("failed to write dynamic provider catalog");
 
+    let detail_registrations = format!(
+        "    let _ = registry;\n{}",
+        details
+            .iter()
+            .map(|name| format!("    {}::register(registry);", name))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     std::fs::write(
         out_dir.join("detail_providers.rs"),
         format!(
@@ -107,14 +115,7 @@ fn generate_provider_catalog() {
                 .map(|name| format!("#[path = \"{}/{}.rs\"] pub mod {};", detail_dir, name, name))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            format!(
-                "    let _ = registry;\n{}",
-                details
-                    .iter()
-                    .map(|name| format!("    {}::register(registry);", name))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
+            detail_registrations
         ),
     )
     .expect("failed to write detail provider catalog");

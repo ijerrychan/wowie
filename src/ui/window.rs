@@ -30,11 +30,12 @@ pub(super) fn save_window_size(window: &Launcher) {
         .size()
         .to_logical(native_window.scale_factor());
     config.window_width = logical_size.width.round().max(0.0) as u32;
-    config.window_height = if window.get_result_mode() {
-        logical_size.height.round().max(0.0) as u32
-    } else {
-        window.get_result_window_height().round().max(0.0) as u32
-    };
+    config.window_height =
+        if window.get_result_mode() && logical_size.height >= config::MIN_WINDOW_HEIGHT as f32 {
+            logical_size.height.round().max(0.0) as u32
+        } else {
+            window.get_result_window_height().round().max(0.0) as u32
+        };
     if let Err(error) = config.save() {
         eprintln!("could not save window size: {error:#}");
     }

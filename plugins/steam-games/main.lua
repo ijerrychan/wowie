@@ -160,7 +160,15 @@ local function discover()
 end
 
 wowie.on("initialize", function(_context)
-  games = discover()
+  local now = os.time()
+  local cached = wowie.storage_read("steam-games-v1")
+  if cached and type(cached.games) == "table" and type(cached.saved_at) == "number"
+      and now - cached.saved_at < 6 * 60 * 60 then
+    games = cached.games
+  else
+    games = discover()
+    wowie.storage_write("steam-games-v1", {saved_at = now, games = games})
+  end
 end)
 
 wowie.on("query", function(query, context)

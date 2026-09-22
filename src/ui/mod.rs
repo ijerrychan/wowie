@@ -21,7 +21,7 @@ use details::{request_dynamic_detail, set_detail_view};
 use results::{matches_model, request_icons, static_icon_kind, ResultRowPayload};
 use slint::{ComponentHandle, Model, ModelRc, Timer, VecModel};
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     rc::Rc,
     sync::{
         atomic::AtomicU64,
@@ -39,6 +39,10 @@ const FOCUS_LOSS_DELAY: Duration = Duration::from_millis(30);
 const PROVIDER_REFRESH_INTERVAL: Duration = Duration::from_millis(200);
 pub(super) const PALETTE_POSITION_DELAY: Duration = Duration::from_millis(10);
 const SEARCH_PAGE_PREFETCH_DISTANCE: usize = 12;
+/// Keep the Slint model bounded even when several providers return broad
+/// matches. SearchCore retains the complete dynamic cache for launch lookup;
+/// this is only the interactive surface limit.
+const MAX_RENDERED_RESULTS: usize = 256;
 
 /// Clear the shared query and leave any active search-engine session.
 ///
@@ -51,6 +55,7 @@ fn clear_query(
     window.set_shortcut_session_active(false);
     window.set_shortcut_session_execute_mode(false);
     window.set_shortcut_session_prefix(slint::SharedString::default());
+    window.set_shortcut_session_placeholder(slint::SharedString::default());
     if let Ok(mut session) = active_session.lock() {
         *session = None;
     }
@@ -62,6 +67,30 @@ fn clear_query(
             window.invoke_query_changed(query);
         }
     });
+}
+
+fn allow_favorite_in_context(
+    session: Option<&crate::page::SearchEngineSession>,
+    session_active: bool,
+    query: &str,
+) -> bool {
+    if !session_active || query.trim().is_empty() {
+        return true;
+    }
+    session.is_some_and(|session| session.mode != crate::page::SearchEngineMode::Execute)
+}
+
+fn can_favorite_item(
+    item: &SearchResult,
+    session: Option<&crate::page::SearchEngineSession>,
+    session_active: bool,
+    query: &str,
+) -> bool {
+    item.allow_favorite && allow_favorite_in_context(session, session_active, query)
+}
+
+fn explicit_detail_matches(open_item_id: Option<&str>, selected_item_id: Option<&str>) -> bool {
+    open_item_id.is_some_and(|open_item_id| Some(open_item_id) == selected_item_id)
 }
 
 /// Restore the user-selected height whenever the result surface becomes
@@ -78,6 +107,15 @@ fn restore_result_window_height(window: &Launcher) {
     if (logical_size.height - target_height).abs() > 0.5 {
         native_window.set_size(slint::LogicalSize::new(logical_size.width, target_height));
     }
+}
+
+fn schedule_visible_range_refresh(window: &Launcher, end: i32) {
+    let weak = window.as_weak();
+    Timer::single_shot(Duration::ZERO, move || {
+        if let Some(window) = weak.upgrade() {
+            window.invoke_visible_range_changed(0, end.max(0));
+        }
+    });
 }
 
 /// Per-query continuation state for paged search engines.
@@ -170,6 +208,7 @@ struct SearchPresentation {
     detail_panel: bool,
     view_mode: String,
     search_engine: Option<crate::page::SearchEngineSession>,
+    empty_state: Option<SearchResult>,
 }
 
 fn build_search_presentation(
@@ -184,7 +223,15 @@ fn build_search_presentation(
         .cloned()
         .map(crate::page::SearchContext::Engine)
         .unwrap_or_else(|| engine.search_context(query));
-    let found = engine.search_in_context(&search_context, query);
+    let found = engine
+        .search_in_context(&search_context, query)
+        .into_iter()
+        .take(MAX_RENDERED_RESULTS)
+        .collect::<Vec<_>>();
+    let empty_state = found
+        .is_empty()
+        .then(|| engine.empty_state(&search_context, query))
+        .flatten();
     let search_engine = search_context.session().cloned();
     // SearchCore gives an entered engine exclusive ownership of the result
     // surface. The UI never identifies engine rows by their result category.
@@ -206,10 +253,15 @@ fn build_search_presentation(
             // A session prefix selects the engine, not every result the
             // engine returns. Showing it on menu rows is both misleading and
             // consumes their trailing-row space.
-            let shortcut_hint = (!is_search_engine)
+            let shortcut_hint = (!is_search_engine && active_session.is_none())
                 .then(|| engine.shortcut_hint(&item.id))
                 .flatten();
-            ResultRowPayload::from(item, show_advanced_details, shortcut_hint.as_deref())
+            ResultRowPayload::from(
+                item,
+                show_advanced_details,
+                shortcut_hint.as_deref(),
+                engine.is_favorite(&item.id),
+            )
         })
         .collect();
     let has_dynamic_detail = found
@@ -234,6 +286,37 @@ fn build_search_presentation(
         detail_panel,
         view_mode,
         search_engine,
+        empty_state,
+    }
+}
+
+fn apply_empty_state(window: &Launcher, state: Option<&SearchResult>, icon_service: &IconService) {
+    window.set_empty_state_detail_active(false);
+    if let Some(state) = state {
+        window.set_empty_state_title(state.title.clone().into());
+        window.set_empty_state_description(
+            state
+                .description
+                .as_deref()
+                .unwrap_or(&state.location)
+                .into(),
+        );
+        let icon_kind = static_icon_kind(state.icon.as_ref());
+        window.set_empty_state_icon_kind(icon_kind.into());
+        if icon_kind.is_empty() {
+            let image = icon_service
+                .resolve_at(state, DISPLAY_ICON_SIZE)
+                .map(|icon| results::icon_to_image(&icon))
+                .unwrap_or_default();
+            window.set_empty_state_icon(image);
+        } else {
+            window.set_empty_state_icon(slint::Image::default());
+        }
+    } else {
+        window.set_empty_state_title(String::new().into());
+        window.set_empty_state_description(String::new().into());
+        window.set_empty_state_icon_kind(String::new().into());
+        window.set_empty_state_icon(slint::Image::default());
     }
 }
 
@@ -258,6 +341,18 @@ fn apply_search_engine(window: &Launcher, session: Option<&crate::page::SearchEn
         session
             .map(|session| session.prefix.clone().into())
             .unwrap_or_default(),
+    );
+    window.set_shortcut_session_placeholder(
+        session
+            .map(|session| {
+                if session.placeholder.trim().is_empty() {
+                    session.title.clone()
+                } else {
+                    session.placeholder.clone()
+                }
+            })
+            .unwrap_or_default()
+            .into(),
     );
 }
 
@@ -309,6 +404,7 @@ pub fn run() -> Result<()> {
     let context_visible = Arc::new(AtomicBool::new(false));
     let context_generation = Arc::new(AtomicU64::new(0));
     let context_item = Arc::new(Mutex::new(None::<SearchResult>));
+    let empty_state_item = Arc::new(Mutex::new(None::<SearchResult>));
     let show_advanced_details = Arc::new(AtomicBool::new(config.show_advanced_details));
     let show_advanced_launch_entries =
         Arc::new(AtomicBool::new(config.show_advanced_launch_entries));
@@ -317,6 +413,7 @@ pub fn run() -> Result<()> {
     let query_generation = Arc::new(AtomicU64::new(0));
     let search_icon_generation = Arc::new(AtomicU64::new(0));
     let detail_generation = Arc::new(AtomicU64::new(0));
+    let explicit_detail_item = Arc::new(Mutex::new(None::<String>));
     let mut detail_registry = crate::details::DetailRegistry::default_providers();
     detail_registry.register(Arc::new(plugins));
     let current_query = Arc::new(Mutex::new(String::new()));
@@ -332,6 +429,7 @@ pub fn run() -> Result<()> {
     window.set_results(ModelRc::from(results.clone()));
     window.set_window_width(config.window_width as i32);
     window.set_result_window_height(config.window_height as f32);
+    window.set_show_results_on_empty_query(config.show_results_on_empty_query);
     window.set_list_item_height(config.list_item_height as f32);
     window.set_grid_item_size(config.grid_item_size as f32);
     window.set_dark_mode(dark_mode);
@@ -461,6 +559,8 @@ pub fn run() -> Result<()> {
                         .filter_map(|index| window.get_results().row_data(index))
                         .collect::<Vec<_>>();
                     rows.extend(more.iter().map(|item| {
+                        // Shortcut prefixes identify root-search entry rows;
+                        // they are not useful on result rows inside a session.
                         let shortcut_hint = (!window.get_shortcut_session_active())
                             .then(|| engine.shortcut_hint(&item.id))
                             .flatten();
@@ -468,6 +568,7 @@ pub fn run() -> Result<()> {
                             item,
                             show_advanced_details.load(Ordering::Acquire),
                             shortcut_hint.as_deref(),
+                            engine.is_favorite(&item.id),
                         ))
                     }));
                     window.set_results(ModelRc::from(Rc::new(VecModel::from(rows))));
@@ -492,6 +593,7 @@ pub fn run() -> Result<()> {
         let engine = engine.clone();
         let weak = window.as_weak();
         let current_query = Arc::clone(&current_query);
+        let active_session = Arc::clone(&active_session);
         let icon_items = Arc::clone(&icon_items);
         window.on_detail_action_requested(move |index| {
             let Some(window) = weak.upgrade() else {
@@ -526,6 +628,7 @@ pub fn run() -> Result<()> {
             let action_id = detail_action.id.clone();
             let engine = Arc::clone(&engine);
             let current_query = Arc::clone(&current_query);
+            let active_session = Arc::clone(&active_session);
             let weak = weak.clone();
             std::thread::spawn(move || {
                 let result = engine.execute_transient_plugin_action(&item, &action_id);
@@ -539,7 +642,11 @@ pub fn run() -> Result<()> {
                                 .lock()
                                 .map(|query| query.clone())
                                 .unwrap_or_default();
-                            engine.record_success(&item_id, &query);
+                            let session = active_session
+                                .lock()
+                                .ok()
+                                .and_then(|session| session.clone());
+                            engine.record_action_success(&item_id, &query, session.as_ref());
                             window.set_last_action_id(item_id.into());
                             window.set_last_action_result(output.title.into());
                             window.set_last_action_subtitle(output.subtitle.into());
@@ -555,13 +662,36 @@ pub fn run() -> Result<()> {
         let weak = window.as_weak();
         let icon_service = icon_service.clone();
         let detail_generation = Arc::clone(&detail_generation);
+        let explicit_detail_item = Arc::clone(&explicit_detail_item);
         window.on_detail_back_requested(move || {
             // Invalidate an in-flight dynamic preview before hiding it. A
             // late provider response must not reopen the detail surface.
             detail_generation.fetch_add(1, Ordering::AcqRel);
+            if let Ok(mut open_item) = explicit_detail_item.lock() {
+                *open_item = None;
+            }
             if let Some(window) = weak.upgrade() {
                 set_detail_view(&window, None, &icon_service);
                 window.set_detail_panel_visible(false);
+                window.set_empty_state_detail_active(false);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let icon_service = icon_service.clone();
+        let empty_state_item = Arc::clone(&empty_state_item);
+        window.on_empty_state_activated(move || {
+            let Some(item) = empty_state_item.lock().ok().and_then(|state| state.clone()) else {
+                return;
+            };
+            let Some(detail) = item.detail.as_ref() else {
+                return;
+            };
+            if let Some(window) = weak.upgrade() {
+                set_detail_view(&window, Some(detail), &icon_service);
+                window.set_empty_state_detail_active(true);
+                window.set_detail_panel_visible(true);
             }
         });
     }
@@ -576,6 +706,7 @@ pub fn run() -> Result<()> {
                 window.set_shortcut_session_active(false);
                 window.set_shortcut_session_execute_mode(false);
                 window.set_shortcut_session_prefix(slint::SharedString::default());
+                window.set_shortcut_session_placeholder(slint::SharedString::default());
                 if let Ok(mut session) = active_session.lock() {
                     *session = None;
                 }
@@ -611,15 +742,7 @@ pub fn run() -> Result<()> {
             if let Ok(mut active) = active_session.lock() {
                 *active = entry.session.clone();
             }
-            window.set_shortcut_session_active(entry.session.is_some());
-            window.set_shortcut_session_prefix(
-                entry
-                    .session
-                    .as_ref()
-                    .map(|session| session.prefix.clone())
-                    .unwrap_or_default()
-                    .into(),
-            );
+            apply_search_engine(&window, entry.session.as_ref());
             let cursor = entry.query.len() as i32;
             let query = slint::SharedString::from(entry.query);
             let delayed_window = window.as_weak();
@@ -669,13 +792,13 @@ pub fn run() -> Result<()> {
             let Some(item) = engine
                 .search_in_context(&context, &query)
                 .into_iter()
-                .find(|item| !item.actions.is_empty())
+                .find(|item| item.primary_action().is_some())
             else {
                 return;
             };
             match launcher::launch(&item) {
                 Ok(()) => {
-                    engine.record_success(&item.id, &query);
+                    engine.record_action_success(&item.id, &query, Some(&session));
                     record_query_history(&query_history, &query, Some(session));
                     window.set_launch_error(String::new().into());
                     clear_query(&window, &active_session);
@@ -728,11 +851,7 @@ pub fn run() -> Result<()> {
                 *active = Some(session.clone());
             }
             if let Some(window) = weak.upgrade() {
-                window.set_shortcut_session_active(true);
-                window.set_shortcut_session_execute_mode(
-                    session.mode == crate::page::SearchEngineMode::Execute,
-                );
-                window.set_shortcut_session_prefix(session.prefix.clone().into());
+                apply_search_engine(&window, Some(&session));
             }
             session.argument.into()
         });
@@ -750,12 +869,17 @@ pub fn run() -> Result<()> {
         let search_icon_generation = Arc::clone(&search_icon_generation);
         let detail_registry = detail_registry.clone();
         let detail_generation = Arc::clone(&detail_generation);
+        let explicit_detail_item = Arc::clone(&explicit_detail_item);
+        let empty_state_item = Arc::clone(&empty_state_item);
         window.on_query_changed(move |query| {
             // Invalidate an in-flight detail request immediately. The result
             // list for the new query may arrive slightly later on the worker
             // thread, so waiting for selection changes here can let stale
             // weather data briefly overwrite the new query's detail panel.
             detail_generation.fetch_add(1, Ordering::AcqRel);
+            if let Ok(mut open_item) = explicit_detail_item.lock() {
+                *open_item = None;
+            }
             if let Ok(mut current) = current_query.lock() {
                 *current = query.to_string();
             }
@@ -777,7 +901,7 @@ pub fn run() -> Result<()> {
                 }
                 if !query.trim().is_empty()
                     || window.get_shortcut_session_active()
-                    || window.get_results().row_count() > 0
+                    || window.get_result_mode()
                 {
                     restore_result_window_height(&window);
                 }
@@ -803,8 +927,9 @@ pub fn run() -> Result<()> {
             let search_context_for_query = active_session_for_query
                 .clone()
                 .map(crate::page::SearchContext::Engine)
-                .unwrap_or(crate::page::SearchContext::Default);
+                .unwrap_or_else(|| engine.search_context(query.as_str()));
             let debounce_delay = engine.search_debounce(&search_context_for_query);
+            let empty_state_item_for_query = Arc::clone(&empty_state_item);
             // Debounce before creating a worker. This avoids one sleeping OS
             // thread per keystroke while a plugin-backed search is settling.
             Timer::single_shot(debounce_delay, move || {
@@ -830,6 +955,7 @@ pub fn run() -> Result<()> {
                         detail_panel,
                         view_mode,
                         search_engine,
+                        empty_state,
                     } = presentation;
                     let _ = slint::invoke_from_event_loop(move || {
                         if query_generation.load(Ordering::Acquire) != query_id {
@@ -840,6 +966,10 @@ pub fn run() -> Result<()> {
                                 window.set_view_mode(view_mode.into());
                             }
                             apply_search_engine(&window, search_engine.as_ref());
+                            apply_empty_state(&window, empty_state.as_ref(), &icon_service);
+                            if let Ok(mut state) = empty_state_item_for_query.lock() {
+                                *state = empty_state.clone();
+                            }
                             if let Ok(mut state) = icon_items.lock() {
                                 *state = (query_id, Arc::clone(&found_for_icons));
                             }
@@ -857,7 +987,10 @@ pub fn run() -> Result<()> {
                                     rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
                                 ));
                                 window.set_results(ModelRc::from(model));
-                                if count > 0 {
+                                if is_search_engine {
+                                    schedule_visible_range_refresh(&window, count.min(8) as i32);
+                                }
+                                if count > 0 && (!query.trim().is_empty() || is_search_engine) {
                                     restore_result_window_height(&window);
                                 }
                             }
@@ -879,7 +1012,13 @@ pub fn run() -> Result<()> {
                                     &icon_service,
                                 );
                                 window.set_selected_index(-1);
-                                window.set_selected_index(if count > 0 { 0 } else { -1 });
+                                window.set_selected_index(
+                                    if count > 0 && (!query.trim().is_empty() || is_search_engine) {
+                                        0
+                                    } else {
+                                        -1
+                                    },
+                                );
                             }
                             // The row model can remain identical while a
                             // plugin detail changes with the query (for
@@ -912,25 +1051,87 @@ pub fn run() -> Result<()> {
         let engine = engine.clone();
         let icon_service = icon_service.clone();
         let weak = window.as_weak();
+        let platform = Arc::clone(&platform);
         let detail_registry = detail_registry.clone();
+        let icon_items = Arc::clone(&icon_items);
         let show_advanced_launch_entries = Arc::clone(&show_advanced_launch_entries);
         let detail_generation = Arc::clone(&detail_generation);
+        let active_session = Arc::clone(&active_session);
+        let explicit_detail_item = Arc::clone(&explicit_detail_item);
         window.on_selection_changed(move |index| {
-            // Selection only changes local preview state. It also invalidates
-            // a detail request that was explicitly started for the previous
-            // result, so a late response cannot overwrite the new selection.
-            detail_generation.fetch_add(1, Ordering::AcqRel);
             let item = weak
                 .upgrade()
                 .and_then(|window| window.get_results().row_data(index as usize))
-                .and_then(|row| engine.by_id(row.id.as_str()));
+                .and_then(|row| {
+                    engine.by_id(row.id.as_str()).or_else(|| {
+                        icon_items.lock().ok().and_then(|state| {
+                            state.1.iter().find(|item| row.id == item.id).cloned()
+                        })
+                    })
+                });
+            let selection_keeps_explicit_detail =
+                explicit_detail_item.lock().ok().is_some_and(|open_item| {
+                    explicit_detail_matches(
+                        open_item.as_deref(),
+                        item.as_ref().map(|item| item.id.as_str()),
+                    )
+                });
+            if !selection_keeps_explicit_detail {
+                // Selection only changes local preview state. It also
+                // invalidates an in-flight detail request for the previous
+                // result, unless this selection was initiated by opening
+                // that exact detail panel.
+                detail_generation.fetch_add(1, Ordering::AcqRel);
+                if let Ok(mut open_item) = explicit_detail_item.lock() {
+                    *open_item = None;
+                }
+            }
             let has_dynamic_detail = item
                 .as_ref()
                 .is_some_and(|item| detail_registry.provider_for(item).is_some());
             if let Some(window) = weak.upgrade() {
+                // The root search deliberately starts collapsed for an empty
+                // query. Moving to its first result must resize the native
+                // window as well as changing Slint's preferred height.
+                if index >= 0
+                    && window.get_query_text().trim().is_empty()
+                    && !window.get_shortcut_session_active()
+                {
+                    restore_result_window_height(&window);
+                    // `set_size` is applied by the native backend after this
+                    // callback returns. Re-centering here used the former,
+                    // compact size and made the expanded palette jump down.
+                    // Only root-search expansion needs a new position;
+                    // navigating ordinary results must not move the window.
+                    let weak = weak.clone();
+                    let platform = Arc::clone(&platform);
+                    Timer::single_shot(PALETTE_POSITION_DELAY, move || {
+                        if let Some(window) = weak.upgrade() {
+                            platform.position_palette(
+                                window.window(),
+                                true,
+                                window.get_result_window_height(),
+                            );
+                        }
+                    });
+                }
                 let context_menu_available = item.as_ref().is_some_and(|item| {
-                    !context_actions(item, show_advanced_launch_entries.load(Ordering::Acquire))
-                        .is_empty()
+                    let session = active_session
+                        .lock()
+                        .ok()
+                        .and_then(|session| session.clone());
+                    !context_actions(
+                        item,
+                        show_advanced_launch_entries.load(Ordering::Acquire),
+                        engine.is_favorite(&item.id),
+                        can_favorite_item(
+                            item,
+                            session.as_ref(),
+                            window.get_shortcut_session_active(),
+                            window.get_query_text().as_str(),
+                        ),
+                    )
+                    .is_empty()
                 });
                 let detail = item
                     .as_ref()
@@ -940,7 +1141,9 @@ pub fn run() -> Result<()> {
                     })
                     .and_then(|item| item.detail.as_ref());
                 window.set_context_menu_available(context_menu_available);
-                apply_search_detail_state(&window, detail, detail.is_some(), &icon_service);
+                if !selection_keeps_explicit_detail {
+                    apply_search_detail_state(&window, detail, detail.is_some(), &icon_service);
+                }
             }
         });
     }
@@ -953,6 +1156,7 @@ pub fn run() -> Result<()> {
         let active_session = Arc::clone(&active_session);
         let query_history = Arc::clone(&query_history);
         let detail_generation = Arc::clone(&detail_generation);
+        let explicit_detail_item = Arc::clone(&explicit_detail_item);
         let detail_registry = detail_registry.clone();
         let detail_language = config.language.clone();
         let icon_items = Arc::clone(&icon_items);
@@ -970,7 +1174,7 @@ pub fn run() -> Result<()> {
                     })
             });
             if let Some(item) = item {
-                if let Some(result::Action::EnterSearchEngine { prefix }) = item.actions.first() {
+                if let Some(result::Action::EnterSearchEngine { prefix }) = item.primary_action() {
                     let query = weak
                         .upgrade()
                         .map(|window| window.get_query_text().to_string())
@@ -988,8 +1192,13 @@ pub fn run() -> Result<()> {
                             .strip_prefix(prefix.as_str())
                             .unwrap_or(query.as_str())
                             .trim();
-                        window.set_shortcut_session_active(true);
-                        window.set_shortcut_session_prefix(prefix.clone().into());
+                        if let Some(session) = session.as_ref() {
+                            apply_search_engine(&window, Some(session));
+                        } else {
+                            window.set_shortcut_session_active(true);
+                            window.set_shortcut_session_prefix(prefix.clone().into());
+                            window.set_shortcut_session_placeholder(slint::SharedString::default());
+                        }
                         let query = slint::SharedString::from(argument.to_owned());
                         let weak = window.as_weak();
                         Timer::single_shot(Duration::ZERO, move || {
@@ -1001,7 +1210,21 @@ pub fn run() -> Result<()> {
                     }
                     return;
                 }
-                if let Some(result::Action::UpdateSession { updates }) = item.actions.first() {
+                if let Some(result::Action::UpdateSession { updates }) = item.primary_action() {
+                    if active_session
+                        .lock()
+                        .ok()
+                        .is_some_and(|session| session.is_none())
+                    {
+                        if let Some(session) = engine.favorite_session(&item.id) {
+                            if let Ok(mut active) = active_session.lock() {
+                                *active = Some(session.clone());
+                            }
+                            if let Some(window) = weak.upgrade() {
+                                apply_search_engine(&window, Some(&session));
+                            }
+                        }
+                    }
                     let Some(mut session) = active_session
                         .lock()
                         .ok()
@@ -1036,13 +1259,15 @@ pub fn run() -> Result<()> {
                     .is_some_and(|session| session.mode == crate::page::SearchEngineMode::Panel);
                 let has_dynamic_detail = detail_registry.provider_for(&item).is_some();
                 let open_detail_action = item
-                    .actions
-                    .first()
+                    .primary_action()
                     .is_some_and(result::Action::is_open_detail);
-                if (open_grid_detail || open_shortcut_panel || item.actions.is_empty())
+                if (open_grid_detail || open_shortcut_panel || item.primary_action().is_none())
                     && (item.detail.is_some() || has_dynamic_detail)
                     || open_detail_action
                 {
+                    if let Ok(mut open_item) = explicit_detail_item.lock() {
+                        *open_item = Some(item.id.clone());
+                    }
                     if let Some(window) = weak.upgrade() {
                         window.set_selected_index(index);
                         if let Some(detail) = item.detail.as_ref() {
@@ -1062,14 +1287,18 @@ pub fn run() -> Result<()> {
                     }
                     return;
                 }
-                if item.actions.first().is_some_and(result::Action::is_plugin) {
+                if item.primary_action().is_some_and(result::Action::is_plugin) {
                     match engine.execute_action(&item.id) {
                         Ok(output) => {
                             let query = current_query
                                 .lock()
                                 .map(|query| query.clone())
                                 .unwrap_or_default();
-                            engine.record_success(&item.id, &query);
+                            let session = active_session
+                                .lock()
+                                .ok()
+                                .and_then(|session| session.clone());
+                            engine.record_action_success(&item.id, &query, session.as_ref());
                             if let Some(window) = weak.upgrade() {
                                 window.set_last_action_id(item.id.clone().into());
                                 window.set_last_action_result(output.title.into());
@@ -1094,11 +1323,11 @@ pub fn run() -> Result<()> {
                             .map(|window| window.get_query_text().to_string())
                             .or_else(|| current_query.lock().ok().map(|query| query.clone()))
                             .unwrap_or_default();
-                        engine.record_success(&item.id, &query);
                         let session = active_session
                             .lock()
                             .ok()
                             .and_then(|session| session.clone());
+                        engine.record_action_success(&item.id, &query, session.as_ref());
                         record_query_history(&query_history, &query, session);
                         if let Some(window) = weak.upgrade() {
                             window.set_launch_error(String::new().into());
@@ -1135,17 +1364,41 @@ pub fn run() -> Result<()> {
         let visible = Arc::clone(&visible);
         let show_advanced_launch_entries = Arc::clone(&show_advanced_launch_entries);
         let context_language = config.language.clone();
+        let icon_items = Arc::clone(&icon_items);
+        let active_session = Arc::clone(&active_session);
         window.on_context_menu_requested(move |index, keyboard| {
             let Some(item) = weak.upgrade().and_then(|window| {
                 window
                     .get_results()
                     .row_data(index as usize)
-                    .and_then(|row| engine.by_id(row.id.as_str()))
+                    .and_then(|row| {
+                        engine.by_id(row.id.as_str()).or_else(|| {
+                            icon_items.lock().ok().and_then(|state| {
+                                state.1.iter().find(|item| row.id == item.id).cloned()
+                            })
+                        })
+                    })
             }) else {
                 return;
             };
-            let actions =
-                context_actions(&item, show_advanced_launch_entries.load(Ordering::Acquire));
+            let session = active_session
+                .lock()
+                .ok()
+                .and_then(|session| session.clone());
+            let can_add_favorite = weak.upgrade().is_some_and(|window| {
+                can_favorite_item(
+                    &item,
+                    session.as_ref(),
+                    window.get_shortcut_session_active(),
+                    window.get_query_text().as_str(),
+                )
+            });
+            let actions = context_actions(
+                &item,
+                show_advanced_launch_entries.load(Ordering::Acquire),
+                engine.is_favorite(&item.id),
+                can_add_favorite,
+            );
             if actions.is_empty() {
                 hide_context_menu(
                     &context_weak,
@@ -1269,10 +1522,75 @@ pub fn run() -> Result<()> {
         let context_item = Arc::clone(&context_item);
         let visible = Arc::clone(&visible);
         let engine = Arc::clone(&engine);
+        let active_session_for_favorite = Arc::clone(&active_session);
+        let favorite_limit_message =
+            i18n::tr(&config.language, "Maximum number of favorites reached").to_owned();
         context_window.on_action_requested(move |action_id| {
             let Some(item) = context_item.lock().ok().and_then(|current| current.clone()) else {
                 return;
             };
+            if matches!(action_id.as_str(), "add-favorite" | "remove-favorite") {
+                let session = active_session_for_favorite
+                    .lock()
+                    .ok()
+                    .and_then(|session| session.clone());
+                if action_id == "add-favorite"
+                    && !weak.upgrade().is_some_and(|window| {
+                        can_favorite_item(
+                            &item,
+                            session.as_ref(),
+                            window.get_shortcut_session_active(),
+                            window.get_query_text().as_str(),
+                        )
+                    })
+                {
+                    return;
+                }
+                let favorite_result = engine.toggle_favorite(&item, session.as_ref());
+                hide_context_menu(
+                    &context_weak,
+                    &weak,
+                    &context_visible,
+                    &context_generation,
+                    &context_item,
+                    false,
+                    &visible,
+                );
+                if let Some(window) = weak.upgrade() {
+                    match favorite_result {
+                        Some(_) => {
+                            window.set_launch_error(String::new().into());
+                            window.invoke_query_changed(window.get_query_text());
+                        }
+                        None => window.set_launch_error(favorite_limit_message.clone().into()),
+                    }
+                }
+                return;
+            }
+            let copy_text = match action_id.as_str() {
+                "copy-title" => Some(item.title.clone()),
+                "copy-path" | "copy-url" => Some(item.launch_target.to_string_lossy().into_owned()),
+                _ => None,
+            };
+            if let Some(text) = copy_text {
+                let result = crate::utils::clipboard::set_text(&text);
+                hide_context_menu(
+                    &context_weak,
+                    &weak,
+                    &context_visible,
+                    &context_generation,
+                    &context_item,
+                    false,
+                    &visible,
+                );
+                if let Some(window) = weak.upgrade() {
+                    match result {
+                        Ok(()) => window.set_launch_error(String::new().into()),
+                        Err(error) => window.set_launch_error(error.to_string().into()),
+                    }
+                }
+                return;
+            }
             if action_id == "open-directory" {
                 hide_context_menu(
                     &context_weak,
@@ -1296,8 +1614,60 @@ pub fn run() -> Result<()> {
                 });
                 return;
             }
+            if let Some(context_action_id) = action_id.strip_prefix("custom-context:") {
+                let Some(context_action) = item.actions.iter().find_map(|action| {
+                    let result::Action::ContextMenu(action) = action else {
+                        return None;
+                    };
+                    (action.id == context_action_id).then(|| action.clone())
+                }) else {
+                    return;
+                };
+                hide_context_menu(
+                    &context_weak,
+                    &weak,
+                    &context_visible,
+                    &context_generation,
+                    &context_item,
+                    false,
+                    &visible,
+                );
+                let result = match context_action.behavior {
+                    result::ContextMenuBehavior::CopyText { text } => {
+                        crate::utils::clipboard::set_text(&text)
+                    }
+                    result::ContextMenuBehavior::OpenUrl { url } => launcher::open_url(&url),
+                    result::ContextMenuBehavior::Launch { entry, as_admin } => {
+                        launcher::launch_entry(&entry, as_admin)
+                    }
+                    result::ContextMenuBehavior::Plugin { .. } => {
+                        match engine.execute_transient_plugin_action(
+                            &item,
+                            &format!("context-menu:{context_action_id}"),
+                        ) {
+                            Ok(output) => {
+                                if let Some(window) = weak.upgrade() {
+                                    window.set_last_action_id(item.id.clone().into());
+                                    window.set_last_action_result(output.title.into());
+                                    window.set_last_action_subtitle(output.subtitle.into());
+                                    window.set_launch_error(String::new().into());
+                                }
+                                return;
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                };
+                if let Some(window) = weak.upgrade() {
+                    match result {
+                        Ok(()) => window.set_launch_error(String::new().into()),
+                        Err(error) => window.set_launch_error(error.to_string().into()),
+                    }
+                }
+                return;
+            }
             if let Some(plugin_action_id) = action_id.strip_prefix("plugin-action:") {
-                let result = engine.execute_plugin_action(&item.id, plugin_action_id);
+                let result = engine.execute_transient_plugin_action(&item, plugin_action_id);
                 hide_context_menu(
                     &context_weak,
                     &weak,
@@ -1406,7 +1776,17 @@ pub fn run() -> Result<()> {
                     true
                 } else {
                     match app_source_events.recv_timeout(PROVIDER_REFRESH_INTERVAL) {
-                        Ok(source) => provider.refresh_source(source),
+                        Ok(source) => {
+                            let mut sources = BTreeSet::from([source]);
+                            while let Ok(source) = app_source_events.try_recv() {
+                                sources.insert(source);
+                            }
+                            let mut changed = false;
+                            for source in sources {
+                                changed |= provider.refresh_source(source);
+                            }
+                            changed
+                        }
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
@@ -1438,6 +1818,7 @@ pub fn run() -> Result<()> {
                         let window_height = updated.window_height as f32;
                         let list_item_height = updated.list_item_height as f32;
                         let grid_item_size = updated.grid_item_size as f32;
+                        let show_results_on_empty_query = updated.show_results_on_empty_query;
                         let _ = slint::invoke_from_event_loop(move || {
                             if language != "system" {
                                 let _ = slint::select_bundled_translation(&language);
@@ -1450,6 +1831,7 @@ pub fn run() -> Result<()> {
                             if let Some(window) = weak_for_config.upgrade() {
                                 window.set_window_width(window_width);
                                 window.set_result_window_height(window_height);
+                                window.set_show_results_on_empty_query(show_results_on_empty_query);
                                 if window.get_result_mode() {
                                     restore_result_window_height(&window);
                                 }
@@ -1486,6 +1868,7 @@ pub fn run() -> Result<()> {
                         detail_panel,
                         view_mode,
                         search_engine,
+                        empty_state,
                     } = build_search_presentation(
                         &engine,
                         &query,
@@ -1503,6 +1886,7 @@ pub fn run() -> Result<()> {
                     let icon_items_for_ui = Arc::clone(&icon_items);
                     let icon_requests_for_ui = Arc::clone(&icon_requests);
                     let icon_service_for_ui = icon_service.clone();
+                    let empty_state_item_for_results = Arc::clone(&empty_state_item);
                     let query_generation_for_icons = Arc::clone(&query_generation);
                     let search_icon_generation_for_ui = Arc::clone(&search_icon_generation);
                     let _ = slint::invoke_from_event_loop(move || {
@@ -1514,6 +1898,10 @@ pub fn run() -> Result<()> {
                                 window.set_view_mode(view_mode.into());
                             }
                             apply_search_engine(&window, search_engine.as_ref());
+                            apply_empty_state(&window, empty_state.as_ref(), &icon_service_for_ui);
+                            if let Ok(mut state) = empty_state_item_for_results.lock() {
+                                *state = empty_state.clone();
+                            }
                             if let Ok(mut state) = icon_items_for_ui.lock() {
                                 *state = (query_id, Arc::clone(&found_for_icons));
                             }
@@ -1531,7 +1919,10 @@ pub fn run() -> Result<()> {
                                     rows.into_iter().map(ResultRow::from).collect::<Vec<_>>(),
                                 ));
                                 window.set_results(ModelRc::from(model));
-                                if count > 0 {
+                                if is_search_engine {
+                                    schedule_visible_range_refresh(&window, count.min(8) as i32);
+                                }
+                                if count > 0 && (!query.trim().is_empty() || is_search_engine) {
                                     restore_result_window_height(&window);
                                 }
 
@@ -1542,7 +1933,13 @@ pub fn run() -> Result<()> {
                                     &icon_service_for_ui,
                                 );
                                 window.set_selected_index(-1);
-                                window.set_selected_index(if count > 0 { 0 } else { -1 });
+                                window.set_selected_index(
+                                    if count > 0 && (!query.trim().is_empty() || is_search_engine) {
+                                        0
+                                    } else {
+                                        -1
+                                    },
+                                );
                             }
                             if !results_changed && (detail.is_some() || detail_panel) {
                                 apply_search_detail_state(
@@ -1739,6 +2136,41 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn execute_sessions_only_allow_favorites_when_the_query_is_empty() {
+        let session = crate::page::SearchEngineSession {
+            id: "shortcut:command".into(),
+            title: "Execute Command".into(),
+            placeholder: "Enter a command".into(),
+            prefix: "> ".into(),
+            argument: String::new(),
+            mode: crate::page::SearchEngineMode::Execute,
+            state: Default::default(),
+        };
+        assert!(!allow_favorite_in_context(Some(&session), true, "ipconfig"));
+        assert!(allow_favorite_in_context(Some(&session), true, "   "));
+
+        let mut search_session = session;
+        search_session.mode = crate::page::SearchEngineMode::Search;
+        assert!(allow_favorite_in_context(
+            Some(&search_session),
+            true,
+            "weather"
+        ));
+        assert!(allow_favorite_in_context(None, false, "weather"));
+    }
+
+    #[test]
+    fn explicit_detail_survives_the_selection_change_that_opens_it() {
+        assert!(explicit_detail_matches(Some("weather"), Some("weather")));
+        assert!(!explicit_detail_matches(
+            Some("weather"),
+            Some("calculator")
+        ));
+        assert!(!explicit_detail_matches(Some("weather"), None));
+        assert!(!explicit_detail_matches(None, Some("weather")));
+    }
+
+    #[test]
     fn shortcut_action_is_not_shown_as_an_alternate_launch_entry() {
         let item = SearchResult {
             id: "shortcut:command".into(),
@@ -1767,10 +2199,11 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: result::ResultVisibility::Always,
         };
 
-        assert!(context_actions(&item, false)
+        assert!(context_actions(&item, false, false, true)
             .iter()
             .all(|action| action.kind != "section"));
     }
@@ -1841,6 +2274,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: result::ResultVisibility::Always,
         };
         let visible = visible_launch_entries(&item, false);

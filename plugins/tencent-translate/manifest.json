@@ -1,6 +1,6 @@
 {
-  "id": "google-translate",
-  "name": "Google Translate",
+  "id": "tencent-translate",
+  "name": "Tencent Translator",
   "version": "0.1.0",
   "api_version": 1,
   "entry_point": "main.lua",
@@ -8,14 +8,16 @@
   "engine": {
     "participates_in_root": true,
     "respect_global_fuzzy_search": true,
-    "ranking_bias": 0
+    "ranking_bias": 0,
+    "search_debounce_ms": 400
   },
   "commands": [{
     "id": "translate",
-    "title": "用谷歌翻译搜索",
-    "action_words": ["t"],
+    "title": "腾讯翻译",
+    "action_words": ["tmt"],
     "mode": "search",
+    "placeholder": "输入要翻译的文本",
     "require_separator": true,
-    "icon": {"type": "remote", "url": "https://cdn.simpleicons.org/googletranslate/4285F4"}
+    "icon": {"type": "resource", "path": "icons/tencent-translate.svg"}
   }]
 }

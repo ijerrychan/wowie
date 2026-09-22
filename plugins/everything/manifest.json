@@ -1,0 +1,21 @@
+{
+  "id": "everything",
+  "name": "Everything",
+  "version": "0.1.0",
+  "api_version": 1,
+  "entry_point": "main.lua",
+  "permissions": ["everything"],
+  "engine": {
+    "participates_in_root": true,
+    "respect_global_fuzzy_search": true,
+    "ranking_bias": 0
+  },
+  "commands": [{
+    "id": "search",
+    "title": "Search with Everything",
+    "action_words": ["e"],
+    "mode": "search",
+    "require_separator": true,
+    "icon": {"type": "named", "id": "folder-open"}
+  }]
+}

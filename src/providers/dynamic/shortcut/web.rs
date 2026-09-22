@@ -214,6 +214,7 @@ mod tests {
         let shortcut = ShortcutConfig {
             name: "用谷歌搜索".into(),
             prefix: "g".into(),
+            placeholder: String::new(),
             shortcut_type: "url".into(),
             mode: "execute".into(),
             template: "https://www.google.com/search?q={query}".into(),
@@ -234,6 +235,7 @@ mod tests {
         let shortcut = ShortcutConfig {
             name: "Search docs".into(),
             prefix: "d".into(),
+            placeholder: String::new(),
             shortcut_type: "url".into(),
             mode: "execute".into(),
             template: "https://example.com/?q={query}".into(),

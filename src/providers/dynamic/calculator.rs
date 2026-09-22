@@ -98,6 +98,7 @@ fn result(query: &str, language: &str) -> Option<SearchResult> {
         package_metadata: None,
         icon: Some(IconSpec::Calculator),
         ranking_bias: 0,
+        allow_favorite: true,
         visibility: crate::result::ResultVisibility::Always,
     })
 }

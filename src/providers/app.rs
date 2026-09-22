@@ -8,6 +8,7 @@
 use crate::result::{IconSpec, ResultCategory, SearchResult};
 use std::{
     collections::{HashMap, HashSet},
+    fs,
     path::PathBuf,
     sync::Arc,
     time::Instant,
@@ -19,7 +20,7 @@ use crate::{
     result::{Action, DetailView, LaunchEntry},
 };
 #[cfg(test)]
-use std::{fs, path::Path};
+use std::path::Path;
 
 #[path = "app/association.rs"]
 mod association;
@@ -34,9 +35,10 @@ use association::{
 };
 pub(crate) use association::{preferred_launch_entry, same_launch_behavior};
 use discovery::{
-    debug_enabled, debug_record_matches, debug_records, discover_custom_directories,
-    discover_desktop_source, discover_start_menu_source, discover_store_source,
-    expand_windows_variables, normalize_url, website_url,
+    debug_enabled, debug_record_matches, debug_records, discover_apps_folder_source,
+    discover_custom_directories, discover_desktop_source, discover_packaged_source,
+    discover_start_menu_source, expand_windows_variables, filesystem_source_fingerprint,
+    normalize_url, website_url,
 };
 #[cfg(test)]
 use discovery::{generic_file_result, is_website_shortcut, read_url_target};
@@ -54,7 +56,21 @@ pub struct AppProvider {
     sources: HashMap<crate::platform::AppProviderSource, Vec<SearchResult>>,
     source_lookup: SourceLookup,
     config: crate::config::ProviderConfig,
+    source_fingerprints: HashMap<crate::platform::AppProviderSource, u64>,
+    source_indexed_at: HashMap<crate::platform::AppProviderSource, u64>,
 }
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedAppIndex {
+    version: u32,
+    config: crate::config::ProviderConfig,
+    source_fingerprints: Vec<(crate::platform::AppProviderSource, u64)>,
+    source_indexed_at: Vec<(crate::platform::AppProviderSource, u64)>,
+    sources: Vec<(crate::platform::AppProviderSource, Vec<SearchResult>)>,
+}
+
+const APP_INDEX_CACHE_VERSION: u32 = 4;
+const APP_INDEX_CACHE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 struct ProviderDefinition {
     source: crate::platform::AppProviderSource,
@@ -160,11 +176,16 @@ impl SourceLookup {
     }
 }
 
-const PROVIDER_DEFINITIONS: [ProviderDefinition; 5] = [
+const PROVIDER_DEFINITIONS: [ProviderDefinition; 6] = [
     ProviderDefinition {
-        source: crate::platform::AppProviderSource::StoreApps,
+        source: crate::platform::AppProviderSource::AppsFolder,
         enabled: |config| config.store_apps,
-        discover: discover_store_source,
+        discover: discover_apps_folder_source,
+    },
+    ProviderDefinition {
+        source: crate::platform::AppProviderSource::PackagedApps,
+        enabled: |config| config.store_apps,
+        discover: discover_packaged_source,
     },
     ProviderDefinition {
         source: crate::platform::AppProviderSource::StartMenu,
@@ -197,15 +218,128 @@ impl AppProvider {
             sources: HashMap::new(),
             source_lookup: SourceLookup::default(),
             config: config.clone(),
+            source_fingerprints: HashMap::new(),
+            source_indexed_at: HashMap::new(),
         }
+    }
+
+    fn cache_path() -> PathBuf {
+        dirs::cache_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Wowie")
+            .join("app-index-v4.json")
+    }
+
+    fn restore_persisted_index(&mut self) -> bool {
+        let path = Self::cache_path();
+        let Ok(metadata) = fs::metadata(&path) else {
+            return false;
+        };
+        if metadata.len() > 64 * 1024 * 1024 {
+            return false;
+        }
+        let Ok(bytes) = fs::read(path) else {
+            return false;
+        };
+        let Ok(cache) = serde_json::from_slice::<PersistedAppIndex>(&bytes) else {
+            return false;
+        };
+        if cache.version != APP_INDEX_CACHE_VERSION || cache.config != self.config {
+            return false;
+        }
+        self.source_fingerprints = cache.source_fingerprints.into_iter().collect();
+        self.source_indexed_at = cache.source_indexed_at.into_iter().collect();
+        self.sources = cache.sources.into_iter().collect();
+        self.rebuild_source_lookup();
+        self.items = Arc::new(merge_sources(&self.sources));
+        eprintln!(
+            "[provider] restored {} app index record(s) from cache",
+            self.items.len()
+        );
+        true
+    }
+
+    fn persist_index(&self) {
+        let path = Self::cache_path();
+        let cache = PersistedAppIndex {
+            version: APP_INDEX_CACHE_VERSION,
+            config: self.config.clone(),
+            source_fingerprints: self
+                .source_fingerprints
+                .iter()
+                .map(|(source, value)| (*source, *value))
+                .collect(),
+            source_indexed_at: self
+                .source_indexed_at
+                .iter()
+                .map(|(source, value)| (*source, *value))
+                .collect(),
+            sources: self
+                .sources
+                .iter()
+                .map(|(source, rows)| (*source, rows.clone()))
+                .collect(),
+        };
+        let Ok(bytes) = serde_json::to_vec(&cache) else {
+            return;
+        };
+        if bytes.len() > 64 * 1024 * 1024 {
+            return;
+        }
+        let _ = crate::utils::atomic_write(&path, &bytes);
+    }
+
+    fn source_needs_refresh(&self, source: crate::platform::AppProviderSource) -> bool {
+        if let Some(current) = filesystem_source_fingerprint(source, &self.config) {
+            return self.source_fingerprints.get(&source) != Some(&current);
+        }
+        let now = unix_timestamp();
+        self.source_indexed_at
+            .get(&source)
+            .is_none_or(|last_indexed| {
+                now.saturating_sub(*last_indexed) > APP_INDEX_CACHE_MAX_AGE.as_secs()
+            })
+    }
+
+    fn refresh_source_fingerprints(&mut self) {
+        self.source_fingerprints = PROVIDER_DEFINITIONS
+            .iter()
+            .filter_map(|provider| {
+                filesystem_source_fingerprint(provider.source, &self.config)
+                    .map(|fingerprint| (provider.source, fingerprint))
+            })
+            .collect();
     }
 
     /// Populate the initial index. This is intentionally separate from
     /// construction so callers can run it on the provider worker thread.
     pub fn discover_initial(&mut self) {
+        if self.restore_persisted_index() {
+            let stale_sources = PROVIDER_DEFINITIONS
+                .iter()
+                .filter(|provider| (provider.enabled)(&self.config))
+                .filter(|provider| self.source_needs_refresh(provider.source))
+                .map(|provider| provider.source)
+                .collect::<Vec<_>>();
+            if stale_sources.is_empty() {
+                return;
+            }
+            for source in stale_sources {
+                self.refresh_source(source);
+            }
+            return;
+        }
         self.sources = discover_sources(&self.config);
+        self.refresh_source_fingerprints();
+        let indexed_at = unix_timestamp();
+        self.source_indexed_at = self
+            .sources
+            .keys()
+            .map(|source| (*source, indexed_at))
+            .collect();
         self.rebuild_source_lookup();
         self.items = Arc::new(merge_sources(&self.sources));
+        self.persist_index();
     }
 
     /// Re-enumerate only the source reported by the platform watcher.
@@ -231,7 +365,13 @@ impl AppProvider {
                 started.elapsed().as_millis(),
             );
         }
+        self.source_indexed_at.insert(source, unix_timestamp());
+        let _fingerprint_changed =
+            filesystem_source_fingerprint(source, &self.config).is_some_and(|fingerprint| {
+                self.source_fingerprints.insert(source, fingerprint) != Some(fingerprint)
+            });
         if self.sources.get(&source) == Some(&refreshed) {
+            self.persist_index();
             return false;
         }
         let previous = self.sources.get(&source).cloned().unwrap_or_default();
@@ -253,6 +393,7 @@ impl AppProvider {
             try_merge_store_metadata_refresh(&previous, refreshed, &self.items)
                 .unwrap_or_else(|| merge_sources(&self.sources)),
         );
+        self.persist_index();
         true
     }
 
@@ -260,11 +401,49 @@ impl AppProvider {
         if self.config == *config {
             return false;
         }
-        let sources = discover_sources(config);
+        let mut changed_sources = Vec::new();
+        if self.config.store_apps != config.store_apps {
+            changed_sources.push(crate::platform::AppProviderSource::AppsFolder);
+            changed_sources.push(crate::platform::AppProviderSource::PackagedApps);
+        }
+        if self.config.start_menu != config.start_menu {
+            changed_sources.push(crate::platform::AppProviderSource::StartMenu);
+        }
+        if self.config.desktop != config.desktop {
+            changed_sources.push(crate::platform::AppProviderSource::Desktop);
+        }
+        if self.config.control_panel != config.control_panel {
+            changed_sources.push(crate::platform::AppProviderSource::ControlPanel);
+        }
+        if self.config.indexed_directories != config.indexed_directories
+            || self.config.indexed_extensions != config.indexed_extensions
+        {
+            changed_sources.push(crate::platform::AppProviderSource::CustomDirectories);
+        }
         self.config = config.clone();
-        self.sources = sources;
+        for source in changed_sources {
+            let Some(provider) = PROVIDER_DEFINITIONS
+                .iter()
+                .find(|provider| provider.source == source)
+            else {
+                continue;
+            };
+            if (provider.enabled)(&self.config) {
+                self.sources
+                    .insert(source, (provider.discover)(&self.config));
+                self.source_indexed_at.insert(source, unix_timestamp());
+                if let Some(fingerprint) = filesystem_source_fingerprint(source, &self.config) {
+                    self.source_fingerprints.insert(source, fingerprint);
+                }
+            } else {
+                self.sources.remove(&source);
+                self.source_fingerprints.remove(&source);
+                self.source_indexed_at.remove(&source);
+            }
+        }
         self.rebuild_source_lookup();
         self.items = Arc::new(merge_sources(&self.sources));
+        self.persist_index();
         true
     }
 
@@ -288,6 +467,13 @@ impl AppProvider {
     ) -> std::sync::mpsc::Receiver<crate::platform::AppProviderSource> {
         crate::platform::watch_app_provider_sources(custom_directories)
     }
+}
+
+fn unix_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn discover_sources(
@@ -549,6 +735,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: crate::result::ResultVisibility::Always,
         }
     }
@@ -571,7 +758,7 @@ mod tests {
             working_directory: None,
         }];
 
-        let source = crate::platform::AppProviderSource::StoreApps;
+        let source = crate::platform::AppProviderSource::AppsFolder;
         let mut sources = HashMap::new();
         sources.insert(source, vec![application]);
         let lookup = SourceLookup::from_sources(&sources);
@@ -642,7 +829,7 @@ mod tests {
         first.package_family_name = Some("Contoso.Editor_abc".into());
         first.launch_target = PathBuf::from(r"C:\Apps\Editor.exe");
 
-        let source = crate::platform::AppProviderSource::StoreApps;
+        let source = crate::platform::AppProviderSource::AppsFolder;
         let mut before_sources = HashMap::new();
         before_sources.insert(source, vec![first.clone()]);
 
@@ -681,7 +868,7 @@ mod tests {
         refreshed.title = "Editor (中文)".into();
         refreshed.description = Some("Localized description".into());
 
-        let source = crate::platform::AppProviderSource::StoreApps;
+        let source = crate::platform::AppProviderSource::AppsFolder;
         let mut sources = HashMap::new();
         sources.insert(source, vec![previous.clone()]);
         let current = merge_sources(&sources);
@@ -722,7 +909,7 @@ mod tests {
     fn merge_sources_is_deterministic_when_source_record_order_changes() {
         let first = item("exe:c:\\apps\\demo.exe", "Demo", source_ids::APPS_FOLDER);
         let second = item("exe:c:\\apps\\other.exe", "Other", source_ids::APPS_FOLDER);
-        let source = crate::platform::AppProviderSource::StoreApps;
+        let source = crate::platform::AppProviderSource::AppsFolder;
 
         let mut left = HashMap::new();
         left.insert(source, vec![first.clone(), second.clone()]);
@@ -817,8 +1004,12 @@ mod tests {
 
         let mut sources = HashMap::new();
         sources.insert(
-            crate::platform::AppProviderSource::StoreApps,
-            vec![apps_folder, package, conflicting_package],
+            crate::platform::AppProviderSource::AppsFolder,
+            vec![apps_folder, conflicting_package],
+        );
+        sources.insert(
+            crate::platform::AppProviderSource::PackagedApps,
+            vec![package],
         );
         sources.insert(
             crate::platform::AppProviderSource::StartMenu,
@@ -918,7 +1109,7 @@ mod tests {
 
         let mut sources = HashMap::new();
         sources.insert(
-            crate::platform::AppProviderSource::StoreApps,
+            crate::platform::AppProviderSource::AppsFolder,
             vec![url_app, html_app],
         );
         sources.insert(

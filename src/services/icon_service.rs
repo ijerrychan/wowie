@@ -571,6 +571,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: crate::result::ResultVisibility::Always,
         };
         assert_eq!(icon_source_key(&item), icon_source_key(&item));
@@ -631,11 +632,9 @@ mod tests {
 
     #[test]
     fn bundled_svg_icons_render_to_icon_data() {
-        for spec in [IconSpec::Calculator] {
-            let icon = resolve_spec(&spec, 40).unwrap();
-            assert_eq!((icon.width, icon.height), (40, 40));
-            assert!(icon.rgba.iter().any(|channel| *channel != 0));
-        }
+        let icon = resolve_spec(&IconSpec::Calculator, 40).unwrap();
+        assert_eq!((icon.width, icon.height), (40, 40));
+        assert!(icon.rgba.iter().any(|channel| *channel != 0));
     }
 
     #[test]
@@ -721,6 +720,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: crate::result::ResultVisibility::Always,
         }
     }

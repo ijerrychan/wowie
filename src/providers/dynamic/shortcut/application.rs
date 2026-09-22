@@ -40,6 +40,7 @@ mod tests {
         let shortcut = ShortcutConfig {
             name: "Notepad".into(),
             prefix: "n".into(),
+            placeholder: String::new(),
             shortcut_type: "application".into(),
             mode: "execute".into(),
             template: String::new(),

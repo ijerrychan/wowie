@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Action {
     /// Replace the current query with a shortcut-prefixed engine query.
     EnterSearchEngine { prefix: String },
@@ -15,6 +15,40 @@ pub enum Action {
     /// Declaratively update state owned by the active search-engine session.
     UpdateSession {
         updates: std::collections::BTreeMap<String, String>,
+    },
+    /// An item in this result's context menu. Context-menu actions are kept
+    /// separate from the primary action even though they share the result's
+    /// action list for backwards-compatible result construction.
+    ContextMenu(ContextMenuAction),
+}
+
+/// A provider-defined action displayed only in a result's context menu.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextMenuAction {
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub icon: Option<IconSpec>,
+    pub behavior: ContextMenuBehavior,
+}
+
+/// Host-supported behaviors for provider-defined context-menu entries.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ContextMenuBehavior {
+    CopyText {
+        text: String,
+    },
+    OpenUrl {
+        url: String,
+    },
+    Launch {
+        entry: LaunchEntry,
+        #[serde(default)]
+        as_admin: bool,
+    },
+    Plugin {
+        plugin_id: String,
+        action_id: String,
     },
 }
 
@@ -37,9 +71,10 @@ impl Action {
         match self {
             Self::Launch(_) => ActionDomain::System,
             Self::Plugin { .. } => ActionDomain::Plugin,
-            Self::EnterSearchEngine { .. } | Self::OpenDetail | Self::UpdateSession { .. } => {
-                ActionDomain::Host
-            }
+            Self::EnterSearchEngine { .. }
+            | Self::OpenDetail
+            | Self::UpdateSession { .. }
+            | Self::ContextMenu(_) => ActionDomain::Host,
         }
     }
 
@@ -49,6 +84,10 @@ impl Action {
 
     pub const fn is_plugin(&self) -> bool {
         matches!(self, Self::Plugin { .. })
+    }
+
+    pub const fn is_context_menu(&self) -> bool {
+        matches!(self, Self::ContextMenu(_))
     }
 
     pub fn plugin_parts(&self) -> Option<(&str, &str)> {
@@ -63,7 +102,7 @@ impl Action {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ResultCategory {
     /// Provider has not supplied a semantic category yet.
     Unclassified,
@@ -93,7 +132,7 @@ pub enum ResultPresentation {
 /// Controls whether a custom result is eligible for the current query before
 /// matching and ranking. It is useful for session introductions and menus
 /// that should disappear as soon as the user starts typing.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ResultVisibility {
     #[default]
     Always,
@@ -127,7 +166,7 @@ impl ResultPresentation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LaunchEntry {
     pub source: crate::platform::SourceId,
     pub path: std::path::PathBuf,
@@ -136,7 +175,7 @@ pub struct LaunchEntry {
     pub working_directory: Option<std::path::PathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
     /// Stable identity used for merging records from different providers.
     pub id: String,
@@ -166,8 +205,16 @@ pub struct SearchResult {
     pub icon: Option<IconSpec>,
     /// Provider-supplied ranking adjustment consumed generically by SearchCore.
     pub ranking_bias: i32,
+    /// Whether the result may be added to favorites. Ordinary results default
+    /// to true; session menu rows default to false at the plugin boundary.
+    #[serde(default = "default_allow_favorite")]
+    pub allow_favorite: bool,
     /// Eligibility independent of text matching and ranking.
     pub visibility: ResultVisibility,
+}
+
+fn default_allow_favorite() -> bool {
+    true
 }
 
 impl SearchResult {
@@ -176,9 +223,15 @@ impl SearchResult {
     pub fn recommended_presentation(&self) -> ResultPresentation {
         ResultPresentation::recommended(self.detail.is_some())
     }
+
+    /// The action invoked by activating the result row. Context-menu entries
+    /// are deliberately excluded from this lookup.
+    pub fn primary_action(&self) -> Option<&Action> {
+        self.actions.iter().find(|action| !action.is_context_menu())
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DetailView {
     pub title: String,
     pub subtitle: String,
@@ -192,14 +245,14 @@ pub struct DetailView {
     pub fullscreen: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DetailAction {
     pub id: String,
     pub title: String,
     pub icon: Option<IconSpec>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DetailBlock {
     Text {
         text: String,
@@ -250,7 +303,7 @@ pub enum DetailBlock {
     Separator,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum IconSpec {
     /// A built-in calculator glyph.
     Calculator,

@@ -15,9 +15,25 @@ use super::{
     shortcut_icon_target, target_identity, target_stem_alias,
 };
 
-pub(super) fn discover_store_source(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
+pub(super) fn discover_apps_folder_source(
+    _config: &crate::config::ProviderConfig,
+) -> Vec<SearchResult> {
     let mut items = Vec::new();
-    collect_store_apps(&mut items);
+    collect_store_apps(
+        &mut items,
+        crate::platform::discover_apps_folder_applications(),
+    );
+    items
+}
+
+pub(super) fn discover_packaged_source(
+    _config: &crate::config::ProviderConfig,
+) -> Vec<SearchResult> {
+    let mut items = Vec::new();
+    collect_store_apps(
+        &mut items,
+        crate::platform::discover_packaged_applications(),
+    );
     items
 }
 
@@ -54,6 +70,65 @@ pub(super) fn discover_custom_directories(
         );
     }
     items
+}
+
+/// Cheap metadata-only fingerprint used to avoid parsing unchanged filesystem
+/// sources after restoring the serialized index. File contents and shell
+/// shortcut resolution are only revisited when a path or its metadata moves.
+pub(super) fn filesystem_source_fingerprint(
+    source: crate::platform::AppProviderSource,
+    config: &crate::config::ProviderConfig,
+) -> Option<u64> {
+    let roots = match source {
+        crate::platform::AppProviderSource::PackagedApps => {
+            return crate::platform::package_inventory_fingerprint();
+        }
+        crate::platform::AppProviderSource::StartMenu => start_menu_roots(),
+        crate::platform::AppProviderSource::Desktop => desktop_roots(),
+        crate::platform::AppProviderSource::CustomDirectories => config.indexed_directories.clone(),
+        crate::platform::AppProviderSource::StoreApps
+        | crate::platform::AppProviderSource::AppsFolder
+        | crate::platform::AppProviderSource::ControlPanel => return None,
+    };
+    fn add(state: &mut u64, bytes: &[u8]) {
+        for byte in bytes {
+            *state ^= u64::from(*byte);
+            *state = state.wrapping_mul(0x100000001b3);
+        }
+    }
+    fn visit(path: &Path, state: &mut u64) {
+        add(state, path.to_string_lossy().as_bytes());
+        let Ok(metadata) = fs::symlink_metadata(path) else {
+            add(state, &[0]);
+            return;
+        };
+        add(state, &metadata.len().to_le_bytes());
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|time| time.as_nanos())
+            .unwrap_or_default();
+        add(state, &modified.to_le_bytes());
+        if !metadata.is_dir() {
+            return;
+        }
+        if let Ok(entries) = fs::read_dir(path) {
+            let mut children = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .collect::<Vec<_>>();
+            children.sort();
+            for child in children {
+                visit(&child, state);
+            }
+        }
+    }
+    let mut fingerprint = 0xcbf29ce484222325;
+    for root in roots {
+        visit(&root, &mut fingerprint);
+    }
+    Some(fingerprint)
 }
 
 pub(super) fn discover_file_source(include_executables: bool, source: &str) -> Vec<SearchResult> {
@@ -142,8 +217,11 @@ pub(super) fn debug_records(stage: &str, records: &[SearchResult]) {
     }
 }
 
-pub(super) fn collect_store_apps(output: &mut Vec<SearchResult>) {
-    for app in crate::platform::discover_store_applications() {
+pub(super) fn collect_store_apps(
+    output: &mut Vec<SearchResult>,
+    applications: Vec<crate::platform::StoreApplication>,
+) {
+    for app in applications {
         if debug_enabled()
             && debug_filter_matches(&format!(
                 "{} {:?} {:?} {:?}",
@@ -186,6 +264,7 @@ pub(super) fn collect_store_apps(output: &mut Vec<SearchResult>) {
             package_metadata: app.package_metadata,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: crate::result::ResultVisibility::Always,
         });
     }
@@ -286,6 +365,7 @@ pub(super) fn collect_tree(
                 package_metadata: None,
                 icon: None,
                 ranking_bias: 0,
+                allow_favorite: true,
                 visibility: crate::result::ResultVisibility::Always,
             });
             continue;
@@ -338,6 +418,7 @@ pub(super) fn collect_tree(
                 package_metadata: None,
                 icon: Some(IconSpec::DefaultOpen(PathBuf::from(&url))),
                 ranking_bias: 0,
+                allow_favorite: true,
                 visibility: crate::result::ResultVisibility::Always,
             });
             continue;
@@ -412,6 +493,7 @@ pub(super) fn collect_tree(
                     })
                 }),
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: crate::result::ResultVisibility::Always,
         });
     }
@@ -448,6 +530,7 @@ pub(super) fn generic_file_result(path: &Path, title: &str, source: &str) -> Sea
         package_metadata: None,
         icon: Some(IconSpec::DefaultOpen(path.to_owned())),
         ranking_bias: 0,
+        allow_favorite: true,
         visibility: crate::result::ResultVisibility::Always,
     }
 }

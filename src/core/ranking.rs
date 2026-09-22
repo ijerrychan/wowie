@@ -1,3 +1,4 @@
+use crate::result::SearchResult;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -7,6 +8,8 @@ use std::{
 
 const HALF_LIFE_SECONDS: u64 = 7 * 24 * 60 * 60;
 const MAX_BEHAVIOR_SCORE: i32 = 180;
+pub(crate) const MAX_ENGINE_SEARCH_HISTORY: usize = 50;
+pub(crate) const MAX_FAVORITES: usize = 256;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -21,6 +24,28 @@ struct UsageRecord {
 #[serde(default)]
 struct HistoryFile {
     items: HashMap<String, UsageRecord>,
+    engine_searches: HashMap<String, Vec<EngineSearchRecord>>,
+    favorites: Vec<FavoriteRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct FavoriteRecord {
+    pub(crate) item: SearchResult,
+    #[serde(default)]
+    pub(crate) session: Option<crate::page::SearchEngineSession>,
+}
+
+#[derive(Default)]
+pub(crate) struct FavoriteSnapshot {
+    pub(crate) items: Vec<FavoriteRecord>,
+    pub(crate) order: HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct EngineSearchRecord {
+    query: String,
+    result_id: String,
 }
 
 /// Local, opt-in-through-use ranking state. It only learns after a successful
@@ -70,12 +95,91 @@ impl Ranker {
         (global + query_score).min(MAX_BEHAVIOR_SCORE)
     }
 
+    pub fn is_favorite(&self, item_id: &str) -> bool {
+        self.history.lock().is_ok_and(|history| {
+            history
+                .favorites
+                .iter()
+                .any(|favorite| favorite.item.id == item_id)
+        })
+    }
+
+    /// Toggle a persistent favorite, returning its new state. `None` means
+    /// the history lock was poisoned or the favorite limit was reached.
+    pub fn toggle_favorite(
+        &self,
+        item: &SearchResult,
+        session: Option<&crate::page::SearchEngineSession>,
+    ) -> Option<bool> {
+        let Ok(mut history) = self.history.lock() else {
+            return None;
+        };
+        if let Some(index) = history
+            .favorites
+            .iter()
+            .position(|favorite| favorite.item.id == item.id)
+        {
+            history.favorites.remove(index);
+            self.save_locked(&history);
+            return Some(false);
+        }
+        if !item.allow_favorite {
+            return Some(false);
+        }
+        if history.favorites.len() >= MAX_FAVORITES {
+            return None;
+        }
+        history.favorites.insert(
+            0,
+            FavoriteRecord {
+                item: item.clone(),
+                session: session.cloned(),
+            },
+        );
+        self.save_locked(&history);
+        Some(true)
+    }
+
+    pub fn favorite_session(&self, item_id: &str) -> Option<crate::page::SearchEngineSession> {
+        let history = self.history.lock().ok()?;
+        history
+            .favorites
+            .iter()
+            .find(|favorite| favorite.item.id == item_id)
+            .and_then(|favorite| favorite.session.clone())
+    }
+
+    pub(crate) fn favorite_snapshot(&self, include_items: bool) -> FavoriteSnapshot {
+        let Ok(history) = self.history.lock() else {
+            return FavoriteSnapshot::default();
+        };
+        let mut snapshot = FavoriteSnapshot::default();
+        let mut next_order = 0;
+        for favorite in &history.favorites {
+            if !snapshot.order.contains_key(&favorite.item.id) {
+                let order = next_order;
+                next_order += 1;
+                snapshot.order.insert(favorite.item.id.clone(), order);
+                if include_items {
+                    snapshot.items.push(favorite.clone());
+                }
+            }
+        }
+        snapshot
+    }
+
+    #[cfg(test)]
     pub fn record_success(&self, item_id: &str, query: &str) {
+        self.record_action_success(item_id, query, None);
+    }
+
+    pub fn record_action_success(&self, item_id: &str, query: &str, engine: Option<(&str, usize)>) {
         let Ok(mut history) = self.history.lock() else {
             return;
         };
         let now = unix_seconds();
-        let query = normalize_query(query);
+        let raw_query = query;
+        let query = normalize_query(raw_query);
         let record = history.items.entry(item_id.to_owned()).or_default();
         record.launches = record.launches.saturating_add(1);
         record.last_used = now;
@@ -87,6 +191,54 @@ impl Ranker {
                 .unwrap_or(0)
                 .saturating_add(1);
             record.query_last_used.insert(query, now);
+        }
+        if let Some((engine_id, limit)) = engine {
+            record_engine_search_in(&mut history, engine_id, item_id, raw_query, limit);
+        }
+        self.save_locked(&history);
+    }
+
+    pub fn recent_engine_searches(
+        &self,
+        engine_id: &str,
+        limit: usize,
+    ) -> Vec<crate::provider::SearchHistoryEntry> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let Ok(history) = self.history.lock() else {
+            return Vec::new();
+        };
+        history
+            .engine_searches
+            .get(engine_id)
+            .into_iter()
+            .flatten()
+            .take(limit.min(MAX_ENGINE_SEARCH_HISTORY))
+            .map(|record| crate::provider::SearchHistoryEntry {
+                query: record.query.clone(),
+                result_id: record.result_id.clone(),
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub fn record_engine_search_success(
+        &self,
+        engine_id: &str,
+        result_id: &str,
+        query: &str,
+        limit: usize,
+    ) {
+        let limit = limit.min(MAX_ENGINE_SEARCH_HISTORY);
+        if limit == 0 {
+            return;
+        }
+        let Ok(mut history) = self.history.lock() else {
+            return;
+        };
+        if !record_engine_search_in(&mut history, engine_id, result_id, query, limit) {
+            return;
         }
         self.save_locked(&history);
     }
@@ -100,8 +252,9 @@ impl Ranker {
         };
         let result = (|| -> anyhow::Result<()> {
             fs::create_dir_all(parent)?;
-            let json = serde_json::to_string_pretty(history)?;
-            fs::write(path, format!("{json}\n"))?;
+            let mut json = serde_json::to_vec_pretty(history)?;
+            json.push(b'\n');
+            crate::utils::atomic_write(path, &json)?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -111,6 +264,73 @@ impl Ranker {
             );
         }
     }
+}
+
+fn record_engine_search_in(
+    history: &mut HistoryFile,
+    engine_id: &str,
+    result_id: &str,
+    query: &str,
+    limit: usize,
+) -> bool {
+    let limit = limit.min(MAX_ENGINE_SEARCH_HISTORY);
+    if limit == 0 {
+        return false;
+    }
+    if query.trim().is_empty() && !history.engine_searches.contains_key(engine_id) {
+        return false;
+    }
+    let records = history
+        .engine_searches
+        .entry(engine_id.to_owned())
+        .or_default();
+    let query = query.trim();
+    let index = if query.is_empty() {
+        records.iter().position(|record| {
+            result_id == record.result_id || result_id.ends_with(&record.result_id)
+        })
+    } else {
+        let normalized = normalize_query(query);
+        records
+            .iter()
+            .position(|record| normalize_query(&record.query) == normalized)
+    };
+    let Some(index) = index else {
+        if query.is_empty() {
+            return false;
+        }
+        let query = query.to_owned();
+        records.insert(
+            0,
+            EngineSearchRecord {
+                result_id: engine_history_result_id(engine_id, &query),
+                query,
+            },
+        );
+        records.truncate(limit);
+        return true;
+    };
+    let mut record = records.remove(index);
+    if !query.is_empty() {
+        record.query = query.to_owned();
+    }
+    records.insert(0, record);
+    records.truncate(limit);
+    true
+}
+
+pub(crate) fn engine_history_result_id(engine_id: &str, query: &str) -> String {
+    let normalized = normalize_query(query);
+    let hash = (engine_id
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain([0xff])
+        .chain(normalized.bytes()))
+    .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    format!("{engine_id}:history:{hash:016x}")
 }
 
 fn normalize_query(query: &str) -> String {
@@ -154,5 +374,24 @@ mod tests {
         let ranker = Ranker::in_memory();
         ranker.record_success("app", "  Calc ");
         assert!(ranker.score("app", "calc") > 0);
+    }
+
+    #[test]
+    fn engine_search_history_is_deduplicated_ordered_and_selectable() {
+        let ranker = Ranker::in_memory();
+        ranker.record_engine_search_success("engine", "", "first query", 10);
+        let first = ranker.recent_engine_searches("engine", 10);
+        assert_eq!(first[0].query, "first query");
+
+        ranker.record_engine_search_success("engine", "", "second query", 10);
+        ranker.record_engine_search_success("engine", "", "FIRST QUERY", 10);
+        let recent = ranker.recent_engine_searches("engine", 10);
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].query, "FIRST QUERY");
+        assert_eq!(recent[1].query, "second query");
+
+        ranker.record_engine_search_success("engine", &recent[1].result_id, "", 10);
+        let selected = ranker.recent_engine_searches("engine", 10);
+        assert_eq!(selected[0].query, "second query");
     }
 }

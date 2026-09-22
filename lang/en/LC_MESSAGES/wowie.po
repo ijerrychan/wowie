@@ -8,6 +8,18 @@ msgid "Search applications"
 msgstr "Search applications"
 
 msgctxt "Launcher"
+msgid "Search apps, files, settings, and more"
+msgstr "Search apps, files, settings, and more"
+
+msgctxt "Launcher"
+msgid "Enter a command"
+msgstr "Enter a command"
+
+msgctxt "Launcher"
+msgid "Enter a URL or search term"
+msgstr "Enter a URL or search term"
+
+msgctxt "Launcher"
 msgid "List view"
 msgstr "List view"
 
@@ -144,12 +156,36 @@ msgid "Open containing folder"
 msgstr "Open containing folder"
 
 msgctxt "ContextMenu"
+msgid "Add to favorites"
+msgstr "Add to favorites"
+
+msgctxt "ContextMenu"
+msgid "Remove from favorites"
+msgstr "Remove from favorites"
+
+msgctxt "ContextMenu"
+msgid "Maximum number of favorites reached"
+msgstr "Maximum number of favorites reached"
+
+msgctxt "ContextMenu"
 msgid "Run as administrator"
 msgstr "Run as administrator"
 
 msgctxt "ContextMenu"
 msgid "Other launch entries"
 msgstr "Other launch entries"
+
+msgctxt "ContextMenu"
+msgid "Copy title"
+msgstr "Copy title"
+
+msgctxt "ContextMenu"
+msgid "Copy path"
+msgstr "Copy path"
+
+msgctxt "ContextMenu"
+msgid "Copy URL"
+msgstr "Copy URL"
 
 msgctxt "Launcher"
 msgid "Loading preview"

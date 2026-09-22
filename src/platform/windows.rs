@@ -41,7 +41,7 @@ mod icons;
 mod shortcuts;
 mod tray;
 
-use com::{wide_path, ComScope, WinRtScope};
+use com::{wide_path, ComScope, WinRtMtaScope, WinRtScope};
 pub(crate) use icons::{application_icon, default_open_icon, indexed_application_icon};
 pub(crate) use shortcuts::resolve_shortcut;
 
@@ -341,12 +341,14 @@ pub(crate) fn watch_app_provider_sources(
     watches.extend(
         store_watch_roots()
             .into_iter()
-            .map(|path| (path, super::AppProviderSource::StoreApps)),
+            .map(|path| (path, super::AppProviderSource::PackagedApps)),
     );
     for (path, source) in watches {
         let sender = sender.clone();
         thread::spawn(move || watch_directory(path, source, sender));
     }
+    watch_package_catalog(sender.clone());
+    watch_apps_folder_shell(sender.clone());
     let sender = sender.clone();
     thread::spawn(move || watch_custom_directories(custom_directories, sender));
     receiver
@@ -476,11 +478,306 @@ fn watch_directory(
 /// Legacy store index: enumerate the shell's AppsFolder first (which provides
 /// the localized display name), then use PackageManager only for entries that
 /// AppsFolder did not expose.
-pub(crate) fn discover_store_applications() -> Vec<super::StoreApplication> {
+pub(crate) fn discover_apps_folder_applications() -> Vec<super::StoreApplication> {
     let mut applications = Vec::new();
     collect_apps_folder(&mut applications);
+    applications
+}
+
+fn watch_package_catalog(sender: mpsc::Sender<super::AppProviderSource>) {
+    thread::spawn(move || {
+        use windows::{
+            ApplicationModel::{
+                PackageCatalog, PackageInstallingEventArgs, PackageStatusChangedEventArgs,
+                PackageUninstallingEventArgs, PackageUpdatingEventArgs,
+            },
+            Foundation::TypedEventHandler,
+        };
+
+        let Some(_winrt) = WinRtMtaScope::initialize() else {
+            eprintln!("[provider] PackageCatalog listener skipped: WinRT initialization failed");
+            return;
+        };
+        let Ok(catalog) = PackageCatalog::OpenForCurrentUser() else {
+            eprintln!("[provider] PackageCatalog listener unavailable for current user");
+            return;
+        };
+        let (change_sender, changes) = mpsc::channel();
+        let installing_sender = change_sender.clone();
+        let installing =
+            TypedEventHandler::<PackageCatalog, PackageInstallingEventArgs>::new(move |_, _| {
+                let _ = installing_sender.send(());
+                Ok(())
+            });
+        let uninstalling_sender = change_sender.clone();
+        let uninstalling =
+            TypedEventHandler::<PackageCatalog, PackageUninstallingEventArgs>::new(move |_, _| {
+                let _ = uninstalling_sender.send(());
+                Ok(())
+            });
+        let updating_sender = change_sender.clone();
+        let updating =
+            TypedEventHandler::<PackageCatalog, PackageUpdatingEventArgs>::new(move |_, _| {
+                let _ = updating_sender.send(());
+                Ok(())
+            });
+        let status_sender = change_sender;
+        let status_changed =
+            TypedEventHandler::<PackageCatalog, PackageStatusChangedEventArgs>::new(move |_, _| {
+                let _ = status_sender.send(());
+                Ok(())
+            });
+        let registrations = (
+            catalog.PackageInstalling(&installing),
+            catalog.PackageUninstalling(&uninstalling),
+            catalog.PackageUpdating(&updating),
+            catalog.PackageStatusChanged(&status_changed),
+        );
+        if registrations.0.is_err()
+            && registrations.1.is_err()
+            && registrations.2.is_err()
+            && registrations.3.is_err()
+        {
+            eprintln!("[provider] PackageCatalog change listener registration failed");
+            return;
+        }
+        loop {
+            if changes.recv().is_err() {
+                break;
+            }
+            let debounce = std::time::Duration::from_secs(2);
+            let mut quiet_deadline = std::time::Instant::now() + debounce;
+            loop {
+                let remaining = quiet_deadline.saturating_duration_since(std::time::Instant::now());
+                match changes.recv_timeout(remaining) {
+                    Ok(()) => quiet_deadline = std::time::Instant::now() + debounce,
+                    Err(mpsc::RecvTimeoutError::Timeout) => break,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                }
+            }
+            let _ = sender.send(super::AppProviderSource::PackagedApps);
+            let _ = sender.send(super::AppProviderSource::AppsFolder);
+        }
+    });
+}
+
+#[repr(C)]
+struct ShellChangeNotifyEntry {
+    pidl: *mut c_void,
+    recursive: i32,
+}
+
+const APPS_FOLDER_CHANGE_MESSAGE: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_APP + 0x271;
+static APPS_FOLDER_CHANGE_SENDER: OnceLock<mpsc::Sender<super::AppProviderSource>> =
+    OnceLock::new();
+
+#[link(name = "shell32")]
+unsafe extern "system" {
+    fn SHChangeNotifyRegister(
+        hwnd: windows_sys::Win32::Foundation::HWND,
+        sources: i32,
+        events: i32,
+        message: u32,
+        entry_count: i32,
+        entries: *const ShellChangeNotifyEntry,
+    ) -> u32;
+    fn SHChangeNotifyDeregister(registration: u32) -> i32;
+    fn SHChangeNotification_Lock(
+        change: windows_sys::Win32::Foundation::HANDLE,
+        process_id: u32,
+        item_ids: *mut *mut *mut c_void,
+        event: *mut i32,
+    ) -> windows_sys::Win32::Foundation::HANDLE;
+    fn SHChangeNotification_Unlock(lock: windows_sys::Win32::Foundation::HANDLE) -> i32;
+}
+
+unsafe extern "system" fn apps_folder_change_window_proc(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows_sys::Win32::Foundation::WPARAM,
+    lparam: windows_sys::Win32::Foundation::LPARAM,
+) -> windows_sys::Win32::Foundation::LRESULT {
+    if message == APPS_FOLDER_CHANGE_MESSAGE {
+        let lock = unsafe {
+            SHChangeNotification_Lock(
+                wparam as _,
+                lparam as u32,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if !lock.is_null() {
+            unsafe { SHChangeNotification_Unlock(lock) };
+        }
+        if let Some(sender) = APPS_FOLDER_CHANGE_SENDER.get() {
+            let _ = sender.send(super::AppProviderSource::AppsFolder);
+        }
+        return 0;
+    }
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, message, wparam, lparam)
+    }
+}
+
+fn watch_apps_folder_shell(sender: mpsc::Sender<super::AppProviderSource>) {
+    thread::spawn(move || {
+        use windows::Win32::{
+            System::Com::{CoTaskMemFree, IBindCtx},
+            UI::Shell::SHParseDisplayName,
+        };
+        use windows_sys::Win32::{
+            System::LibraryLoader::GetModuleHandleW,
+            UI::WindowsAndMessaging::{
+                CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassW, TranslateMessage,
+                HWND_MESSAGE, WNDCLASSW,
+            },
+        };
+
+        let Some(_com) = ComScope::initialize() else {
+            eprintln!("[provider] AppsFolder Shell listener skipped: COM initialization failed");
+            return;
+        };
+        if APPS_FOLDER_CHANGE_SENDER.set(sender).is_err() {
+            return;
+        }
+        let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+        let class_name = wide_path(Path::new("WowieAppsFolderChangeWatcher"));
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(apps_folder_change_window_proc),
+            hInstance: instance,
+            lpszClassName: class_name.as_ptr(),
+            ..Default::default()
+        };
+        if unsafe { RegisterClassW(&class) } == 0 {
+            eprintln!("[provider] AppsFolder Shell listener window registration failed");
+            return;
+        }
+        let window = unsafe {
+            CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                class_name.as_ptr(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                std::ptr::null_mut(),
+                instance,
+                std::ptr::null(),
+            )
+        };
+        if window.is_null() {
+            eprintln!("[provider] AppsFolder Shell listener window creation failed");
+            return;
+        }
+        let namespace = wide_path(Path::new("shell:AppsFolder"));
+        let mut pidl = std::ptr::null_mut();
+        if unsafe {
+            SHParseDisplayName(
+                windows::core::PCWSTR(namespace.as_ptr()),
+                None::<&IBindCtx>,
+                &mut pidl,
+                0,
+                None,
+            )
+        }
+        .is_err()
+            || pidl.is_null()
+        {
+            eprintln!("[provider] AppsFolder Shell listener could not resolve namespace");
+            return;
+        }
+        let entry = ShellChangeNotifyEntry {
+            pidl: pidl.cast(),
+            recursive: 1,
+        };
+        // Shell change constants: create/delete/rename/mkdir/rmdir/update item
+        // or directory. NewDelivery requires locking and unlocking each event.
+        const SHELL_EVENTS: i32 = 0x0000_0001
+            | 0x0000_0002
+            | 0x0000_0004
+            | 0x0000_0008
+            | 0x0000_0010
+            | 0x0000_1000
+            | 0x0000_2000
+            | 0x0002_0000
+            | 0x0800_0000;
+        // Recursive Shell notifications are requested on the entry itself;
+        // SHCNRF_RecursiveInterrupt is only valid with InterruptLevel.
+        const SHELL_SOURCE_FLAGS: i32 = 0x0002 | 0x8000;
+        let registration = unsafe {
+            SHChangeNotifyRegister(
+                window,
+                SHELL_SOURCE_FLAGS,
+                SHELL_EVENTS,
+                APPS_FOLDER_CHANGE_MESSAGE,
+                1,
+                &entry,
+            )
+        };
+        if registration == 0 {
+            unsafe { CoTaskMemFree(Some(pidl.cast())) };
+            eprintln!("[provider] AppsFolder Shell listener registration failed");
+            return;
+        }
+        let mut message =
+            std::mem::MaybeUninit::<windows_sys::Win32::UI::WindowsAndMessaging::MSG>::zeroed();
+        loop {
+            let received = unsafe { GetMessageW(message.as_mut_ptr(), std::ptr::null_mut(), 0, 0) };
+            if received <= 0 {
+                break;
+            }
+            let message = unsafe { message.assume_init_ref() };
+            unsafe {
+                TranslateMessage(message);
+                DispatchMessageW(message);
+            }
+        }
+        unsafe {
+            SHChangeNotifyDeregister(registration);
+            CoTaskMemFree(Some(pidl.cast()));
+        }
+    });
+}
+
+pub(crate) fn discover_packaged_applications() -> Vec<super::StoreApplication> {
+    let mut applications = Vec::new();
     collect_packaged_apps(&mut applications);
     applications
+}
+
+/// Read only stable package identities for startup cache reconciliation. This
+/// avoids rebuilding AppListEntries and resolving descriptions when the
+/// installed package inventory has not changed.
+pub(crate) fn package_inventory_fingerprint() -> Option<u64> {
+    use windows::Management::Deployment::{PackageManager, PackageTypes};
+
+    let _winrt = WinRtScope::initialize()?;
+    let manager = PackageManager::new().ok()?;
+    let packages = manager
+        .FindPackagesWithPackageTypes(PackageTypes::Main | PackageTypes::Optional)
+        .ok()?;
+    let mut names = packages
+        .into_iter()
+        .filter_map(|package| {
+            package
+                .Id()
+                .ok()
+                .and_then(|id| id.FullName().ok())
+                .map(|name| name.to_string())
+        })
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    let mut fingerprint = 0xcbf29ce484222325_u64;
+    for name in names {
+        for byte in name.bytes().chain(std::iter::once(0)) {
+            fingerprint ^= u64::from(byte);
+            fingerprint = fingerprint.wrapping_mul(0x100000001b3);
+        }
+    }
+    Some(fingerprint)
 }
 
 /// Read the language-independent Control Panel canonical name associated with

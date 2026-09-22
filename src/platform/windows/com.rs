@@ -7,6 +7,30 @@ const RPC_E_CHANGED_MODE: u32 = 0x8001_0106;
 pub(super) struct ComScope(bool);
 
 pub(super) struct WinRtScope(bool);
+pub(super) struct WinRtMtaScope(bool);
+
+impl WinRtMtaScope {
+    pub(super) fn initialize() -> Option<Self> {
+        const RPC_E_CHANGED_MODE: u32 = 0x8001_0106;
+        const RO_INIT_MULTITHREADED: u32 = 1;
+        let result = unsafe { ro_initialize(RO_INIT_MULTITHREADED) };
+        if result >= 0 {
+            Some(Self(true))
+        } else if result as u32 == RPC_E_CHANGED_MODE {
+            Some(Self(false))
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for WinRtMtaScope {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { ro_uninitialize() };
+        }
+    }
+}
 
 impl WinRtScope {
     pub(super) fn initialize() -> Option<Self> {
@@ -57,6 +81,22 @@ unsafe fn co_uninitialize() {
         fn CoUninitialize();
     }
     unsafe { CoUninitialize() };
+}
+
+unsafe fn ro_initialize(init_type: u32) -> i32 {
+    #[link(name = "runtimeobject")]
+    unsafe extern "system" {
+        fn RoInitialize(init_type: u32) -> i32;
+    }
+    unsafe { RoInitialize(init_type) }
+}
+
+unsafe fn ro_uninitialize() {
+    #[link(name = "runtimeobject")]
+    unsafe extern "system" {
+        fn RoUninitialize();
+    }
+    unsafe { RoUninitialize() };
 }
 
 impl Drop for ComScope {

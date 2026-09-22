@@ -1,5 +1,5 @@
 use crate::plugin::PluginManager;
-use crate::provider::ProviderRegistry;
+use crate::provider::{EngineSearchResult, ProviderRegistry, SearchEngineSettings};
 use crate::ranking::Ranker;
 use crate::result::{ResultVisibility, SearchResult};
 use anyhow::{Context, Result};
@@ -85,6 +85,24 @@ impl SearchCore {
         self.providers.search_engine_result(session)
     }
 
+    pub fn is_favorite(&self, item_id: &str) -> bool {
+        self.ranker.is_favorite(item_id)
+    }
+
+    /// Add or remove a persistent favorite. Returns the new state, or `None`
+    /// if persistence state is unavailable or the favorite limit was reached.
+    pub fn toggle_favorite(
+        &self,
+        item: &SearchResult,
+        session: Option<&crate::page::SearchEngineSession>,
+    ) -> Option<bool> {
+        self.ranker.toggle_favorite(item, session)
+    }
+
+    pub fn favorite_session(&self, item_id: &str) -> Option<crate::page::SearchEngineSession> {
+        self.ranker.favorite_session(item_id)
+    }
+
     pub fn replace_plugin_config(
         &self,
         plugin_configs: &std::collections::BTreeMap<String, crate::config::PluginConfig>,
@@ -92,9 +110,22 @@ impl SearchCore {
         self.providers.replace_plugin_config(plugin_configs);
     }
 
+    #[cfg(test)]
     pub fn record_success(&self, item_id: &str, query: &str) {
         self.ranker.record_success(item_id, query);
     }
+
+    pub fn record_action_success(
+        &self,
+        item_id: &str,
+        query: &str,
+        session: Option<&crate::page::SearchEngineSession>,
+    ) {
+        let engine =
+            session.map(|session| (session.id.as_str(), self.providers.history_limit(session)));
+        self.ranker.record_action_success(item_id, query, engine);
+    }
+
     pub fn by_id(&self, id: &str) -> Option<SearchResult> {
         self.providers.indexed_by_id(id).or_else(|| {
             self.dynamic_results
@@ -186,6 +217,9 @@ impl SearchCore {
         // field. The UI stores the selected engine separately, so the field
         // no longer needs to contain or be parsed for its shortcut prefix.
         let query = input.trim().to_lowercase();
+        let root_empty_query =
+            matches!(context, crate::page::SearchContext::Default) && query.is_empty();
+        let favorites = self.ranker.favorite_snapshot(root_empty_query);
         let fuzzy_search = self.fuzzy_search.load(Ordering::Acquire);
         let mut matcher = Matcher::new(MatcherConfig::DEFAULT);
         let mut matcher_buffer = Vec::new();
@@ -198,9 +232,17 @@ impl SearchCore {
                 self.providers.indexed_len()
             );
         }
-        let dynamic = self
+        let history = if query.is_empty() {
+            context.session().and_then(|session| {
+                let limit = self.providers.history_limit(session);
+                (limit > 0).then(|| self.ranker.recent_engine_searches(&session.id, limit))
+            })
+        } else {
+            None
+        };
+        let mut dynamic = self
             .providers
-            .query(context, &input)
+            .query(context, &input, history.as_deref().unwrap_or_default())
             .into_iter()
             .filter(|candidate| {
                 candidate.item.visibility.allows(&input)
@@ -209,6 +251,29 @@ impl SearchCore {
                         || candidate.item.visibility == ResultVisibility::EmptyQueryOnly)
             })
             .collect::<Vec<_>>();
+        if root_empty_query {
+            let mut candidate_ids = dynamic
+                .iter()
+                .enumerate()
+                .map(|(index, candidate)| (candidate.item.id.clone(), index))
+                .collect::<std::collections::HashMap<_, _>>();
+            for favorite in &favorites.items {
+                if let Some(index) = candidate_ids.get(&favorite.item.id).copied() {
+                    // Earlier versions reused a session ID for its generated
+                    // command result and the root entry. Prefer the saved
+                    // session result to preserve those existing favorites.
+                    if favorite.session.is_some() {
+                        dynamic[index].item = favorite.item.clone();
+                    }
+                } else {
+                    candidate_ids.insert(favorite.item.id.clone(), dynamic.len());
+                    dynamic.push(EngineSearchResult {
+                        item: favorite.item.clone(),
+                        settings: SearchEngineSettings::default(),
+                    });
+                }
+            }
+        }
         // Launch callbacks resolve rows by id after the search worker returns.
         // Keep only the current query's dynamic records so a repeated shortcut
         // id cannot resolve to an older command or URL.
@@ -266,6 +331,7 @@ impl SearchCore {
                 // visible as a fallback in the default engine, even when the
                 // current text matches neither their title nor aliases.
                 let fallback = self.providers.is_fallback_result(item);
+                let favorite_order = favorites.order.get(&item.id).copied();
                 score.or_else(|| {
                     fallback.then_some(MatchScore {
                         class: 0,
@@ -275,6 +341,7 @@ impl SearchCore {
                 .map(|score| {
                     (
                         RankKey {
+                            favorite_order,
                             fallback,
                             match_class: score.class,
                             match_quality: score.quality,
@@ -289,8 +356,11 @@ impl SearchCore {
             })
             .collect();
         ranked.sort_by(|a, b| {
-            a.0.fallback
-                .cmp(&b.0.fallback)
+            b.0.favorite_order
+                .is_some()
+                .cmp(&a.0.favorite_order.is_some())
+                .then_with(|| a.0.favorite_order.cmp(&b.0.favorite_order))
+                .then_with(|| a.0.fallback.cmp(&b.0.fallback))
                 .then_with(|| b.0.match_class.cmp(&a.0.match_class))
                 .then_with(|| b.0.match_quality.cmp(&a.0.match_quality))
                 .then_with(|| b.0.behavior.cmp(&a.0.behavior))
@@ -320,6 +390,14 @@ impl SearchCore {
         }
         found
     }
+
+    pub fn empty_state(
+        &self,
+        context: &crate::page::SearchContext,
+        query: &str,
+    ) -> Option<SearchResult> {
+        self.providers.empty_state(context, query)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,6 +408,7 @@ struct MatchScore {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RankKey {
+    favorite_order: Option<usize>,
     fallback: bool,
     match_class: u8,
     match_quality: i32,
@@ -473,6 +552,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         }
     }
@@ -500,6 +580,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![make("1", "Calculator"), make("2", "Calendar")]);
@@ -525,6 +606,92 @@ mod tests {
             "app"
         );
     }
+
+    #[test]
+    fn favorites_are_injected_into_empty_root_search_and_can_be_removed() {
+        let favorite = result("favorite", "Weather", ResultCategory::Other);
+        let core = SearchCore::new(vec![favorite.clone()]);
+        assert_eq!(core.toggle_favorite(&favorite, None), Some(true));
+
+        let results = core.search("");
+        assert_eq!(
+            results
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["favorite"]
+        );
+        assert_eq!(core.toggle_favorite(&favorite, None), Some(false));
+        assert!(core.search("").is_empty());
+    }
+
+    #[test]
+    fn favorite_matches_are_pinned_above_stronger_non_favorites() {
+        let favorite = result("favorite", "alpha calculator", ResultCategory::Other);
+        let exact = result("exact", "alpha", ResultCategory::Other);
+        let core = SearchCore::new(vec![exact, favorite.clone()]);
+        assert_eq!(core.toggle_favorite(&favorite, None), Some(true));
+
+        let results = core.search("alpha");
+        assert_eq!(results[0].id, "favorite");
+    }
+
+    #[test]
+    fn favorites_retain_their_search_engine_session_context() {
+        let favorite = result("language", "Chinese", ResultCategory::Other);
+        let session = crate::page::SearchEngineSession {
+            id: "plugin:translate".into(),
+            title: "Translate".into(),
+            placeholder: "Text to translate".into(),
+            prefix: "t ".into(),
+            argument: String::new(),
+            mode: crate::page::SearchEngineMode::Panel,
+            state: Default::default(),
+        };
+        let core = SearchCore::new(vec![favorite.clone()]);
+        assert_eq!(core.toggle_favorite(&favorite, Some(&session)), Some(true));
+
+        assert_eq!(core.favorite_session(&favorite.id), Some(session));
+    }
+
+    #[test]
+    fn older_session_favorites_replace_a_colliding_root_entry_snapshot() {
+        let mut root_entry = result("legacy-shortcut", "Run command", ResultCategory::Other);
+        root_entry.visibility = ResultVisibility::EmptyQueryOnly;
+        let mut generated = result(
+            "legacy-shortcut",
+            "Run command \"ipconfig\"",
+            ResultCategory::Other,
+        );
+        generated
+            .actions
+            .push(crate::result::Action::Launch(crate::result::LaunchEntry {
+                source: "test".into(),
+                path: "ipconfig".into(),
+                target: "ipconfig".into(),
+                arguments: String::new(),
+                working_directory: None,
+            }));
+        let session = crate::page::SearchEngineSession {
+            id: "legacy-shortcut".into(),
+            title: "Run command".into(),
+            placeholder: "Enter a command".into(),
+            prefix: "> ".into(),
+            argument: "ipconfig".into(),
+            mode: crate::page::SearchEngineMode::Execute,
+            state: Default::default(),
+        };
+        let core = SearchCore::new(vec![root_entry]);
+        core.toggle_favorite(&generated, Some(&session));
+
+        let results = core.search("");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Run command \"ipconfig\"");
+        assert!(matches!(
+            results[0].primary_action(),
+            Some(crate::result::Action::Launch(_))
+        ));
+    }
     #[test]
     fn fuzzy_search_matches_typo_by_default() {
         let item = SearchResult {
@@ -548,6 +715,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         assert_eq!(
@@ -579,6 +747,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![item]);
@@ -609,6 +778,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![make("fuzzy", "Notepad"), make("exact", "ntpd")]);
@@ -638,6 +808,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         assert_eq!(SearchCore::new(vec![item]).search("calc").len(), 1);
@@ -667,6 +838,7 @@ mod tests {
                 package_metadata: None,
                 icon: None,
                 ranking_bias: 0,
+                allow_favorite: true,
                 visibility: ResultVisibility::Always,
             }
         };
@@ -701,6 +873,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         assert_eq!(SearchCore::new(vec![item]).search("calc").len(), 1);
@@ -729,6 +902,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         assert!(SearchCore::new(vec![item]).search("weixin").is_empty());
@@ -757,6 +931,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![
@@ -789,6 +964,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![make("a", "Calculator A"), make("b", "Calculator B")]);
@@ -819,6 +995,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         let core = SearchCore::new(vec![
@@ -854,6 +1031,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         let core = SearchCore::with_plugins_and_shortcuts(
@@ -890,6 +1068,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         let core = SearchCore::with_plugins_and_shortcuts(
@@ -955,6 +1134,7 @@ mod tests {
             package_metadata: None,
             icon: None,
             ranking_bias: 0,
+            allow_favorite: true,
             visibility: ResultVisibility::Always,
         };
         let second = SearchResult {
