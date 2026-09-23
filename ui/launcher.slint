@@ -235,8 +235,9 @@ export component Launcher inherits Window {
     private property <length> search-input-scroll-x: 6px;
     private property <duration> session-transition-duration: 150ms;
     private property <duration> session-fade-duration: 100ms;
-    private property <bool> grid-detail-active: (root.view-mode == "grid" || root.detail-panel-fullscreen) && root.detail-panel-active;
-    private property <float> fullscreen-layout-progress: root.grid-detail-active ? root.detail-visual-progress : 0.0;
+    private property <bool> fullscreen-detail-mode: root.view-mode == "grid" || root.detail-panel-fullscreen;
+    private property <bool> grid-detail-active: root.fullscreen-detail-mode && root.detail-visible;
+    private property <float> fullscreen-layout-progress: root.grid-detail-active ? 1.0 : 0.0;
     private property <length> fullscreen-layout-shift: root.search-row-height * root.fullscreen-layout-progress;
     private property <length> search-row-layout-height: root.search-row-height - root.fullscreen-layout-shift;
     private property <length> available-results-height: max(0px, root.height - 2 * root.window-inset - root.empty-state-padding - root.content-bottom-padding - root.search-row-layout-height - root.content-spacing - root.operation-hint-spacing - root.no-results-spacing);
@@ -247,7 +248,6 @@ export component Launcher inherits Window {
         duration: 180ms;
         easing: root.detail-visible ? ease-out-back : ease-in;
     }
-    private property <float> detail-visual-progress: min(1.0, max(0.0, root.detail-progress));
     // Fade and lift the result surface into view when the compact root search
     // expands. This stays inside the clipped results area, so the native
     // window resize and its screen-position correction remain independent.
@@ -255,7 +255,7 @@ export component Launcher inherits Window {
     animate results-reveal-progress { duration: 180ms; easing: ease-out-back; }
     private property <length> results-reveal-offset: (1.0 - root.results-reveal-progress) * 10px;
     private property <length> detail-panel-width: (root.width - 2 * root.window-inset - 2 * root.content-padding) * root.detail-panel-share - root.detail-panel-alignment-shift;
-    private property <bool> detail-panel-active: root.detail-visible || root.detail-progress > 0.0;
+    private property <bool> detail-panel-active: root.detail-visible || (!root.fullscreen-detail-mode && root.detail-progress > 0.0);
     private property <length> grid-icon-size: 44px;
     private property <length> detail-content-inset: 20px;
     private property <length> detail-header-top: 18px;
@@ -396,7 +396,7 @@ export component Launcher inherits Window {
                 back-button := Rectangle {
                     x: root.shortcut-session-active ? 0px : -root.session-back-width;
                     y: 0px; width: root.session-back-width; height: parent.height;
-                    opacity: (root.shortcut-session-active ? 1.0 : 0.0) * (1.0 - root.fullscreen-layout-progress);
+                    opacity: root.shortcut-session-active ? 1.0 : 0.0;
                     clip: true;
                     animate x { duration: root.session-transition-duration; easing: ease-out-back; }
                     animate opacity { duration: root.session-fade-duration; }
@@ -416,7 +416,6 @@ export component Launcher inherits Window {
                 SearchGlyph {
                     x: root.shortcut-session-active ? root.session-icon-x : root.default-icon-x; y: (root.search-row-layout-height - root.result-icon-size) / 2;
                     width: root.result-icon-size; height: root.result-icon-size;
-                    opacity: 1.0 - root.fullscreen-layout-progress;
                     animate x { duration: root.session-transition-duration; easing: ease-out-back; }
                     source-image: root.search-icon; source-kind: root.search-icon-kind;
                     previous-image: root.search-icon-previous;
@@ -427,7 +426,6 @@ export component Launcher inherits Window {
                 Rectangle {
                     x: root.shortcut-session-active ? root.session-input-x : root.default-input-x; y: 0px; width: parent.width - (root.shortcut-session-active ? 138px : 126px); height: root.search-row-layout-height;
                     background: transparent;
-                    opacity: 1.0 - root.fullscreen-layout-progress;
                     clip: true;
                     animate x { duration: root.session-transition-duration; easing: ease-out-back; }
                     animate width { duration: root.session-transition-duration; easing: ease-out-back; }
@@ -656,21 +654,17 @@ export component Launcher inherits Window {
 
                 detail-panel := Rectangle {
                     // Grid mode uses the complete results area as a modal
-                    // detail surface. The whole surface fades and slides as
-                    // one unit, with closing following the opening path back.
+                    // detail surface shown without a transition.
                     private property <length> panel-width: root.grid-detail-active ? parent.width : root.detail-panel-width;
                     private property <length> panel-height: root.grid-detail-active ? parent.height : max(0px, parent.height - root.detail-panel-bottom-inset);
                     visible: root.detail-panel-active;
                     x: root.grid-detail-active ? 0px : results-list.width + root.result-column-gap - root.result-row-inset;
-                    y: root.grid-detail-active
-                        ? (1.0 - root.detail-visual-progress) * 24px
-                        : (1.0 - root.detail-progress) * 24px;
+                    y: root.grid-detail-active ? 0px : (1.0 - root.detail-progress) * 24px;
                     width: root.grid-detail-active ? self.panel-width : self.panel-width * max(0.0, root.detail-progress);
                     height: self.panel-height;
                     background: root.detail-surface;
                     border-radius: 10px;
                     clip: true;
-                    opacity: root.grid-detail-active ? root.detail-visual-progress : 1.0;
 
                     detail-focus-scope := FocusScope {
                         width: parent.width;
@@ -709,7 +703,6 @@ export component Launcher inherits Window {
                         x: root.grid-detail-active ? 0px : parent.width - detail-panel.panel-width;
                         width: detail-panel.panel-width;
                         height: detail-panel.panel-height;
-                        opacity: root.grid-detail-active ? 1.0 : root.detail-visual-progress;
                         content-width: self.width;
                         content-height: max(self.height, root.detail-panel-content-height);
                         interactive: root.detail-panel-scrollable || root.detail-panel-content-height > self.height;
@@ -792,17 +785,16 @@ export component Launcher inherits Window {
                     }
                     if root.grid-detail-active : Rectangle {
                         x: 16px; y: 14px; width: 36px; height: 32px;
-                        opacity: root.detail-visible ? root.detail-visual-progress : 1.0;
                         background: detail-back-button.has-hover ? root.surface-hover : transparent;
                         border-radius: 8px;
                         detail-back-button := TouchArea {
                             clicked => { root.detail-back-requested(); }
                         }
                         BuiltinIcon {
-                            x: 18px - 6px * root.detail-visual-progress;
-                            y: 16px - 6px * root.detail-visual-progress;
-                            width: 12px * root.detail-visual-progress;
-                            height: 12px * root.detail-visual-progress;
+                            x: 12px;
+                            y: 10px;
+                            width: 12px;
+                            height: 12px;
                             kind: root.dark-mode ? "arrow-left-light" : "arrow-left-dark";
                         }
                     }
