@@ -666,14 +666,28 @@ pub fn run() -> Result<()> {
         window.on_detail_back_requested(move || {
             // Invalidate an in-flight dynamic preview before hiding it. A
             // late provider response must not reopen the detail surface.
-            detail_generation.fetch_add(1, Ordering::AcqRel);
+            let close_generation = detail_generation.fetch_add(1, Ordering::AcqRel) + 1;
             if let Ok(mut open_item) = explicit_detail_item.lock() {
                 *open_item = None;
             }
             if let Some(window) = weak.upgrade() {
-                set_detail_view(&window, None, &icon_service);
                 window.set_detail_panel_visible(false);
                 window.set_empty_state_detail_active(false);
+                let delayed_window = window.as_weak();
+                let detail_generation = Arc::clone(&detail_generation);
+                let icon_service = icon_service.clone();
+                // Leave one render interval after the 180ms Slint animation
+                // before clearing its content and fullscreen layout state.
+                Timer::single_shot(Duration::from_millis(200), move || {
+                    if detail_generation.load(Ordering::Acquire) != close_generation {
+                        return;
+                    }
+                    if let Some(window) = delayed_window.upgrade() {
+                        if !window.get_detail_panel_visible() {
+                            set_detail_view(&window, None, &icon_service);
+                        }
+                    }
+                });
             }
         });
     }
@@ -681,6 +695,7 @@ pub fn run() -> Result<()> {
         let weak = window.as_weak();
         let icon_service = icon_service.clone();
         let empty_state_item = Arc::clone(&empty_state_item);
+        let detail_generation = Arc::clone(&detail_generation);
         window.on_empty_state_activated(move || {
             let Some(item) = empty_state_item.lock().ok().and_then(|state| state.clone()) else {
                 return;
@@ -688,6 +703,7 @@ pub fn run() -> Result<()> {
             let Some(detail) = item.detail.as_ref() else {
                 return;
             };
+            detail_generation.fetch_add(1, Ordering::AcqRel);
             if let Some(window) = weak.upgrade() {
                 set_detail_view(&window, Some(detail), &icon_service);
                 window.set_empty_state_detail_active(true);
@@ -884,6 +900,7 @@ pub fn run() -> Result<()> {
                 *current = query.to_string();
             }
             if let Some(window) = weak.upgrade() {
+                window.set_query_results_ready(false);
                 let native_window = window.window();
                 let current_height = native_window
                     .size()
@@ -899,10 +916,7 @@ pub fn run() -> Result<()> {
                 if (window.get_result_window_height() - result_height).abs() > 0.5 {
                     window.set_result_window_height(result_height);
                 }
-                if !query.trim().is_empty()
-                    || window.get_shortcut_session_active()
-                    || window.get_result_mode()
-                {
+                if window.get_shortcut_session_active() || window.get_result_mode() {
                     restore_result_window_height(&window);
                 }
                 window.set_last_action_id(String::new().into());
@@ -928,7 +942,13 @@ pub fn run() -> Result<()> {
                 .clone()
                 .map(crate::page::SearchContext::Engine)
                 .unwrap_or_else(|| engine.search_context(query.as_str()));
-            let debounce_delay = engine.search_debounce(&search_context_for_query);
+            // Empty-session menus have no user query to debounce, so display
+            // them as soon as their worker can run.
+            let debounce_delay = if query.trim().is_empty() && active_session_for_query.is_some() {
+                Duration::ZERO
+            } else {
+                engine.search_debounce(&search_context_for_query)
+            };
             let empty_state_item_for_query = Arc::clone(&empty_state_item);
             // Debounce before creating a worker. This avoids one sleeping OS
             // thread per keystroke while a plugin-backed search is settling.
@@ -990,9 +1010,6 @@ pub fn run() -> Result<()> {
                                 if is_search_engine {
                                     schedule_visible_range_refresh(&window, count.min(8) as i32);
                                 }
-                                if count > 0 && (!query.trim().is_empty() || is_search_engine) {
-                                    restore_result_window_height(&window);
-                                }
                             }
                             if search_icon_changed {
                                 update_search_icon(
@@ -1032,6 +1049,10 @@ pub fn run() -> Result<()> {
                                     &icon_service,
                                 );
                             }
+                            if !query.trim().is_empty() || is_search_engine {
+                                restore_result_window_height(&window);
+                            }
+                            window.set_query_results_ready(true);
                             request_icons(
                                 0,
                                 count.min(8) as i32,
@@ -1265,6 +1286,9 @@ pub fn run() -> Result<()> {
                     && (item.detail.is_some() || has_dynamic_detail)
                     || open_detail_action
                 {
+                    // Cancel a pending visual-close cleanup if another
+                    // detail was opened before its fade-out completed.
+                    detail_generation.fetch_add(1, Ordering::AcqRel);
                     if let Ok(mut open_item) = explicit_detail_item.lock() {
                         *open_item = Some(item.id.clone());
                     }
@@ -1853,11 +1877,11 @@ pub fn run() -> Result<()> {
                 if changed {
                     let indexed = provider.snapshot();
                     engine.replace_results(indexed);
+                    let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
                     let query = current_query
                         .lock()
                         .map(|value| value.clone())
                         .unwrap_or_default();
-                    let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
                     let SearchPresentation {
                         found: found_for_icons,
                         rows,
@@ -1922,10 +1946,6 @@ pub fn run() -> Result<()> {
                                 if is_search_engine {
                                     schedule_visible_range_refresh(&window, count.min(8) as i32);
                                 }
-                                if count > 0 && (!query.trim().is_empty() || is_search_engine) {
-                                    restore_result_window_height(&window);
-                                }
-
                                 apply_search_detail_state(
                                     &window,
                                     detail.as_ref(),
@@ -1949,6 +1969,10 @@ pub fn run() -> Result<()> {
                                     &icon_service_for_ui,
                                 );
                             }
+                            if !query.trim().is_empty() || is_search_engine {
+                                restore_result_window_height(&window);
+                            }
+                            window.set_query_results_ready(true);
                             if search_icon_changed {
                                 update_search_icon(
                                     &window,

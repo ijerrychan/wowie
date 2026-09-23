@@ -312,5 +312,13 @@ msgid "Search with Everything"
 msgstr "用 Everything 搜索"
 
 msgctxt "Launcher"
+msgid "Google Translate"
+msgstr "谷歌翻译"
+
+msgctxt "Launcher"
+msgid "Enter text to translate"
+msgstr "输入要翻译的文本"
+
+msgctxt "Launcher"
 msgid "Everything IPC"
 msgstr "Everything IPC"

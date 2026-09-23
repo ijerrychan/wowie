@@ -117,6 +117,7 @@ struct InstalledPlugin {
     root: PathBuf,
     manifest: PluginManifest,
     embedded: Option<Arc<Mutex<EmbeddedPlugin>>>,
+    has_detail_handler: bool,
     enabled: Arc<AtomicBool>,
     weight: Arc<AtomicI32>,
     preferences: Arc<Mutex<std::collections::BTreeMap<String, serde_json::Value>>>,
@@ -1077,6 +1078,21 @@ pub struct PluginManager {
     query_epoch: Arc<AtomicU64>,
 }
 
+fn plugin_config_for(
+    plugin_id: &str,
+    plugin_configs: &std::collections::BTreeMap<String, PluginConfig>,
+) -> PluginConfig {
+    plugin_configs
+        .get(plugin_id)
+        .or_else(|| {
+            (plugin_id == "google-translate")
+                .then(|| plugin_configs.get("tencent-translate"))
+                .flatten()
+        })
+        .cloned()
+        .unwrap_or_default()
+}
+
 impl PluginManager {
     pub fn discover_with_config(
         locale: &str,
@@ -1100,10 +1116,7 @@ impl PluginManager {
                 };
                 match serde_json::from_str::<PluginManifest>(&text) {
                     Ok(manifest) => {
-                        let settings = plugin_configs
-                            .get(&manifest.id)
-                            .cloned()
-                            .unwrap_or_default();
+                        let settings = plugin_config_for(&manifest.id, plugin_configs);
                         let status = Arc::new(Mutex::new(PluginRuntimeStatus {
                             state: if settings.enabled {
                                 "ready".into()
@@ -1138,10 +1151,23 @@ impl PluginManager {
                                 None
                             }
                         };
+                        // Cache handler availability during discovery. Checking
+                        // the Lua VM on every selection can block the UI while
+                        // a plugin query is making a network request.
+                        let has_detail_handler = embedded
+                            .as_ref()
+                            .map(|plugin| {
+                                let Ok(plugin) = plugin.lock() else {
+                                    return false;
+                                };
+                                plugin.has_handler("detail").unwrap_or(false)
+                            })
+                            .unwrap_or(false);
                         plugins.push(InstalledPlugin {
                             root: dir,
                             manifest,
                             embedded,
+                            has_detail_handler,
                             enabled: Arc::new(AtomicBool::new(settings.enabled)),
                             weight: Arc::new(AtomicI32::new(settings.weight)),
                             preferences: Arc::new(Mutex::new(settings.preferences)),
@@ -1184,10 +1210,7 @@ impl PluginManager {
         plugin_configs: &std::collections::BTreeMap<String, PluginConfig>,
     ) {
         for plugin in &self.plugins {
-            let settings = plugin_configs
-                .get(&plugin.manifest.id)
-                .cloned()
-                .unwrap_or_default();
+            let settings = plugin_config_for(&plugin.manifest.id, plugin_configs);
             plugin.enabled.store(settings.enabled, Ordering::Release);
             plugin.weight.store(settings.weight, Ordering::Release);
             if let Ok(mut status) = plugin.status.lock() {
@@ -1720,6 +1743,11 @@ impl PluginManager {
     }
 
     pub fn search_engine(&self, query: &str) -> Option<SearchEngineSession> {
+        let locale = self
+            .locale
+            .lock()
+            .map(|locale| locale.clone())
+            .unwrap_or_else(|_| "en".into());
         self.plugins
             .iter()
             .filter(|plugin| plugin.enabled.load(Ordering::Acquire))
@@ -1742,14 +1770,18 @@ impl PluginManager {
                 } else {
                     command.title.clone()
                 };
+                let title = crate::utils::i18n::tr_owned_in_context(&locale, "Launcher", &title);
+                let placeholder = command
+                    .placeholder
+                    .as_deref()
+                    .filter(|placeholder| !placeholder.trim().is_empty())
+                    .map(|placeholder| {
+                        crate::utils::i18n::tr_owned_in_context(&locale, "Launcher", placeholder)
+                    })
+                    .unwrap_or_else(|| title.clone());
                 Some(SearchEngineSession {
                     id: format!("plugin:{}:{}", plugin.manifest.id, command.id),
-                    placeholder: command
-                        .placeholder
-                        .as_deref()
-                        .filter(|placeholder| !placeholder.trim().is_empty())
-                        .unwrap_or(&title)
-                        .to_owned(),
+                    placeholder,
                     title,
                     prefix: format!("{word} "),
                     argument: argument.into(),
@@ -1871,15 +1903,8 @@ impl crate::provider::SearchEngineProvider for PluginManager {
 
 impl crate::details::DynamicDetailProvider for PluginManager {
     fn matches(&self, item: &SearchResult) -> bool {
-        let Some(plugin) = self.plugin_for_item(&item.id) else {
-            return false;
-        };
-        plugin
-            .embedded
-            .as_ref()
-            .and_then(|embedded| embedded.lock().ok())
-            .and_then(|embedded| embedded.has_handler("detail").ok())
-            .unwrap_or(false)
+        self.plugin_for_item(&item.id)
+            .is_some_and(|plugin| plugin.has_detail_handler)
     }
 
     fn cached(&self, _item: &SearchResult, _language: &str) -> Option<crate::result::DetailView> {
@@ -2572,6 +2597,7 @@ mod tests {
                 default_locale: "en".into(),
             },
             embedded: None,
+            has_detail_handler: false,
             enabled: Arc::new(AtomicBool::new(true)),
             weight: Arc::new(AtomicI32::new(0)),
             preferences: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
@@ -2800,7 +2826,7 @@ mod tests {
         assert!(manager
             .query("")
             .iter()
-            .any(|item| item.id == "plugin:tencent-translate:entry"
+            .any(|item| item.id == "plugin:google-translate:entry"
                 && item.visibility == crate::result::ResultVisibility::EmptyQueryOnly));
         assert!(manager
             .query("")
@@ -2836,11 +2862,11 @@ mod tests {
         assert!(manager
             .query("tmt ")
             .iter()
-            .any(|item| item.id == "plugin:tencent-translate:source"));
+            .any(|item| item.id == "plugin:google-translate:source"));
         let translation_items = manager
             .query("tmt hello")
             .into_iter()
-            .filter(|item| item.id.starts_with("plugin:tencent-translate:"))
+            .filter(|item| item.id.starts_with("plugin:google-translate:"))
             .collect::<Vec<_>>();
         assert!(translation_items.len() >= 3);
         assert!(translation_items
@@ -2852,10 +2878,10 @@ mod tests {
         assert!(manager
             .statuses()
             .iter()
-            .any(|status| status.id == "tencent-translate"));
+            .any(|status| status.id == "google-translate"));
         assert_eq!(
-            manager.shortcut_hint("plugin:tencent-translate:entry"),
-            Some("tmt ".into())
+            manager.shortcut_hint("plugin:google-translate:entry"),
+            Some("gt ".into())
         );
     }
 

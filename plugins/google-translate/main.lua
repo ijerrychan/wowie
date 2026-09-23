@@ -1,5 +1,7 @@
--- Tencent Hy-MT2 translation through the TokenHub translation API.
+-- Google Translate uses its translateHtml endpoint for translation.
 -- Preferences are supplied by the host from config.json; see README.md.
+local GOOGLE_TRANSLATE_URL = "https://translate-pa.googleapis.com/v1/translateHtml"
+local DEFAULT_GOOGLE_API_KEY = "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520"
 local languages = {
     { code = "AUTO", zh = "自动检测", en = "Auto detect" },
     { code = "zh-Hans", zh = "简体中文", en = "Chinese (Simplified)" },
@@ -77,12 +79,15 @@ local function normalized_language(code)
     if value == "zh-tw" or value == "zh-hk" or value == "zh-mo" or value == "zh-hant" or value == "zh-tr" then
         return "zh-hant"
     end
+    if value == "tl" then return "fil" end
     return value:match("^[^-]+") or value
 end
 
-local function api_language(code)
-    if code == "zh-Hans" then return "zh" end
-    if code == "zh-Hant" then return "zh-TR" end
+local function google_language(code)
+    if code == "AUTO" then return "auto" end
+    if code == "zh-Hans" then return "zh-CN" end
+    if code == "zh-Hant" then return "zh-TW" end
+    if code == "fil" then return "tl" end
     return code
 end
 
@@ -121,62 +126,42 @@ local function preference_string(preferences, name)
 end
 
 local function request_translation(text, source, target, preferences, locale)
-    local api_key = preference_string(preferences, "api_key")
-    if api_key == "" then
-        return nil, label(
-            "尚未配置 TokenHub API Key。请按插件 README 设置 config.json。",
-            "TokenHub API key is missing. Configure it in config.json as described in the plugin README.",
-            locale
-        )
-    end
-
-    local endpoint = preference_string(preferences, "endpoint")
-    if endpoint == "" then endpoint = "https://tokenhub.tencentmaas.com/v1/api/translations" end
-    endpoint = endpoint:gsub("/+$", "")
-    if endpoint:match("/v1$") then
-        endpoint = endpoint .. "/api/translations"
-    elseif not endpoint:match("/v1/api/translations$") then
-        endpoint = endpoint .. "/v1/api/translations"
-    end
-
-    local model = preference_string(preferences, "model")
-    if model == "" then model = "hy-mt2-plus" end
+    local api_key = preference_string(preferences, "google_api_key")
+    if api_key == "" then api_key = DEFAULT_GOOGLE_API_KEY end
     local payload = {
-        model = model,
-        text = text,
-        target = api_language(target)
+        { { text }, google_language(source), google_language(target) },
+        "wt_lib"
     }
-    if source ~= "AUTO" then
-        payload.source = api_language(source)
-    end
-
     local headers = {
-        ["Authorization"] = "Bearer " .. api_key,
-        ["Content-Type"] = "application/json"
+        ["Content-Type"] = "application/json+protobuf",
+        ["X-Goog-API-Key"] = api_key
     }
 
-    local ok, response = pcall(wowie.http_post_json, endpoint, payload, headers)
+    local ok, response = pcall(wowie.http_post_json, GOOGLE_TRANSLATE_URL, payload, headers)
     if not ok then
-        return nil, label("腾讯翻译请求失败：", "Tencent Translator request failed: ", locale) .. tostring(response)
+        return nil, label("Google 翻译请求失败：", "Google Translate request failed: ", locale) .. tostring(response)
     end
-    local choices = type(response) == "table" and response.choices or nil
-    local first = type(choices) == "table" and choices[1] or nil
-    local message = type(first) == "table" and first.message or nil
-    if type(message) ~= "table" or type(message.content) ~= "string" then
-        local api_error = type(response) == "table" and response.error or nil
-        local detail = type(api_error) == "table" and api_error.message or nil
-        if type(detail) == "string" and detail ~= "" then
-            return nil, label("腾讯翻译请求失败：", "Tencent Translator request failed: ", locale) .. detail
+    local segments = type(response) == "table" and response[1] or nil
+    local translated = {}
+    if type(segments) == "table" then
+        for _, segment in ipairs(segments) do
+            if type(segment) == "string" then
+                translated[#translated + 1] = segment
+            elseif type(segment) == "table" and type(segment[1]) == "string" then
+                translated[#translated + 1] = segment[1]
+            end
         end
-        return nil, label("腾讯翻译没有返回译文。", "Tencent Translator returned no translation.", locale)
+    elseif type(segments) == "string" then
+        translated[#translated + 1] = segments
     end
-    if first.finish_reason == "sensitive" then
-        return nil, label("腾讯翻译无法处理这段内容。", "Tencent Translator could not process this content.", locale)
+    if #translated == 0 then
+        return nil, label("Google 翻译没有返回译文。", "Google Translate returned no translation.", locale)
     end
+    local detected = type(response[2]) == "table" and response[2][1] or nil
     return {
-        text = message.content,
-        detected = display_language(response.source),
-        target = display_language(response.target)
+        text = table.concat(translated),
+        detected = display_language(detected),
+        target = target
     }
 end
 
@@ -258,15 +243,15 @@ end
 
 wowie.on("query", function(query, context)
     local locale = context.locale or "en"
-    local translator_name = label("腾讯翻译", "Tencent Translator", locale)
+    local translator_name = label("谷歌翻译", "Google Translate", locale)
     if context.command_id ~= "translate" then
         return {
             request_id = context.request_id,
             items = {
                 wowie.result({
                     id = "entry",
-                    title = query:match("^%s*$") and translator_name or label("用腾讯翻译搜索 \"" .. query .. "\"", "Search with Tencent Translator for \"" .. query .. "\"", locale),
-                    subtitle = query:match("^%s*$") and label("输入文本开始翻译", "Enter text to translate", locale) or label("腾讯翻译文本", "Tencent translation", locale),
+                    title = query:match("^%s*$") and translator_name or label("用谷歌翻译搜索 \"" .. query .. "\"", "Search with Google Translate for \"" .. query .. "\"", locale),
+                    subtitle = query:match("^%s*$") and label("输入文本开始翻译", "Enter text to translate", locale) or label("谷歌翻译文本", "Google translation", locale),
                     category = "other",
                     command_id = "translate",
                     session_entry = true,
@@ -303,7 +288,7 @@ wowie.on("query", function(query, context)
             subtitle = translator_name .. " · " .. source_label .. " → " .. target_label,
             category = "other",
             ranking_bias = 20,
-            icon = { type = "resource", path = "icons/tencent-translate.svg" },
+            icon = { type = "resource", path = "icons/google-translate.svg" },
             detail = {
                 title = translator_name,
                 blocks = {{ type = "text", text = translated, color = "primary", copyable = true }},

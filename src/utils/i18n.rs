@@ -13,6 +13,10 @@ pub fn tr_in_context(
     context: &'static str,
     message_id: &'static str,
 ) -> &'static str {
+    translated_message(language, context, message_id).unwrap_or(message_id)
+}
+
+fn translated_message(language: &str, context: &str, message_id: &str) -> Option<&'static str> {
     let language = effective_language(language);
     TRANSLATIONS
         .iter()
@@ -22,7 +26,14 @@ pub fn tr_in_context(
                 && *id == message_id
         })
         .map(|(_, _, _, value)| *value)
+}
+
+/// Returns a translated message owned by the caller. This is useful for
+/// strings loaded from plugin manifests, which cannot be `&'static str` keys.
+pub fn tr_owned_in_context(language: &str, context: &str, message_id: &str) -> String {
+    translated_message(language, context, message_id)
         .unwrap_or(message_id)
+        .to_owned()
 }
 
 /// Returns a translated list. Values use `|` as the separator in the `.po` file.

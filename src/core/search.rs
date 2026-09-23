@@ -240,6 +240,14 @@ impl SearchCore {
         } else {
             None
         };
+        // Preserve recency regardless of learned usage scores or title order.
+        let history_order = history
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (entry.result_id.as_str(), index))
+            .collect::<std::collections::HashMap<_, _>>();
         let mut dynamic = self
             .providers
             .query(context, &input, history.as_deref().unwrap_or_default())
@@ -341,6 +349,7 @@ impl SearchCore {
                 .map(|score| {
                     (
                         RankKey {
+                            history_order: history_order.get(item.id.as_str()).copied(),
                             favorite_order,
                             fallback,
                             match_class: score.class,
@@ -356,9 +365,15 @@ impl SearchCore {
             })
             .collect();
         ranked.sort_by(|a, b| {
-            b.0.favorite_order
+            b.0.history_order
                 .is_some()
-                .cmp(&a.0.favorite_order.is_some())
+                .cmp(&a.0.history_order.is_some())
+                .then_with(|| a.0.history_order.cmp(&b.0.history_order))
+                .then_with(|| {
+                    b.0.favorite_order
+                        .is_some()
+                        .cmp(&a.0.favorite_order.is_some())
+                })
                 .then_with(|| a.0.favorite_order.cmp(&b.0.favorite_order))
                 .then_with(|| a.0.fallback.cmp(&b.0.fallback))
                 .then_with(|| b.0.match_class.cmp(&a.0.match_class))
@@ -408,6 +423,7 @@ struct MatchScore {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RankKey {
+    history_order: Option<usize>,
     favorite_order: Option<usize>,
     fallback: bool,
     match_class: u8,
@@ -652,6 +668,30 @@ mod tests {
         assert_eq!(core.toggle_favorite(&favorite, Some(&session)), Some(true));
 
         assert_eq!(core.favorite_session(&favorite.id), Some(session));
+    }
+
+    #[test]
+    fn engine_search_history_stays_newest_first_after_ranking() {
+        let plugins = crate::plugin::PluginManager::discover_with_config("en", &Default::default());
+        let core = SearchCore {
+            providers: ProviderRegistry::default_providers(plugins, Vec::new()),
+            dynamic_results: Mutex::new(Vec::new()),
+            ranker: Ranker::in_memory(),
+            fuzzy_search: AtomicBool::new(true),
+        };
+        let session = core
+            .search_context("> ")
+            .session()
+            .cloned()
+            .expect("command session");
+        core.record_action_success("older", "ipconfig", Some(&session));
+        core.record_action_success("newer", "whoami", Some(&session));
+
+        let results = core.search_in_context(&crate::page::SearchContext::Engine(session), "");
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].launch_arguments.contains("whoami"));
+        assert!(results[1].launch_arguments.contains("ipconfig"));
     }
 
     #[test]

@@ -312,5 +312,13 @@ msgid "Search with Everything"
 msgstr "Search with Everything"
 
 msgctxt "Launcher"
+msgid "Google Translate"
+msgstr "Google Translate"
+
+msgctxt "Launcher"
+msgid "Enter text to translate"
+msgstr "Enter text to translate"
+
+msgctxt "Launcher"
 msgid "Everything IPC"
 msgstr "Everything IPC"

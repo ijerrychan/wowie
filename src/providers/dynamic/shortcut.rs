@@ -425,8 +425,7 @@ impl SearchEngineProvider for ShortcutProvider {
     ) -> Vec<SearchResult> {
         history
             .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| {
+            .filter_map(|entry| {
                 let explicit_query = format!("{}{}", session.prefix, entry.query);
                 let mut item = self
                     .results(&explicit_query)
@@ -434,7 +433,6 @@ impl SearchEngineProvider for ShortcutProvider {
                     .find(|result| result.id == session.id)?;
                 item.id = entry.result_id.clone();
                 item.identity = entry.result_id.clone();
-                item.ranking_bias = (100_i32 - index as i32).max(1);
                 item.visibility = crate::result::ResultVisibility::Always;
                 Some(item)
             })
@@ -573,7 +571,6 @@ mod tests {
         assert_ne!(command_rows[0].id, command_rows[1].id);
         assert!(command_rows[0].title.contains("ipconfig"));
         assert!(command_rows[0].launch_arguments.contains("ipconfig"));
-        assert!(command_rows[0].ranking_bias > command_rows[1].ranking_bias);
 
         let web = provider.search_engine("w ").expect("web session");
         let web_history = ["https://example.com", "https://example.org"]
