@@ -322,3 +322,517 @@ msgstr "Enter text to translate"
 msgctxt "Launcher"
 msgid "Everything IPC"
 msgstr "Everything IPC"
+
+
+msgctxt "SettingsWindow"
+msgid "Settings"
+msgstr "Settings"
+
+msgctxt "SettingsWindow"
+msgid "Apply"
+msgstr "Apply"
+
+msgctxt "Settings"
+msgid "General"
+msgstr "General"
+
+msgctxt "Settings"
+msgid "Appearance"
+msgstr "Appearance"
+
+msgctxt "Settings"
+msgid "Search"
+msgstr "Search"
+
+msgctxt "Settings"
+msgid "Providers"
+msgstr "Providers"
+
+msgctxt "Settings"
+msgid "Shortcuts"
+msgstr "Shortcuts"
+
+msgctxt "Settings"
+msgid "Plugins"
+msgstr "Plugins"
+
+msgctxt "Settings"
+msgid "Global hotkey"
+msgstr "Global hotkey"
+
+msgctxt "Settings"
+msgid "Keyboard shortcut used to open the launcher."
+msgstr "Keyboard shortcut used to open the launcher."
+
+msgctxt "Settings"
+msgid "Show on startup"
+msgstr "Show on startup"
+
+msgctxt "Settings"
+msgid "Open the launcher when Wowie starts."
+msgstr "Open the launcher when Wowie starts."
+
+msgctxt "Settings"
+msgid "Hide when focus is lost"
+msgstr "Hide when focus is lost"
+
+msgctxt "Settings"
+msgid "Dismiss the launcher after another window receives focus."
+msgstr "Dismiss the launcher after another window receives focus."
+
+msgctxt "Settings"
+msgid "Theme"
+msgstr "Theme"
+
+msgctxt "Settings"
+msgid "Choose the interface color theme."
+msgstr "Choose the interface color theme."
+
+msgctxt "Settings"
+msgid "System"
+msgstr "System"
+
+msgctxt "Settings"
+msgid "Light"
+msgstr "Light"
+
+msgctxt "Settings"
+msgid "Dark"
+msgstr "Dark"
+
+msgctxt "Settings"
+msgid "System default"
+msgstr "System default"
+
+msgctxt "Settings"
+msgid "English"
+msgstr "English"
+
+msgctxt "Settings"
+msgid "Simplified Chinese"
+msgstr "Simplified Chinese"
+
+msgctxt "Settings"
+msgid "Language"
+msgstr "Language"
+
+msgctxt "Settings"
+msgid "Language used by Wowie and its built-in providers."
+msgstr "Language used by Wowie and its built-in providers."
+
+msgctxt "Settings"
+msgid "Renderer"
+msgstr "Renderer"
+
+msgctxt "Settings"
+msgid "Graphics backend. Restart Wowie to switch the renderer."
+msgstr "Graphics backend. Restart Wowie to switch the renderer."
+
+msgctxt "Settings"
+msgid "Font family"
+msgstr "Font family"
+
+msgctxt "Settings"
+msgid "Choose an installed font family. Select System default to use the OS default."
+msgstr "Choose an installed font family. Select System default to use the OS default."
+
+msgctxt "Settings"
+msgid "Font size"
+msgstr "Font size"
+
+msgctxt "Settings"
+msgid "Base text size used throughout the interface."
+msgstr "Base text size used throughout the interface."
+
+msgctxt "Settings"
+msgid "List row height"
+msgstr "List row height"
+
+msgctxt "Settings"
+msgid "Height of each result in list view."
+msgstr "Height of each result in list view."
+
+msgctxt "Settings"
+msgid "Grid item size"
+msgstr "Grid item size"
+
+msgctxt "Settings"
+msgid "Minimum tile size in grid view."
+msgstr "Minimum tile size in grid view."
+
+msgctxt "Settings"
+msgid "Fuzzy search"
+msgstr "Fuzzy search"
+
+msgctxt "Settings"
+msgid "Match results even when query characters are not adjacent."
+msgstr "Match results even when query characters are not adjacent."
+
+msgctxt "Settings"
+msgid "Compact empty search"
+msgstr "Compact empty search"
+
+msgctxt "Settings"
+msgid "Hide results for an empty root search until you press Down."
+msgstr "Hide results for an empty root search until you press Down."
+
+msgctxt "Settings"
+msgid "Separate launch entries"
+msgstr "Separate launch entries"
+
+msgctxt "Settings"
+msgid "Show each additional application launch action as its own result."
+msgstr "Show each additional application launch action as its own result."
+
+msgctxt "Settings"
+msgid "Advanced result details"
+msgstr "Advanced result details"
+
+msgctxt "Settings"
+msgid "Show additional diagnostic details in result panels."
+msgstr "Show additional diagnostic details in result panels."
+
+msgctxt "Settings"
+msgid "Advanced launch actions"
+msgstr "Advanced launch actions"
+
+msgctxt "Settings"
+msgid "Include advanced launch actions in result menus."
+msgstr "Include advanced launch actions in result menus."
+
+msgctxt "Settings"
+msgid "Store apps"
+msgstr "Store apps"
+
+msgctxt "Settings"
+msgid "Include installed Microsoft Store apps."
+msgstr "Include installed Microsoft Store apps."
+
+msgctxt "Settings"
+msgid "Start menu"
+msgstr "Start menu"
+
+msgctxt "Settings"
+msgid "Include shortcuts from the Start menu."
+msgstr "Include shortcuts from the Start menu."
+
+msgctxt "Settings"
+msgid "Desktop shortcuts"
+msgstr "Desktop shortcuts"
+
+msgctxt "Settings"
+msgid "Include shortcuts from the desktop."
+msgstr "Include shortcuts from the desktop."
+
+msgctxt "Settings"
+msgid "Control Panel"
+msgstr "Control Panel"
+
+msgctxt "Settings"
+msgid "Include Control Panel destinations."
+msgstr "Include Control Panel destinations."
+
+msgctxt "Settings"
+msgid "Indexed directories"
+msgstr "Indexed directories"
+
+msgctxt "Settings"
+msgid "Semicolon-separated folders to index."
+msgstr "Semicolon-separated folders to index."
+
+msgctxt "Settings"
+msgid "Indexed extensions"
+msgstr "Indexed extensions"
+
+msgctxt "Settings"
+msgid "Semicolon-separated file extensions, with or without dots."
+msgstr "Semicolon-separated file extensions, with or without dots."
+
+msgctxt "Settings"
+msgid "Search shortcuts"
+msgstr "Search shortcuts"
+
+msgctxt "Settings"
+msgid "Edit the shortcut array as JSON. Changes are normalized when saved."
+msgstr "Edit the shortcut array as JSON. Changes are normalized when saved."
+
+msgctxt "Settings"
+msgid "Applications"
+msgstr "Applications"
+
+msgctxt "Settings"
+msgid "Games"
+msgstr "Games"
+
+msgctxt "Settings"
+msgid "Websites"
+msgstr "Websites"
+
+msgctxt "Settings"
+msgid "Calculator"
+msgstr "Calculator"
+
+msgctxt "Settings"
+msgid "Control Panel results"
+msgstr "Control Panel results"
+
+msgctxt "Settings"
+msgid "Documents"
+msgstr "Documents"
+
+msgctxt "Settings"
+msgid "Other results"
+msgstr "Other results"
+
+msgctxt "Settings"
+msgid "Unclassified results"
+msgstr "Unclassified results"
+
+msgctxt "Settings"
+msgid "Small tie-break adjustment, from -100 to 100."
+msgstr "Small tie-break adjustment, from -100 to 100."
+
+msgctxt "Settings"
+msgid "Enabled"
+msgstr "Enabled"
+
+msgctxt "Settings"
+msgid "Enable or disable this plugin."
+msgstr "Enable or disable this plugin."
+
+msgctxt "Settings"
+msgid "Search priority"
+msgstr "Search priority"
+
+msgctxt "Settings"
+msgid "A small tie-break adjustment for this plugin. Range: -1000 to 1000."
+msgstr "A small tie-break adjustment for this plugin. Range: -1000 to 1000."
+
+msgctxt "Settings"
+msgid "No plugins installed"
+msgstr "No plugins installed"
+
+msgctxt "Settings"
+msgid "Install a plugin to manage its settings here."
+msgstr "Install a plugin to manage its settings here."
+
+msgctxt "Settings"
+msgid "Plugin settings"
+msgstr "Plugin settings"
+
+msgctxt "Settings"
+msgid "Select a plugin from the sidebar to manage its settings."
+msgstr "Select a plugin from the sidebar to manage its settings."
+
+msgctxt "Settings"
+msgid "Google Translate API key"
+msgstr "Google Translate API key"
+
+msgctxt "Settings"
+msgid "Optional API key for the translation service."
+msgstr "Optional API key for the translation service."
+
+
+msgctxt "Settings"
+msgid "Open the launcher when Wowie starts. Restart Wowie to apply."
+msgstr "Open the launcher when Wowie starts. Restart Wowie to apply."
+
+msgctxt "Settings"
+msgid "Semicolon-separated existing folders to index."
+msgstr "Semicolon-separated existing folders to index."
+
+msgctxt "Settings"
+msgid "Add indexed folder"
+msgstr "Add indexed folder"
+
+msgctxt "Settings"
+msgid "Enter an existing folder path, then add it to the index."
+msgstr "Enter an existing folder path, then add it to the index."
+
+msgctxt "Settings"
+msgid "Choose an existing folder, or paste its path below."
+msgstr "Choose an existing folder, or paste its path below."
+
+msgctxt "SettingsWindow"
+msgid "Browse"
+msgstr "Browse"
+
+msgctxt "SettingsWindow"
+msgid "Enter runs the typed input directly."
+msgstr "Enter runs the typed input directly."
+
+msgctxt "SettingsWindow"
+msgid "Enter opens the selected result."
+msgstr "Enter opens the selected result."
+
+msgctxt "SettingsWindow"
+msgid "Custom shortcuts have no detail view; Panel behaves like Search."
+msgstr "Custom shortcuts have no detail view; Panel behaves like Search."
+
+msgctxt "Settings"
+msgid "Indexed folder"
+msgstr "Indexed folder"
+
+msgctxt "Settings"
+msgid "Add shortcut"
+msgstr "Add shortcut"
+
+msgctxt "Settings"
+msgid "Create a shortcut with separate fields."
+msgstr "Create a shortcut with separate fields."
+
+msgctxt "SettingsWindow"
+msgid "Add"
+msgstr "Add"
+
+msgctxt "SettingsWindow"
+msgid "Apply"
+msgstr "Apply"
+
+msgctxt "SettingsWindow"
+msgid "Edit"
+msgstr "Edit"
+
+msgctxt "SettingsWindow"
+msgid "Remove"
+msgstr "Remove"
+
+msgctxt "SettingsWindow"
+msgid "Cancel"
+msgstr "Cancel"
+
+msgctxt "SettingsWindow"
+msgid "Save"
+msgstr "Save"
+
+msgctxt "SettingsWindow"
+msgid "Name"
+msgstr "Name"
+
+msgctxt "SettingsWindow"
+msgid "Prefix"
+msgstr "Prefix"
+
+msgctxt "SettingsWindow"
+msgid "Type"
+msgstr "Type"
+
+msgctxt "SettingsWindow"
+msgid "Mode"
+msgstr "Mode"
+
+msgctxt "SettingsWindow"
+msgid "URL"
+msgstr "URL"
+
+msgctxt "SettingsWindow"
+msgid "Application"
+msgstr "Application"
+
+msgctxt "SettingsWindow"
+msgid "Command"
+msgstr "Command"
+
+msgctxt "SettingsWindow"
+msgid "Execute"
+msgstr "Execute"
+
+msgctxt "SettingsWindow"
+msgid "Search"
+msgstr "Search"
+
+msgctxt "SettingsWindow"
+msgid "Panel"
+msgstr "Panel"
+
+msgctxt "SettingsWindow"
+msgid "URL template (include {query})"
+msgstr "URL template (include {query})"
+
+msgctxt "SettingsWindow"
+msgid "Target path or command"
+msgstr "Target path or command"
+
+msgctxt "SettingsWindow"
+msgid "Arguments"
+msgstr "Arguments"
+
+msgctxt "SettingsWindow"
+msgid "Input placeholder"
+msgstr "Input placeholder"
+
+msgctxt "SettingsWindow"
+msgid "Description"
+msgstr "Description"
+
+msgctxt "Settings"
+msgid "Result type order"
+msgstr "Result type order"
+
+msgctxt "Settings"
+msgid "Favorites and session history stay first. Among other results, stronger text matches stay first; this order breaks ties."
+msgstr "Favorites and session history stay first. Among other results, stronger text matches stay first; this order breaks ties."
+
+msgctxt "Settings"
+msgid "Move this result type earlier or later."
+msgstr "Move this result type earlier or later."
+
+msgctxt "Settings"
+msgid "Plugin order"
+msgstr "Plugin order"
+
+msgctxt "Settings"
+msgid "Within the same result type, this order breaks ties between plugins."
+msgstr "Within the same result type, this order breaks ties between plugins."
+
+msgctxt "Settings"
+msgid "Move this plugin earlier or later."
+msgstr "Move this plugin earlier or later."
+
+msgctxt "Settings"
+msgid "Reset result order"
+msgstr "Reset result order"
+
+msgctxt "Settings"
+msgid "Restore the default order for result types and plugins."
+msgstr "Restore the default order for result types and plugins."
+
+msgctxt "SettingsWindow"
+msgid "Up"
+msgstr "Up"
+
+msgctxt "SettingsWindow"
+msgid "Down"
+msgstr "Down"
+
+msgctxt "SettingsWindow"
+msgid "Reset"
+msgstr "Reset"
+
+msgctxt "Settings"
+msgid "Web search keyword"
+msgstr "Web search keyword"
+
+msgctxt "Settings"
+msgid "Keyword used to enter the built-in web search shortcut."
+msgstr "Keyword used to enter the built-in web search shortcut."
+
+msgctxt "Settings"
+msgid "Command keyword"
+msgstr "Command keyword"
+
+msgctxt "Settings"
+msgid "Keyword used to enter the built-in command shortcut."
+msgstr "Keyword used to enter the built-in command shortcut."
+
+msgctxt "Settings"
+msgid "Trigger words"
+msgstr "Trigger words"
+
+msgctxt "Settings"
+msgid "Comma-separated words that activate this command. Leave empty to use plugin defaults."
+msgstr "Comma-separated words that activate this command. Leave empty to use plugin defaults."
+
+msgctxt "SettingsWindow"
+msgid "Press a modifier and key, or Escape to cancel"
+msgstr "Press a modifier and key, or Escape to cancel"

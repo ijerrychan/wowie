@@ -6060,6 +6060,7 @@ dependencies = [
  "dirs",
  "everything-ipc",
  "fasteval",
+ "fontdb",
  "image",
  "linkify",
  "mlua",

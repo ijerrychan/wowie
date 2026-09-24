@@ -12,7 +12,7 @@ mod command;
 mod web;
 
 use crate::{
-    config::ShortcutConfig,
+    config::{ShortcutConfig, ShortcutKeywords},
     page::{SearchEngineMode, SearchEngineSession},
     platform::SourceId,
     provider::{ProviderRegistry, SearchEngineProvider, DEFAULT_SEARCH_DEBOUNCE},
@@ -162,10 +162,13 @@ pub(super) fn result_id(_index: usize, prefix: &str) -> String {
     format!("shortcut:{encoded}")
 }
 
-pub(super) fn effective_type(shortcut: &ShortcutConfig) -> &str {
+pub(super) fn effective_type<'a>(
+    shortcut: &'a ShortcutConfig,
+    keywords: &ShortcutKeywords,
+) -> &'a str {
     match shortcut.prefix.trim_end() {
-        prefix if prefix == COMMAND_PREFIX.trim_end() => "command",
-        prefix if prefix == WEB_PREFIX.trim_end() => "url",
+        prefix if prefix.eq_ignore_ascii_case(&keywords.command) => "command",
+        prefix if prefix.eq_ignore_ascii_case(&keywords.web_search) => "url",
         _ => shortcut.shortcut_type.as_str(),
     }
 }
@@ -180,15 +183,26 @@ pub(super) fn configured_description(query: ShortcutQuery<'_>, shortcut: &Shortc
 
 /// Dynamic results generated from the current query rather than an index.
 pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Vec<SearchResult> {
+    results_with_keywords(query, configured, language, &ShortcutKeywords::default())
+}
+
+pub fn results_with_keywords(
+    query: &str,
+    configured: &[ShortcutConfig],
+    language: &str,
+    keywords: &ShortcutKeywords,
+) -> Vec<SearchResult> {
     let Some(query) = ShortcutQuery::new(query, language) else {
         return Vec::new();
     };
+    let command_prefix = keywords.command_prefix();
+    let web_search_prefix = keywords.web_search_prefix();
 
     let mut results = Vec::with_capacity(configured.len() + 2);
-    if let Some(result) = command::builtin(query) {
+    if let Some(result) = command::builtin_with_prefix(query, &command_prefix) {
         results.push(result);
     }
-    if let Some(result) = web::builtin(query) {
+    if let Some(result) = web::builtin_with_prefix(query, &web_search_prefix) {
         results.push(result);
     }
 
@@ -196,10 +210,12 @@ pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Ve
     // the existing result identity, so preserve its offset for rank history.
     for (index, shortcut) in configured.iter().enumerate() {
         let index = index + 2;
-        let result = match effective_type(shortcut) {
-            "url" => web::configured(query, shortcut, index),
+        let result = match effective_type(shortcut, keywords) {
+            "url" => web::configured_with_builtin(query, shortcut, index, &web_search_prefix),
             "application" => application::configured(query, shortcut, index),
-            "command" => command::configured(query, shortcut, index),
+            "command" => {
+                command::configured_with_builtin(query, shortcut, index, &command_prefix)
+            }
             _ => None,
         };
         if let Some(result) = result {
@@ -220,33 +236,44 @@ pub fn session(
     configured: &[ShortcutConfig],
     language: &str,
 ) -> Option<SearchEngineSession> {
+    session_with_keywords(query, configured, language, &ShortcutKeywords::default())
+}
+
+pub fn session_with_keywords(
+    query: &str,
+    configured: &[ShortcutConfig],
+    language: &str,
+    keywords: &ShortcutKeywords,
+) -> Option<SearchEngineSession> {
     let raw = query.trim_start();
+    let command_prefix = keywords.command_prefix();
+    let web_search_prefix = keywords.web_search_prefix();
     // Keep a bare `>` as a normal search query so the command and configured
     // shortcut results remain visible as previews. Built-in prefixes follow
     // the same literal matching rule as configured prefixes: `> ` is required.
-    if raw.starts_with(COMMAND_PREFIX) {
+    if raw.starts_with(&command_prefix) {
         let argument = raw
-            .strip_prefix(COMMAND_PREFIX)
+            .strip_prefix(&command_prefix)
             .unwrap_or_default()
             .trim_start();
         return Some(SearchEngineSession {
-            id: result_id(0, COMMAND_PREFIX),
+            id: result_id(0, &command_prefix),
             title: crate::utils::i18n::tr(language, "Execute Command").into(),
             placeholder: crate::utils::i18n::tr(language, "Enter a command").into(),
-            prefix: COMMAND_PREFIX.into(),
+            prefix: command_prefix.clone(),
             argument: argument.into(),
             mode: SearchEngineMode::Execute,
             state: Default::default(),
         });
     }
-    if raw.starts_with(WEB_PREFIX) {
+    if raw.starts_with(&web_search_prefix) {
         return Some(SearchEngineSession {
-            id: result_id(1, WEB_PREFIX),
+            id: result_id(1, &web_search_prefix),
             title: crate::utils::i18n::tr(language, "Open website").into(),
             placeholder: crate::utils::i18n::tr(language, "Enter a URL or search term").into(),
-            prefix: WEB_PREFIX.into(),
+            prefix: web_search_prefix.clone(),
             argument: raw
-                .strip_prefix(WEB_PREFIX)
+                .strip_prefix(&web_search_prefix)
                 .unwrap_or_default()
                 .trim_start()
                 .into(),
@@ -273,25 +300,39 @@ pub fn session(
     })
 }
 
-pub fn register(registry: &mut ProviderRegistry, shortcuts: Vec<ShortcutConfig>) {
-    registry.register_search_engine(ShortcutProvider::new(shortcuts));
+pub fn register(
+    registry: &mut ProviderRegistry,
+    shortcuts: Vec<ShortcutConfig>,
+    keywords: ShortcutKeywords,
+) {
+    registry.register_search_engine(ShortcutProvider::new_with_keywords(shortcuts, keywords));
 }
 
 pub struct ShortcutProvider {
     configured: Vec<ShortcutConfig>,
+    keywords: ShortcutKeywords,
     language: String,
 }
 
 impl ShortcutProvider {
     pub fn new(configured: Vec<ShortcutConfig>) -> Self {
+        Self::new_with_keywords(configured, ShortcutKeywords::default())
+    }
+
+    pub fn new_with_keywords(
+        configured: Vec<ShortcutConfig>,
+        keywords: ShortcutKeywords,
+    ) -> Self {
         Self {
             configured,
+            keywords,
             language: "system".into(),
         }
     }
 
-    pub fn replace_config(&mut self, configured: Vec<ShortcutConfig>) {
+    pub fn replace_config(&mut self, configured: Vec<ShortcutConfig>, keywords: ShortcutKeywords) {
         self.configured = configured;
+        self.keywords = keywords;
     }
 
     pub fn set_language(&mut self, language: String) {
@@ -299,19 +340,21 @@ impl ShortcutProvider {
     }
 
     pub fn results(&self, query: &str) -> Vec<SearchResult> {
-        results(query, &self.configured, &self.language)
+        results_with_keywords(query, &self.configured, &self.language, &self.keywords)
     }
 
     pub fn search_engine(&self, query: &str) -> Option<SearchEngineSession> {
-        session(query, &self.configured, &self.language)
+        session_with_keywords(query, &self.configured, &self.language, &self.keywords)
     }
 
     fn shortcut_hint(&self, item_id: &str) -> Option<String> {
-        if item_id == result_id(0, COMMAND_PREFIX) {
-            return Some(COMMAND_PREFIX.into());
+        let command_prefix = self.keywords.command_prefix();
+        let web_search_prefix = self.keywords.web_search_prefix();
+        if item_id == result_id(0, &command_prefix) {
+            return Some(command_prefix);
         }
-        if item_id == result_id(1, WEB_PREFIX) {
-            return Some(WEB_PREFIX.into());
+        if item_id == result_id(1, &web_search_prefix) {
+            return Some(web_search_prefix);
         }
         self.configured
             .iter()
@@ -451,8 +494,8 @@ impl SearchEngineProvider for ShortcutProvider {
         self.search_engine_result(session)
     }
 
-    fn replace_config(&mut self, shortcuts: Vec<ShortcutConfig>) {
-        ShortcutProvider::replace_config(self, shortcuts);
+    fn replace_config(&mut self, shortcuts: Vec<ShortcutConfig>, keywords: ShortcutKeywords) {
+        ShortcutProvider::replace_config(self, shortcuts, keywords);
     }
 
     fn set_language(&mut self, language: String) {

@@ -4,7 +4,7 @@
 
 ## 配置
 
-插件内置了该接口使用的 API key，可直接使用。需要替换 key 时，在 Wowie 的 `config.json` 中将以下配置合并到顶层 `plugins` 对象。Windows 通常位于 `%APPDATA%\wowie\config.json`：
+插件内置了该接口使用的 API key，可直接使用。需要替换 key 时，可打开启动器右侧的设置按钮，在 Google Translate 页面填写；也可以在 Wowie 的 `config.json` 中将以下配置合并到顶层 `plugins` 对象。Windows 通常位于 `%APPDATA%\wowie\config.json`：
 
 ```json
 {

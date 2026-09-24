@@ -5,6 +5,13 @@
   "api_version": 1,
   "entry_point": "main.lua",
   "permissions": ["network"],
+  "preferences": [{
+    "key": "google_api_key",
+    "title": "Google Translate API key",
+    "description": "Optional API key for the translation service.",
+    "type": "password",
+    "default": ""
+  }],
   "engine": {
     "participates_in_root": true,
     "respect_global_fuzzy_search": true,

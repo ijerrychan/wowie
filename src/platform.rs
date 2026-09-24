@@ -12,6 +12,7 @@ mod windows;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformEvent {
     TogglePalette,
+    OpenSettings,
     SystemThemeChanged,
     Quit,
 }
@@ -42,7 +43,13 @@ pub struct HotkeyRegistration {
 
 pub struct TrayRegistration {
     pub events: std::sync::mpsc::Receiver<PlatformEvent>,
-    pub updates: std::sync::mpsc::Sender<String>,
+    pub updates: std::sync::mpsc::Sender<TrayMenuLabels>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrayMenuLabels {
+    pub settings: String,
+    pub exit: String,
 }
 
 #[derive(
@@ -307,10 +314,10 @@ pub fn watch_app_provider_sources(
 pub trait PlatformIntegration: Send + Sync {
     fn register_hotkey(&self, hotkey: &str, watch_system_theme: bool)
         -> Result<HotkeyRegistration>;
-    fn start_tray(&self, exit_label: String) -> TrayRegistration;
+    fn start_tray(&self, labels: TrayMenuLabels) -> TrayRegistration;
     fn system_prefers_dark_theme(&self) -> bool;
     fn system_accent_color(&self) -> u32;
-    fn position_palette(&self, window: &slint::Window, result_mode: bool, result_height: f32);
+    fn position_palette(&self, window: &slint::Window, result_height: f32);
     fn position_context_menu(
         &self,
         window: &slint::Window,
@@ -322,6 +329,21 @@ pub trait PlatformIntegration: Send + Sync {
     fn activate_palette(&self, window: &slint::Window);
     fn install_focus_listener(&self, window: &slint::Window, on_lost_focus: Box<dyn Fn()>);
     fn disable_window_transitions(&self, window: &slint::Window);
+}
+
+/// Open the system folder picker owned by the settings window.
+pub fn pick_folder(owner: &slint::Window) -> Result<Option<PathBuf>> {
+    #[cfg(windows)]
+    {
+        windows::pick_folder(owner)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = owner;
+        Err(anyhow::anyhow!(
+            "folder picker is unavailable on this platform"
+        ))
+    }
 }
 
 #[cfg(not(debug_assertions))]

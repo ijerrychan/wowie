@@ -1,0 +1,561 @@
+import { ComboBox, ListView, Palette } from "std-widgets.slint";
+
+export struct SettingsCategory { id: string, title: string, depth: int, has-children: bool }
+export struct SettingsShortcut {
+    name: string, prefix: string, placeholder: string, shortcut-type: string,
+    mode: string, template: string, target: string, arguments: string, description: string,
+}
+export struct SettingsEntry {
+    id: string,
+    category: string,
+    title: string,
+    description: string,
+    value: string,
+    kind: string,
+    choice-labels: [string],
+    choice-values: [string],
+    choice-index: int,
+    minimum: int,
+    maximum: int,
+    step: int,
+    shortcut: SettingsShortcut,
+    drag-data: data-transfer,
+}
+
+component SettingsAction inherits Rectangle {
+    in property <string> label;
+    in property <color> foreground;
+    in property <color> hover-color;
+    callback clicked;
+    height: 30px;
+    border-radius: 6px;
+    background: action-area.has-hover ? root.hover-color : transparent;
+    Text { width: parent.width; height: parent.height; text: root.label; color: root.foreground; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; }
+    action-area := TouchArea { width: parent.width; height: parent.height; mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component SettingsEditorInput inherits Rectangle {
+    in property <string> label;
+    in-out property <string> value;
+    in property <bool> dark-mode;
+    in property <color> stroke-color;
+    in property <color> foreground;
+    height: 54px;
+    background: transparent;
+    Text { x: 0px; y: 0px; width: parent.width; height: 18px; text: root.label; color: root.foreground; font-size: 0.7857rem; overflow: elide; }
+    Rectangle {
+        x: 0px; y: 20px; width: parent.width; height: 31px;
+        background: root.dark-mode ? #1c1c1c : #ffffff;
+        border-color: root.stroke-color; border-width: 1px; border-radius: 6px; clip: true;
+        TextInput { x: 7px; y: 1px; width: parent.width - 14px; height: parent.height - 2px; text <=> root.value; color: root.foreground; font-size: 0.8571rem; single-line: true; vertical-alignment: center; }
+    }
+}
+
+component SettingsField inherits Rectangle {
+    in property <SettingsEntry> entry;
+    in property <bool> dark-mode: true;
+    in property <color> accent-color: #0067c0;
+    callback changed(string, string);
+    callback priority-drag-can-drop(data-transfer, string) -> bool;
+    callback priority-dropped(data-transfer, string, bool);
+
+    private property <color> hover: root.dark-mode ? #323232 : #f1f3f6;
+    private property <color> border: root.dark-mode ? #484848 : #d9dde5;
+    private property <color> primary: root.dark-mode ? #f5f5f5 : #1b1b1f;
+    private property <color> secondary: root.dark-mode ? #b6b6b6 : #5d5f66;
+    private property <bool> priority-drop-after: false;
+    private property <string> edit-value: root.entry.value;
+    private property <length> edit-scroll-x: 4px;
+    private property <bool> editing: false;
+    private property <bool> capturing-hotkey: false;
+    private property <string> edit-name: root.entry.shortcut.name;
+    private property <string> edit-prefix: root.entry.shortcut.prefix;
+    private property <string> edit-placeholder: root.entry.shortcut.placeholder;
+    private property <string> edit-type: root.entry.shortcut.shortcut-type;
+    private property <string> edit-mode: root.entry.shortcut.mode;
+    private property <string> edit-template: root.entry.shortcut.template;
+    private property <string> edit-target: root.entry.shortcut.target;
+    private property <string> edit-arguments: root.entry.shortcut.arguments;
+    private property <string> edit-description: root.entry.shortcut.description;
+    callback shortcut-saved(int, SettingsShortcut);
+    callback shortcut-removed(int);
+    callback directory-browse-requested(string);
+
+    height: root.entry.kind == "shortcut" || root.entry.kind == "shortcut-add" ? (root.editing ? 412px : 70px) : root.entry.kind == "directory-add" ? 112px : root.entry.kind == "directory" ? 98px : root.entry.kind == "text" || root.entry.kind == "secret" ? 92px : root.entry.kind == "priority-heading" ? 60px : root.entry.kind == "priority-reset" ? 64px : 76px;
+    background: transparent;
+
+    function reset-shortcut-editor() {
+        root.edit-name = root.entry.shortcut.name;
+        root.edit-prefix = root.entry.shortcut.prefix;
+        root.edit-placeholder = root.entry.shortcut.placeholder;
+        root.edit-type = root.entry.shortcut.shortcut-type;
+        root.edit-mode = root.entry.shortcut.mode;
+        root.edit-template = root.entry.shortcut.template;
+        root.edit-target = root.entry.shortcut.target;
+        root.edit-arguments = root.entry.shortcut.arguments;
+        root.edit-description = root.entry.shortcut.description;
+    }
+    changed entry => {
+        root.edit-value = root.entry.value;
+        root.editing = false;
+        root.capturing-hotkey = false;
+        root.reset-shortcut-editor();
+    }
+
+    Rectangle { x: 16px; y: parent.height - 1px; width: parent.width - 32px; height: 1px; background: root.border; }
+
+    if root.entry.kind == "priority" && priority-drag.dragging : Rectangle {
+        x: 40px; y: 2px; width: parent.width - 49px; height: parent.height - 4px;
+        border-radius: 7px; background: root.accent-color; opacity: 0.08;
+        animate opacity { duration: 100ms; easing: ease-in-out; }
+    }
+
+    if root.entry.kind == "priority" && priority-drop.has-drag : Rectangle {
+        x: 40px; y: root.priority-drop-after ? parent.height / 2 : 2px;
+        width: parent.width - 49px; height: parent.height / 2 - 2px;
+        border-radius: 7px; background: root.accent-color; opacity: 0.10;
+    }
+
+    Text {
+        x: root.entry.kind == "priority" ? 44px : 16px; y: root.entry.kind == "directory" || root.entry.kind == "directory-add" || root.entry.kind == "priority-heading" ? 9px : 13px;
+        width: root.entry.kind == "directory" || root.entry.kind == "directory-add" || root.entry.kind == "priority-heading" ? parent.width - 32px : root.entry.kind == "priority" ? max(220px, parent.width - 145px) : max(220px, parent.width - 390px); height: 22px;
+        text: root.entry.title; color: root.primary; font-size: root.entry.kind == "priority-heading" ? 1.0714rem : 1.0000rem; font-weight: 400;
+        vertical-alignment: center; overflow: elide;
+    }
+    Text {
+        x: root.entry.kind == "priority" ? 44px : 16px; y: root.entry.kind == "directory" || root.entry.kind == "directory-add" ? 32px : root.entry.kind == "priority-heading" ? 32px : 37px;
+        width: root.entry.kind == "directory" || root.entry.kind == "directory-add" || root.entry.kind == "priority-heading" ? parent.width - 32px : root.entry.kind == "priority" ? max(220px, parent.width - 145px) : max(220px, parent.width - 390px);
+        height: root.entry.kind == "directory" || root.entry.kind == "directory-add" ? 24px : root.entry.kind == "priority-heading" ? 24px : parent.height - 43px;
+        text: root.entry.description; color: root.secondary; font-size: 0.7857rem;
+        vertical-alignment: top; wrap: word-wrap; overflow: elide;
+    }
+
+    if root.entry.kind == "toggle" : Rectangle {
+        x: parent.width - 66px; y: (parent.height - 28px) / 2; width: 46px; height: 28px;
+        border-radius: 14px;
+        background: root.entry.value == "true" ? root.accent-color : (root.dark-mode ? #555555 : #c8cbd1);
+        animate background { duration: 140ms; easing: ease-in-out; }
+        Rectangle {
+            x: root.entry.value == "true" ? parent.width - 23px : 3px; y: 3px; width: 22px; height: 22px;
+            border-radius: 11px; background: #ffffff;
+            animate x { duration: 120ms; easing: ease-out; }
+        }
+        TouchArea { width: parent.width; height: parent.height; mouse-cursor: pointer;
+            clicked => { root.changed(root.entry.id, root.entry.value == "true" ? "false" : "true"); }
+        }
+    }
+
+    if root.entry.kind == "number" : Rectangle {
+        x: parent.width - 210px; y: (parent.height - 34px) / 2; width: 190px; height: 34px;
+        background: transparent;
+        Rectangle {
+            x: 0px; y: 0px; width: 34px; height: 34px; border-radius: 8px;
+            background: minus-area.has-hover ? root.hover : transparent;
+            Text { width: parent.width; height: parent.height; text: "-"; color: root.primary; font-size: 1.3571rem; horizontal-alignment: center; vertical-alignment: center; }
+            minus-area := TouchArea { width: parent.width; height: parent.height; mouse-cursor: pointer;
+                clicked => { root.changed(root.entry.id, "__decrement__"); }
+            }
+        }
+        Rectangle {
+            x: 42px; y: 0px; width: 106px; height: 34px; border-radius: 7px;
+            background: root.dark-mode ? #1c1c1c : #f1f3f6;
+            Text { width: parent.width; height: parent.height; text: root.entry.value; color: root.primary; font-size: 0.8571rem; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        Rectangle {
+            x: 156px; y: 0px; width: 34px; height: 34px; border-radius: 8px;
+            background: plus-area.has-hover ? root.hover : transparent;
+            Text { width: parent.width; height: parent.height; text: "+"; color: root.primary; font-size: 1.3571rem; horizontal-alignment: center; vertical-alignment: center; }
+            plus-area := TouchArea { width: parent.width; height: parent.height; mouse-cursor: pointer;
+                clicked => { root.changed(root.entry.id, "__increment__"); }
+            }
+        }
+    }
+
+    if root.entry.kind == "choice" : Rectangle {
+        x: parent.width - 210px; y: (parent.height - 34px) / 2; width: 190px; height: 34px;
+        background: root.dark-mode ? #1c1c1c : #f1f3f6;
+        border-color: root.border; border-width: 1px; border-radius: 8px;
+        ComboBox {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            model: root.entry.choice-labels;
+            current-index: root.entry.choice-index;
+            selected(value) => {
+                if (self.current-index >= 0 && self.current-index < root.entry.choice-values.length) {
+                    root.changed(root.entry.id, root.entry.choice-values[self.current-index]);
+                }
+            }
+        }
+    }
+
+    if root.entry.kind == "priority" : Rectangle {
+        x: parent.width - 66px; y: (parent.height - 32px) / 2; width: 50px; height: 32px;
+        background: transparent;
+        Text {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            text: root.entry.value; color: root.secondary; font-size: 0.8571rem;
+            horizontal-alignment: center; vertical-alignment: center;
+        }
+    }
+
+    if root.entry.kind == "priority-reset" : SettingsAction {
+        x: parent.width - 174px; y: (parent.height - 32px) / 2; width: 158px;
+        label: @tr("SettingsWindow" => "Reset"); foreground: root.accent-color; hover-color: root.hover;
+        clicked => { root.changed(root.entry.id, "__reset__"); }
+    }
+
+    if root.entry.kind == "text" || root.entry.kind == "secret" : Rectangle {
+        x: parent.width - 320px; y: (parent.height - 34px) / 2; width: 300px; height: 34px;
+        border-radius: 8px; background: root.dark-mode ? #1c1c1c : #ffffff;
+        border-color: root.border; border-width: 1px;
+        clip: true;
+        TextInput {
+            x: root.edit-scroll-x; y: 1px; width: max(parent.width - 86px, self.preferred-width); height: parent.height - 2px;
+            text <=> root.edit-value; color: root.primary; font-size: 0.8571rem; vertical-alignment: center;
+            single-line: true; input-type: root.entry.kind == "secret" ? password : text;
+            selection-background-color: root.accent-color; selection-foreground-color: #ffffff;
+            cursor-position-changed(position) => {
+                if (position.x + root.edit-scroll-x < 5px) {
+                    root.edit-scroll-x = 5px - position.x;
+                } else if (position.x + root.edit-scroll-x > parent.width - 82px - self.text-cursor-width) {
+                    root.edit-scroll-x = parent.width - 82px - position.x - self.text-cursor-width;
+                }
+            }
+        }
+        if root.edit-value != root.entry.value : Rectangle {
+            x: parent.width - 70px; y: 0px; width: 62px; height: parent.height; border-radius: 7px;
+            background: text-apply-area.has-hover ? root.hover : transparent;
+            Text { width: parent.width; height: parent.height; text: @tr("SettingsWindow" => "Apply"); color: root.accent-color; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; }
+            text-apply-area := TouchArea { width: parent.width; height: parent.height; mouse-cursor: pointer;
+                clicked => { root.changed(root.entry.id, root.edit-value); }
+            }
+        }
+    }
+
+    if root.entry.kind == "directory" || root.entry.kind == "directory-add" : Rectangle {
+        x: 16px; y: root.entry.kind == "directory-add" ? 66px : 48px;
+        width: parent.width - 32px; height: 34px; background: transparent;
+        Rectangle {
+            width: root.entry.kind == "directory-add" ? parent.width - 136px : parent.width - 198px;
+            height: 34px; border-radius: 7px;
+            background: root.dark-mode ? #1c1c1c : #ffffff;
+            border-color: root.border; border-width: 1px; clip: true;
+            TextInput { x: 8px; y: 1px; width: parent.width - 16px; height: parent.height - 2px; text <=> root.edit-value; color: root.primary; font-size: 0.8571rem; single-line: true; vertical-alignment: center; }
+        }
+        SettingsAction {
+            x: root.entry.kind == "directory-add" ? parent.width - 130px : parent.width - 192px;
+            y: 2px; width: 64px;
+            label: @tr("SettingsWindow" => "Browse"); foreground: root.accent-color; hover-color: root.hover;
+            clicked => { root.directory-browse-requested(root.entry.id); }
+        }
+        if root.entry.kind == "directory-add" || root.edit-value != root.entry.value : SettingsAction {
+            x: root.entry.kind == "directory-add" ? parent.width - 64px : parent.width - 126px;
+            y: 2px; width: 58px;
+            label: root.entry.kind == "directory-add" ? @tr("SettingsWindow" => "Add") : @tr("SettingsWindow" => "Apply");
+            foreground: root.accent-color; hover-color: root.hover;
+            clicked => { root.changed(root.entry.id, root.edit-value); }
+        }
+        if root.entry.kind == "directory" : SettingsAction {
+            x: parent.width - 60px; y: 2px; width: 60px;
+            label: @tr("SettingsWindow" => "Remove"); foreground: root.secondary; hover-color: root.hover;
+            clicked => { root.changed(root.entry.id, "__remove__"); }
+        }
+    }
+
+    if root.entry.kind == "hotkey" : Rectangle {
+        x: parent.width - 320px; y: (parent.height - 38px) / 2; width: 300px; height: 38px;
+        border-radius: 8px; background: root.dark-mode ? #1c1c1c : #ffffff;
+        border-color: root.capturing-hotkey ? root.accent-color : root.border; border-width: 1px;
+        Text {
+            x: 10px; y: 0px; width: parent.width - 20px; height: parent.height;
+            text: root.capturing-hotkey ? @tr("SettingsWindow" => "Press a modifier and key, or Escape to cancel") : root.entry.value;
+            color: root.capturing-hotkey ? root.accent-color : root.primary;
+            font-size: 0.8571rem; vertical-alignment: center;
+        }
+        capture-focus := FocusScope {
+            width: parent.width; height: parent.height;
+            key-pressed(event) => {
+                let was-capturing = root.capturing-hotkey;
+                if (root.capturing-hotkey && !event.repeat && event.text == Key.Escape && !event.modifiers.alt && !event.modifiers.control && !event.modifiers.shift && !event.modifiers.meta) {
+                    root.capturing-hotkey = false;
+                }
+                let ignored-key = !root.capturing-hotkey || event.repeat || event.text == Key.Control || event.text == Key.Alt || event.text == Key.Shift || event.text == Key.Meta || event.text == Key.Escape;
+                let key = ignored-key ? "" : event.text == Key.Space ? "Space"
+                    : event.text == "+" ? "Plus"
+                    : event.text == Key.Return ? "Enter"
+                    : event.text == Key.Tab ? "Tab"
+                    : event.text == Key.Escape ? "Esc"
+                    : event.text == Key.Backspace ? "Backspace"
+                    : event.text == Key.Delete ? "Delete"
+                    : event.text == Key.Insert ? "Insert"
+                    : event.text == Key.Home ? "Home"
+                    : event.text == Key.End ? "End"
+                    : event.text == Key.PageUp ? "PageUp"
+                    : event.text == Key.PageDown ? "PageDown"
+                    : event.text == Key.UpArrow ? "Up"
+                    : event.text == Key.DownArrow ? "Down"
+                    : event.text == Key.LeftArrow ? "Left"
+                    : event.text == Key.RightArrow ? "Right"
+                    : event.text == Key.F1 ? "F1" : event.text == Key.F2 ? "F2"
+                    : event.text == Key.F3 ? "F3" : event.text == Key.F4 ? "F4"
+                    : event.text == Key.F5 ? "F5" : event.text == Key.F6 ? "F6"
+                    : event.text == Key.F7 ? "F7" : event.text == Key.F8 ? "F8"
+                    : event.text == Key.F9 ? "F9" : event.text == Key.F10 ? "F10"
+                    : event.text == Key.F11 ? "F11" : event.text == Key.F12 ? "F12"
+                    : event.text == Key.F13 ? "F13" : event.text == Key.F14 ? "F14"
+                    : event.text == Key.F15 ? "F15" : event.text == Key.F16 ? "F16"
+                    : event.text == Key.F17 ? "F17" : event.text == Key.F18 ? "F18"
+                    : event.text == Key.F19 ? "F19" : event.text == Key.F20 ? "F20"
+                    : event.text == Key.F21 ? "F21" : event.text == Key.F22 ? "F22"
+                    : event.text == Key.F23 ? "F23" : event.text == Key.F24 ? "F24"
+                    : event.text;
+                let has-modifier = event.modifiers.alt || event.modifiers.control || event.modifiers.shift || event.modifiers.meta;
+                if (root.capturing-hotkey && has-modifier && key != "") {
+                    let modifiers = (event.modifiers.control ? "Ctrl+" : "")
+                        + (event.modifiers.alt ? "Alt+" : "")
+                        + (event.modifiers.shift ? "Shift+" : "")
+                        + (event.modifiers.meta ? "Win+" : "");
+                    root.changed(root.entry.id, modifiers + key);
+                    root.capturing-hotkey = false;
+                }
+                if (was-capturing) { accept } else { reject }
+            }
+        }
+        capture-area := TouchArea {
+            width: parent.width; height: parent.height; mouse-cursor: pointer;
+            clicked => {
+                root.capturing-hotkey = true;
+                capture-focus.focus();
+            }
+        }
+    }
+
+    if root.entry.kind == "shortcut" || root.entry.kind == "shortcut-add" : Rectangle {
+        width: parent.width; height: parent.height; background: transparent;
+        SettingsAction {
+            x: parent.width - 158px; y: 17px; width: 68px;
+            label: root.editing ? @tr("SettingsWindow" => "Cancel") : root.entry.kind == "shortcut-add" ? @tr("SettingsWindow" => "Add") : @tr("SettingsWindow" => "Edit");
+            foreground: root.accent-color; hover-color: root.hover;
+            clicked => {
+                if (root.editing) { root.reset-shortcut-editor(); }
+                root.editing = !root.editing;
+            }
+        }
+        if root.entry.kind == "shortcut" && !root.editing : SettingsAction {
+            x: parent.width - 84px; y: 17px; width: 68px;
+            label: @tr("SettingsWindow" => "Remove"); foreground: root.secondary; hover-color: root.hover;
+            clicked => { root.shortcut-removed(root.entry.choice-index); }
+        }
+        if root.editing : Rectangle {
+            x: 0px; y: 66px; width: parent.width; height: parent.height - 66px; background: transparent;
+            private property <length> column-width: (parent.width - 48px) / 2;
+            SettingsEditorInput { x: 16px; y: 0px; width: parent.column-width; label: @tr("SettingsWindow" => "Name"); value <=> root.edit-name; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
+            SettingsEditorInput { x: 32px + parent.column-width; y: 0px; width: parent.column-width; label: @tr("SettingsWindow" => "Prefix"); value <=> root.edit-prefix; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
+            Text { x: 16px; y: 62px; width: parent.column-width; height: 18px; text: @tr("SettingsWindow" => "Type"); color: root.primary; font-size: 0.7857rem; }
+            ComboBox {
+                x: 16px; y: 82px; width: parent.column-width; height: 31px;
+                model: [@tr("SettingsWindow" => "URL"), @tr("SettingsWindow" => "Application"), @tr("SettingsWindow" => "Command")];
+                current-index: root.edit-type == "application" ? 1 : root.edit-type == "command" ? 2 : 0;
+                selected(value) => { root.edit-type = self.current-index == 1 ? "application" : self.current-index == 2 ? "command" : "url"; }
+            }
+            Text { x: 32px + parent.column-width; y: 62px; width: parent.column-width; height: 18px; text: @tr("SettingsWindow" => "Mode"); color: root.primary; font-size: 0.7857rem; }
+            ComboBox {
+                x: 32px + parent.column-width; y: 82px; width: parent.column-width; height: 31px;
+                model: [@tr("SettingsWindow" => "Execute"), @tr("SettingsWindow" => "Search"), @tr("SettingsWindow" => "Panel")];
+                current-index: root.edit-mode == "search" ? 1 : root.edit-mode == "panel" ? 2 : 0;
+                selected(value) => { root.edit-mode = self.current-index == 1 ? "search" : self.current-index == 2 ? "panel" : "execute"; }
+            }
+            Text {
+                x: 16px; y: 116px; width: parent.width - 32px; height: 20px;
+                text: root.edit-mode == "execute" ? @tr("SettingsWindow" => "Enter runs the typed input directly.") : root.edit-mode == "search" ? @tr("SettingsWindow" => "Enter opens the selected result.") : @tr("SettingsWindow" => "Custom shortcuts have no detail view; Panel behaves like Search.");
+                color: root.secondary; font-size: 0.7143rem; vertical-alignment: center; overflow: elide;
+            }
+            if root.edit-type == "url" : SettingsEditorInput { x: 16px; y: 142px; width: parent.width - 32px; label: @tr("SettingsWindow" => "URL template (include {{query}})"); value <=> root.edit-template; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
+            if root.edit-type != "url" : SettingsEditorInput { x: 16px; y: 142px; width: parent.width - 32px; label: @tr("SettingsWindow" => "Target path or command"); value <=> root.edit-target; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
+            SettingsEditorInput { x: 16px; y: 204px; width: parent.column-width; label: @tr("SettingsWindow" => "Arguments"); value <=> root.edit-arguments; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
+            SettingsEditorInput { x: 32px + parent.column-width; y: 204px; width: parent.column-width; label: @tr("SettingsWindow" => "Input placeholder"); value <=> root.edit-placeholder; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
+            SettingsEditorInput { x: 16px; y: 266px; width: parent.width - 130px; label: @tr("SettingsWindow" => "Description"); value <=> root.edit-description; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
+            SettingsAction {
+                x: parent.width - 100px; y: 288px; width: 84px;
+                label: @tr("SettingsWindow" => "Save"); foreground: root.accent-color; hover-color: root.hover;
+                clicked => { root.shortcut-saved(root.entry.choice-index, {
+                    name: root.edit-name, prefix: root.edit-prefix, placeholder: root.edit-placeholder,
+                    shortcut-type: root.edit-type, mode: root.edit-mode, template: root.edit-template,
+                    target: root.edit-target, arguments: root.edit-arguments, description: root.edit-description,
+                }); }
+            }
+        }
+    }
+
+    priority-drop := DropArea {
+        enabled: root.entry.kind == "priority";
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        can-drop(event) => {
+            root.priority-drop-after = event.position.y >= parent.height / 2;
+            root.priority-drag-can-drop(event.data, root.entry.id) ? DragAction.move : DragAction.none
+        }
+        dropped(event) => {
+            root.priority-dropped(event.data, root.entry.id, event.position.y >= parent.height / 2);
+            return event.proposed-action;
+        }
+    }
+
+    if root.entry.kind == "priority" && priority-drop.has-drag : Rectangle {
+        x: 40px; y: root.priority-drop-after ? parent.height - 3px : 0px;
+        width: parent.width - 49px; height: 3px; border-radius: 2px;
+        background: root.accent-color;
+        animate y { duration: 75ms; easing: ease-out; }
+    }
+
+    priority-drag := DragArea {
+        visible: root.entry.kind == "priority";
+        enabled: root.entry.kind == "priority";
+        x: 14px; y: (parent.height - 30px) / 2; width: 26px; height: 30px;
+        data: root.entry.drag-data;
+        allow-move: true;
+        Rectangle { x: 3px; y: 4px; width: 3px; height: 3px; border-radius: 2px; background: root.secondary; }
+        Rectangle { x: 10px; y: 4px; width: 3px; height: 3px; border-radius: 2px; background: root.secondary; }
+        Rectangle { x: 3px; y: 12px; width: 3px; height: 3px; border-radius: 2px; background: root.secondary; }
+        Rectangle { x: 10px; y: 12px; width: 3px; height: 3px; border-radius: 2px; background: root.secondary; }
+        Rectangle { x: 3px; y: 20px; width: 3px; height: 3px; border-radius: 2px; background: root.secondary; }
+        Rectangle { x: 10px; y: 20px; width: 3px; height: 3px; border-radius: 2px; background: root.secondary; }
+        TouchArea {
+            width: parent.width; height: parent.height;
+            mouse-cursor: priority-drag.dragging ? grabbing : grab;
+        }
+    }
+
+}
+
+export component SettingsWindow inherits Window {
+    title: "Wowie Settings";
+    no-frame: true;
+    preferred-width: 900px;
+    preferred-height: 650px;
+    default-font-family: root.ui-font-family;
+    default-font-size: root.ui-font-size;
+    min-width: 760px;
+    min-height: 520px;
+    background: transparent;
+
+    in property <string> ui-font-family: "";
+    in property <length> ui-font-size: 14px;
+    in property <[SettingsCategory]> categories;
+    in property <[SettingsEntry]> entries;
+    in property <string> selected-category: "general";
+    in property <string> selected-category-title: "General";
+    in-out property <bool> plugins-expanded: false;
+    in-out property <length> settings-scroll-y: 0px;
+    in-out property <string> status-message: "";
+    in property <bool> dark-mode: true;
+    in property <color> accent-color: #0067c0;
+    callback category-selected(string);
+    callback setting-changed(string, string);
+    callback priority-drag-can-drop(data-transfer, string) -> bool;
+    callback priority-dropped(data-transfer, string, bool);
+    callback shortcut-saved(int, SettingsShortcut);
+    callback shortcut-removed(int);
+    callback directory-browse-requested(string);
+    callback dismiss-requested;
+
+    private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
+    private property <color> surface: root.dark-mode ? #242424 : #fbfcfe;
+    private property <color> hover: root.dark-mode ? #323232 : #f1f3f6;
+    private property <color> border: root.dark-mode ? #484848 : #d9dde5;
+    private property <color> primary: root.dark-mode ? #f5f5f5 : #1b1b1f;
+    private property <color> secondary: root.dark-mode ? #b6b6b6 : #5d5f66;
+    in-out property <float> page-transition-opacity: 1.0;
+    animate page-transition-opacity { duration: 120ms; easing: ease-in-out; }
+    init => { Palette.color-scheme = root.dark-mode ? dark : light; }
+    changed dark-mode => { Palette.color-scheme = root.dark-mode ? dark : light; }
+
+    Rectangle {
+        x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+        background: root.canvas; border-radius: 13px;
+
+        Rectangle {
+            x: 1px; y: 1px; width: parent.width - 2px; height: 58px;
+            background: root.surface; border-radius: 12px;
+            WindowMoveArea {
+                x: 0px; y: 0px; width: parent.width - 58px; height: parent.height;
+                Text { x: 22px; y: 0px; width: parent.width - 22px; height: parent.height; text: @tr("Settings"); color: root.primary; font-size: 1.2857rem; font-weight: 400; vertical-alignment: center; }
+            }
+            Rectangle {
+                x: parent.width - 49px; y: 12px; width: 32px; height: 32px; border-radius: 8px;
+                background: close-area.has-hover ? root.hover : transparent;
+                Text { width: parent.width; height: parent.height; text: "×"; color: root.secondary; font-size: 1.5714rem; horizontal-alignment: center; vertical-alignment: center; }
+                close-area := TouchArea { width: parent.width; height: parent.height; mouse-cursor: pointer; clicked => { root.dismiss-requested(); } }
+            }
+        }
+
+        Rectangle {
+            x: 0px; y: 60px; width: parent.width; height: 1px; background: root.border;
+        }
+        Rectangle {
+            x: 0px; y: 61px; width: 205px; height: parent.height - 62px;
+            background: root.surface;
+            ListView {
+                x: 0px; y: 0px; width: parent.width; height: parent.height;
+                for category[index] in root.categories : Rectangle {
+                    width: parent.width; height: (category.depth == 0 || root.plugins-expanded) ? 42px : 0px; background: transparent;
+                    clip: true;
+                    animate height { duration: 160ms; easing: ease-in-out; }
+                    Rectangle {
+                        x: category.depth == 0 ? 10px : 25px;
+                        y: 3px;
+                        width: parent.width - (category.depth == 0 ? 20px : 35px);
+                        height: 36px;
+                        border-radius: 8px;
+                        background: category.id == root.selected-category ? (root.dark-mode ? #383838 : #e8ecf3) : (category-area.has-hover ? root.hover : transparent);
+                        Text { x: 11px; width: parent.width - 34px; height: parent.height; text: category.title; color: category.id == root.selected-category ? root.accent-color : root.primary; font-size: 0.9286rem; vertical-alignment: center; overflow: elide; }
+                        if category.has-children : Image {
+                            x: parent.width - 25px; y: 10px; width: 16px; height: 16px;
+                            source: root.plugins-expanded ? @image-url("../assets/icons/chevron-down.svg") : @image-url("../assets/icons/chevron-right.svg");
+                            image-fit: contain;
+                        }
+                        category-area := TouchArea { width: parent.width; height: parent.height; mouse-cursor: pointer; clicked => {
+                            if (category.has-children) { root.plugins-expanded = !root.plugins-expanded; }
+                            root.category-selected(category.id);
+                        } }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            x: 205px; y: 61px; width: 1px; height: parent.height - 62px; background: root.border;
+        }
+        Rectangle {
+            x: 206px; y: 61px; width: parent.width - 207px; height: parent.height - 62px;
+            background: root.canvas;
+            Text { x: 24px; y: 16px; width: parent.width - 48px; height: 30px; text: root.selected-category-title; color: root.primary; font-size: 1.2143rem; font-weight: 400; vertical-alignment: center; opacity: root.page-transition-opacity; }
+            ListView {
+                x: 18px; y: 58px; width: parent.width - 36px; height: parent.height - 96px;
+                content-y <=> root.settings-scroll-y;
+                opacity: root.page-transition-opacity;
+                for entry[index] in root.entries : SettingsField {
+                    width: parent.width;
+                    entry: entry;
+                    dark-mode: root.dark-mode;
+                    accent-color: root.accent-color;
+                    changed(id, value) => { root.setting-changed(id, value); }
+                    priority-drag-can-drop(data, target) => root.priority-drag-can-drop(data, target);
+                    priority-dropped(data, target, after) => { root.priority-dropped(data, target, after); }
+                    shortcut-saved(index, shortcut) => { root.shortcut-saved(index, shortcut); }
+                    shortcut-removed(index) => { root.shortcut-removed(index); }
+                    directory-browse-requested(id) => { root.directory-browse-requested(id); }
+                }
+            }
+            Text {
+                x: 24px; y: parent.height - 30px; width: parent.width - 48px; height: 20px;
+                text: root.status-message; color: #d96c6c; font-size: 0.7857rem;
+                vertical-alignment: center; overflow: elide; visible: root.status-message != ""; opacity: root.page-transition-opacity;
+            }
+        }
+    }
+
+    Rectangle {
+        z: 100;
+        x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+        background: transparent; border-color: root.border; border-width: 1px; border-radius: 13px;
+    }
+}

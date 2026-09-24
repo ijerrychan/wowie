@@ -10,13 +10,21 @@ use std::path::PathBuf;
 
 /// Render the built-in `w address` shortcut and implicit URL matches.
 pub(super) fn builtin(query: ShortcutQuery<'_>) -> Option<SearchResult> {
+    builtin_with_prefix(query, WEB_PREFIX)
+}
+
+pub(super) fn builtin_with_prefix(
+    query: ShortcutQuery<'_>,
+    prefix: &str,
+) -> Option<SearchResult> {
     render(
         query,
         crate::utils::i18n::tr(query.language, "Open website").into(),
-        WEB_PREFIX,
+        prefix,
         String::new(),
         None,
         1,
+        prefix,
     )
 }
 
@@ -27,6 +35,15 @@ pub(super) fn configured(
     shortcut: &ShortcutConfig,
     index: usize,
 ) -> Option<SearchResult> {
+    configured_with_builtin(query, shortcut, index, WEB_PREFIX)
+}
+
+pub(super) fn configured_with_builtin(
+    query: ShortcutQuery<'_>,
+    shortcut: &ShortcutConfig,
+    index: usize,
+    builtin_prefix: &str,
+) -> Option<SearchResult> {
     render(
         query,
         shortcut.name.clone(),
@@ -34,6 +51,7 @@ pub(super) fn configured(
         shortcut.template.clone(),
         Some(shortcut),
         index,
+        builtin_prefix,
     )
 }
 
@@ -44,10 +62,13 @@ fn render(
     template: String,
     shortcut: Option<&ShortcutConfig>,
     index: usize,
+    builtin_prefix: &str,
 ) -> Option<SearchResult> {
     let argument = query.resolve_argument(prefix);
     let preview = argument.explicit && argument.value.is_empty();
-    let is_builtin_web = prefix.trim_end() == WEB_PREFIX.trim_end();
+    let is_builtin_web = prefix
+        .trim_end()
+        .eq_ignore_ascii_case(builtin_prefix.trim_end());
     let web_target = if is_builtin_web {
         web_url(argument.value)
             .or_else(|| (argument.explicit && !preview).then(|| fallback_web_url(argument.value)))

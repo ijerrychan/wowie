@@ -30,12 +30,11 @@ pub(super) fn save_window_size(window: &Launcher) {
         .size()
         .to_logical(native_window.scale_factor());
     config.window_width = logical_size.width.round().max(0.0) as u32;
-    config.window_height =
-        if window.get_result_mode() && logical_size.height >= config::MIN_WINDOW_HEIGHT as f32 {
-            logical_size.height.round().max(0.0) as u32
-        } else {
-            window.get_result_window_height().round().max(0.0) as u32
-        };
+    config.window_height = if logical_size.height >= config::MIN_WINDOW_HEIGHT as f32 {
+        logical_size.height.round().max(0.0) as u32
+    } else {
+        window.get_result_window_height().round().max(0.0) as u32
+    };
     if let Err(error) = config.save() {
         eprintln!("could not save window size: {error:#}");
     }
@@ -71,6 +70,20 @@ pub(super) fn toggle_palette(
         let _ = window.hide();
     } else {
         platform.disable_window_transitions(window.window());
+        if window.get_compact_search()
+            && window.get_root_query_empty()
+            && !window.get_shortcut_session_active()
+        {
+            window.set_empty_query_results_visible(false);
+        }
+        let native_window = window.window();
+        let logical_size = native_window
+            .size()
+            .to_logical(native_window.scale_factor());
+        let target_height = window.get_effective_window_height();
+        if (logical_size.height - target_height).abs() > 0.5 {
+            native_window.set_size(slint::LogicalSize::new(logical_size.width, target_height));
+        }
         let _ = window.show();
         platform.activate_palette(window.window());
         // Showing a Slint window does not change `query-text`, so its
@@ -80,11 +93,9 @@ pub(super) fn toggle_palette(
         let weak = window.as_weak();
         Timer::single_shot(PALETTE_POSITION_DELAY, move || {
             if let Some(window) = weak.upgrade() {
-                platform.position_palette(
-                    window.window(),
-                    window.get_result_mode(),
-                    window.get_result_window_height(),
-                );
+                // Center using the full result height even while the compact
+                // window is shorter, so the search row keeps the same Y.
+                platform.position_palette(window.window(), window.get_result_window_height());
                 platform.activate_palette(window.window());
                 window.window().request_redraw();
             }

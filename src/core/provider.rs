@@ -6,7 +6,7 @@
 //! engine.
 
 use crate::{
-    config::{PluginConfig, ShortcutConfig},
+    config::{PluginConfig, ShortcutConfig, ShortcutKeywords},
     page::{SearchContext, SearchEngineSession},
     plugin::PluginManager,
     result::SearchResult,
@@ -184,7 +184,12 @@ pub trait SearchEngineProvider: Send + Sync {
         "list"
     }
 
-    fn replace_config(&mut self, _shortcuts: Vec<ShortcutConfig>) {}
+    fn replace_config(
+        &mut self,
+        _shortcuts: Vec<ShortcutConfig>,
+        _shortcut_keywords: ShortcutKeywords,
+    ) {
+    }
 
     fn set_language(&mut self, _language: String) {}
 }
@@ -261,6 +266,14 @@ impl ProviderRegistry {
     }
 
     pub fn default_providers(plugins: PluginManager, shortcuts: Vec<ShortcutConfig>) -> Self {
+        Self::default_providers_with_keywords(plugins, shortcuts, ShortcutKeywords::default())
+    }
+
+    pub fn default_providers_with_keywords(
+        plugins: PluginManager,
+        shortcuts: Vec<ShortcutConfig>,
+        shortcut_keywords: ShortcutKeywords,
+    ) -> Self {
         let plugin_engine = plugins.clone();
         let mut registry = Self {
             plugins,
@@ -269,7 +282,7 @@ impl ProviderRegistry {
         };
         registry.register_indexed_engines();
         registry.register_search_engine(plugin_engine);
-        crate::providers::dynamic::register_all(&mut registry, shortcuts);
+        crate::providers::dynamic::register_all(&mut registry, shortcuts, shortcut_keywords);
         registry
     }
 
@@ -472,9 +485,17 @@ impl ProviderRegistry {
     }
 
     pub fn replace_shortcuts(&self, shortcuts: Vec<ShortcutConfig>) {
+        self.replace_shortcut_config(shortcuts, ShortcutKeywords::default());
+    }
+
+    pub fn replace_shortcut_config(
+        &self,
+        shortcuts: Vec<ShortcutConfig>,
+        shortcut_keywords: ShortcutKeywords,
+    ) {
         for engine in &self.engines {
             if let Ok(mut engine) = engine.lock() {
-                engine.replace_config(shortcuts.clone());
+                engine.replace_config(shortcuts.clone(), shortcut_keywords.clone());
             }
         }
     }

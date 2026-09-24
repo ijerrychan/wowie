@@ -6,14 +6,21 @@ use crate::{config::ShortcutConfig, platform, result::SearchResult};
 
 /// Render the built-in `> command` shortcut.
 pub(super) fn builtin(query: ShortcutQuery<'_>) -> Option<SearchResult> {
-    let argument = query.resolve_argument(COMMAND_PREFIX);
+    builtin_with_prefix(query, COMMAND_PREFIX)
+}
+
+pub(super) fn builtin_with_prefix(
+    query: ShortcutQuery<'_>,
+    prefix: &str,
+) -> Option<SearchResult> {
+    let argument = query.resolve_argument(prefix);
     let shell = platform::command_shell();
     Some(build_result(
         query,
         ShortcutSpec {
-            id: result_id(0, COMMAND_PREFIX),
+            id: result_id(0, prefix),
             name: crate::utils::i18n::tr(query.language, "Execute Command").into(),
-            prefix: COMMAND_PREFIX.into(),
+            prefix: prefix.into(),
             argument: argument.value.into(),
             display_argument: argument.value.into(),
             location: format!(
@@ -37,9 +44,22 @@ pub(super) fn configured(
     shortcut: &ShortcutConfig,
     index: usize,
 ) -> Option<SearchResult> {
+    configured_with_builtin(query, shortcut, index, COMMAND_PREFIX)
+}
+
+pub(super) fn configured_with_builtin(
+    query: ShortcutQuery<'_>,
+    shortcut: &ShortcutConfig,
+    index: usize,
+    builtin_prefix: &str,
+) -> Option<SearchResult> {
     let argument = query.resolve_argument(&shortcut.prefix);
     let preview = argument.explicit && argument.value.is_empty();
-    let command = if shortcut.prefix.trim_end() == COMMAND_PREFIX.trim_end() {
+    let command = if shortcut
+        .prefix
+        .trim_end()
+        .eq_ignore_ascii_case(builtin_prefix.trim_end())
+    {
         argument.value.to_owned()
     } else {
         join_command_and_arguments(

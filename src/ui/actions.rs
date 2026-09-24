@@ -1,4 +1,5 @@
 use super::{results::static_icon_kind, ContextActionRow};
+pub(super) use crate::providers::app::{launch_entry_label, visible_launch_entries};
 use crate::{
     icon_service::IconService,
     result::{self, SearchResult},
@@ -231,57 +232,6 @@ pub(super) fn resolve_plugin_action_icons(
             _ => None,
         })
         .collect()
-}
-
-pub(super) fn visible_launch_entries(
-    item: &SearchResult,
-    show_advanced_launch_entries: bool,
-) -> Vec<(usize, &result::LaunchEntry)> {
-    let Some(default) = crate::providers::app::preferred_launch_entry(item) else {
-        return Vec::new();
-    };
-    item.launch_entries
-        .iter()
-        .enumerate()
-        .filter_map(|(index, entry)| {
-            // Windows installer-generated shortcuts can use an .ico file as
-            // an icon placeholder while launching the real application. It
-            // is useful for association provenance, but it is not a valid
-            // alternate launch target for the user-facing menu.
-            if crate::platform::windows_rules::is_icon_path(&entry.target) {
-                return None;
-            }
-            if crate::providers::app::same_launch_behavior(default, entry) {
-                return None;
-            }
-            let allowed = show_advanced_launch_entries
-                || (crate::platform::windows_rules::is_shortcut_path(&entry.path)
-                    && entry.arguments.trim() != default.arguments.trim());
-            allowed.then_some((index, entry))
-        })
-        .collect()
-}
-
-pub(super) fn launch_entry_label(entry: &result::LaunchEntry) -> String {
-    if crate::platform::windows_rules::is_shortcut_path(&entry.path) {
-        if let Some(name) = entry.path.file_stem().and_then(|name| name.to_str()) {
-            if !name.is_empty() {
-                return name.to_owned();
-            }
-        }
-    }
-    let name = entry
-        .target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| entry.target.to_string_lossy().into_owned());
-    if entry.arguments.trim().is_empty() {
-        name
-    } else {
-        format!("{name} {}", entry.arguments.trim())
-    }
 }
 
 fn is_apps_folder_target(target: &std::path::Path) -> bool {

@@ -12,6 +12,7 @@ const DEFAULT_WINDOW_WIDTH: u32 = 720;
 const DEFAULT_WINDOW_HEIGHT: u32 = 550;
 const DEFAULT_LIST_ITEM_HEIGHT: u32 = 50;
 const DEFAULT_GRID_ITEM_SIZE: u32 = 124;
+const DEFAULT_FONT_SIZE: u32 = 14;
 const MIN_WINDOW_WIDTH: u32 = 420;
 pub(crate) const MIN_WINDOW_HEIGHT: u32 = 350;
 const MAX_WINDOW_WIDTH: u32 = 1200;
@@ -19,6 +20,8 @@ const MIN_LIST_ITEM_HEIGHT: u32 = 36;
 const MAX_LIST_ITEM_HEIGHT: u32 = 96;
 const MIN_GRID_ITEM_SIZE: u32 = 96;
 const MAX_GRID_ITEM_SIZE: u32 = 240;
+const MIN_FONT_SIZE: u32 = 11;
+const MAX_FONT_SIZE: u32 = 20;
 const DEFAULT_THEME: &str = "system";
 const DEFAULT_LANGUAGE: &str = "system";
 
@@ -31,15 +34,26 @@ pub struct Config {
     pub window_height: u32,
     pub list_item_height: u32,
     pub grid_item_size: u32,
+    pub font_family: String,
+    pub font_size: u32,
     pub theme: String,
     pub language: String,
     pub show_on_startup: bool,
     pub hide_on_focus_loss: bool,
     pub show_advanced_details: bool,
     pub show_advanced_launch_entries: bool,
-    pub show_results_on_empty_query: bool,
+    pub compact_search: bool,
+    pub separate_launch_entries: bool,
+    /// Ordered result category IDs. Earlier categories win when match strength is equal.
+    pub result_order: Vec<String>,
+    /// Ordered plugin IDs. Earlier plugins win when match strength is equal.
+    pub plugin_order: Vec<String>,
+    /// Legacy numeric category adjustments, migrated to `result_order` on load.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub result_priorities: BTreeMap<String, i32>,
     pub fuzzy_search: bool,
     pub shortcuts: Vec<ShortcutConfig>,
+    pub shortcut_keywords: ShortcutKeywords,
     pub plugins: BTreeMap<String, PluginConfig>,
     pub providers: ProviderConfig,
 }
@@ -68,6 +82,49 @@ pub struct ShortcutConfig {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ShortcutKeywords {
+    pub web_search: String,
+    pub command: String,
+}
+
+impl ShortcutKeywords {
+    pub fn web_search_prefix(&self) -> String {
+        format!("{} ", self.web_search.trim())
+    }
+
+    pub fn command_prefix(&self) -> String {
+        format!("{} ", self.command.trim())
+    }
+
+    fn normalize(&mut self) {
+        self.web_search = normalize_shortcut_keyword(&self.web_search, "w");
+        self.command = normalize_shortcut_keyword(&self.command, ">");
+        if self.web_search.eq_ignore_ascii_case(&self.command) {
+            *self = Self::default();
+        }
+    }
+}
+
+impl Default for ShortcutKeywords {
+    fn default() -> Self {
+        Self {
+            web_search: "w".into(),
+            command: ">".into(),
+        }
+    }
+}
+
+fn normalize_shortcut_keyword(value: &str, default: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        default.into()
+    } else {
+        value.into()
+    }
+}
+
 fn default_shortcut_mode() -> String {
     "execute".into()
 }
@@ -76,8 +133,15 @@ fn default_shortcut_mode() -> String {
 #[serde(default)]
 pub struct PluginConfig {
     pub enabled: bool,
+    #[serde(skip_serializing_if = "is_zero")]
     pub weight: i32,
     pub preferences: BTreeMap<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub command_action_words: BTreeMap<String, Vec<String>>,
+}
+
+fn is_zero(value: &i32) -> bool {
+    *value == 0
 }
 
 impl Default for PluginConfig {
@@ -86,6 +150,7 @@ impl Default for PluginConfig {
             enabled: true,
             weight: 0,
             preferences: BTreeMap::new(),
+            command_action_words: BTreeMap::new(),
         }
     }
 }
@@ -123,13 +188,19 @@ impl Default for Config {
             window_height: DEFAULT_WINDOW_HEIGHT,
             list_item_height: DEFAULT_LIST_ITEM_HEIGHT,
             grid_item_size: DEFAULT_GRID_ITEM_SIZE,
+            font_family: String::new(),
+            font_size: DEFAULT_FONT_SIZE,
             theme: DEFAULT_THEME.into(),
             language: DEFAULT_LANGUAGE.into(),
             show_on_startup: true,
             hide_on_focus_loss: true,
             show_advanced_details: false,
             show_advanced_launch_entries: false,
-            show_results_on_empty_query: true,
+            compact_search: false,
+            separate_launch_entries: false,
+            result_order: default_result_order(),
+            plugin_order: Vec::new(),
+            result_priorities: BTreeMap::new(),
             fuzzy_search: true,
             shortcuts: vec![ShortcutConfig {
                 name: "Search with Google".into(),
@@ -142,6 +213,7 @@ impl Default for Config {
                 arguments: String::new(),
                 description: String::new(),
             }],
+            shortcut_keywords: ShortcutKeywords::default(),
             plugins: BTreeMap::new(),
             providers: ProviderConfig::default(),
         }
@@ -189,12 +261,54 @@ impl Config {
         self.grid_item_size = self
             .grid_item_size
             .clamp(MIN_GRID_ITEM_SIZE, MAX_GRID_ITEM_SIZE);
+        self.font_family = self.font_family.trim().to_owned();
+        self.font_size = self.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         if self.theme != "system" && self.theme != "light" && self.theme != "dark" {
             self.theme = DEFAULT_THEME.into();
         }
         if self.language != "system" && !crate::utils::i18n::is_supported_language(&self.language) {
             self.language = DEFAULT_LANGUAGE.into();
         }
+        self.shortcut_keywords.normalize();
+        if !self.result_priorities.is_empty() {
+            let mut old_priorities = std::mem::take(&mut self.result_priorities);
+            let mut categories = default_result_order();
+            categories.sort_by_key(|category| {
+                let base = match category.as_str() {
+                    "calculator" => 35,
+                    "application" => 30,
+                    "control_panel" => 20,
+                    "game" => 15,
+                    "document" => 5,
+                    "website" => -10,
+                    _ => 0,
+                };
+                std::cmp::Reverse(
+                    base + old_priorities
+                        .remove(category)
+                        .unwrap_or_default()
+                        .clamp(-100, 100),
+                )
+            });
+            self.result_order = categories;
+        }
+        let valid_result_order = default_result_order();
+        self.result_order = normalize_order(&self.result_order, &valid_result_order);
+        self.result_order
+            .retain(|category| valid_result_order.contains(category));
+        let migrate_plugin_weights = self.plugins.values().any(|plugin| plugin.weight != 0);
+        if self.plugin_order.is_empty() && migrate_plugin_weights {
+            let mut weighted = self.plugins.iter().collect::<Vec<_>>();
+            weighted.sort_by(|(left_id, left), (right_id, right)| {
+                right
+                    .weight
+                    .cmp(&left.weight)
+                    .then_with(|| left_id.cmp(right_id))
+            });
+            self.plugin_order = weighted.into_iter().map(|(id, _)| id.clone()).collect();
+        }
+        self.plugin_order = normalize_order(&self.plugin_order, &[]);
+        self.result_priorities.clear();
         for shortcut in &mut self.shortcuts {
             shortcut.name = shortcut.name.trim().to_string();
             shortcut.prefix = normalize_shortcut_prefix(&shortcut.prefix);
@@ -234,7 +348,9 @@ impl Config {
                 if id.is_empty() {
                     return None;
                 }
-                plugin.weight = plugin.weight.clamp(-1000, 1000);
+                // Legacy numeric plugin weights are migrated into the ordered
+                // `plugin_order` list above and no longer act as hidden bias.
+                plugin.weight = 0;
                 Some((id, plugin))
             })
             .collect();
@@ -270,6 +386,34 @@ impl Config {
         let json = serde_json::to_string_pretty(self).context("serialize config")?;
         fs::write(path, format!("{json}\n")).context("write config")
     }
+}
+
+pub(crate) fn default_result_order() -> Vec<String> {
+    [
+        "calculator",
+        "application",
+        "control_panel",
+        "game",
+        "document",
+        "other",
+        "unclassified",
+        "website",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+fn normalize_order(values: &[String], defaults: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values
+        .iter()
+        .chain(defaults)
+        .filter_map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            (!value.is_empty() && seen.insert(value.clone())).then_some(value)
+        })
+        .collect()
 }
 
 /// Shortcut prefixes are matched literally by the provider. Keep a trailing
@@ -384,6 +528,7 @@ mod tests {
                 enabled: false,
                 weight: 5000,
                 preferences: BTreeMap::new(),
+                command_action_words: BTreeMap::new(),
             },
         );
         config.normalize();

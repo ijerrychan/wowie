@@ -26,7 +26,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
-        Arc, Mutex, OnceLock, TryLockError,
+        Arc, Mutex, OnceLock, RwLock, TryLockError,
     },
     time::{Duration, Instant},
 };
@@ -65,6 +65,10 @@ pub struct PluginManifest {
     pub keywords: Vec<String>,
     #[serde(default)]
     pub commands: Vec<PluginCommand>,
+    /// Settings exposed in the host's settings window. Values are stored in
+    /// `plugins.<id>.preferences` and passed back to the plugin at runtime.
+    #[serde(default)]
+    pub preferences: Vec<PluginPreference>,
     /// Standard engine behaviour. Plugins may contribute to root search
     /// without declaring a command/session entry.
     #[serde(default)]
@@ -74,6 +78,40 @@ pub struct PluginManifest {
     pub permissions: Vec<String>,
     #[serde(default = "default_locale")]
     pub default_locale: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PluginPreference {
+    pub key: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(rename = "type", default = "default_preference_type")]
+    pub value_type: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub default: serde_json::Value,
+}
+
+fn default_preference_type() -> String {
+    "text".into()
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginSettingsDefinition {
+    pub id: String,
+    pub name: String,
+    pub preferences: Vec<PluginPreference>,
+    pub commands: Vec<PluginCommandSettingsDefinition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginCommandSettingsDefinition {
+    pub id: String,
+    pub title: String,
+    pub action_words: Vec<String>,
+    pub customizable_action_words: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -88,6 +126,9 @@ pub struct PluginCommand {
     pub keywords: Vec<String>,
     #[serde(default)]
     pub action_words: Vec<String>,
+    /// Let users replace the words that enter this command from root search.
+    #[serde(default)]
+    pub customizable_action_words: bool,
     /// Optional launcher presentation hint for this command.
     #[serde(default)]
     pub presentation: Option<String>,
@@ -121,6 +162,7 @@ struct InstalledPlugin {
     enabled: Arc<AtomicBool>,
     weight: Arc<AtomicI32>,
     preferences: Arc<Mutex<std::collections::BTreeMap<String, serde_json::Value>>>,
+    action_word_overrides: Arc<RwLock<BTreeMap<String, Vec<String>>>>,
     status: Arc<Mutex<PluginRuntimeStatus>>,
 }
 
@@ -1093,7 +1135,73 @@ fn plugin_config_for(
         .unwrap_or_default()
 }
 
+fn merge_preference_defaults(
+    mut settings: PluginConfig,
+    manifest: &PluginManifest,
+) -> PluginConfig {
+    for preference in &manifest.preferences {
+        settings
+            .preferences
+            .entry(preference.key.clone())
+            .or_insert_with(|| preference.default.clone());
+    }
+    settings
+}
+
+fn configured_action_word_overrides(
+    manifest: &PluginManifest,
+    settings: &PluginConfig,
+) -> BTreeMap<String, Vec<String>> {
+    manifest
+        .commands
+        .iter()
+        .filter(|command| command.customizable_action_words)
+        .filter_map(|command| {
+            settings
+                .command_action_words
+                .get(&command.id)
+                .map(|words| (command.id.clone(), words.clone()))
+        })
+        .collect()
+}
+
+fn command_action_words(plugin: &InstalledPlugin, command: &PluginCommand) -> Vec<String> {
+    if command.customizable_action_words {
+        if let Ok(overrides) = plugin.action_word_overrides.read() {
+            if let Some(words) = overrides.get(&command.id) {
+                return words.clone();
+            }
+        }
+    }
+    command.action_words.clone()
+}
+
 impl PluginManager {
+    pub fn settings_definitions(&self) -> Vec<PluginSettingsDefinition> {
+        let mut definitions = self
+            .plugins
+            .iter()
+            .map(|plugin| PluginSettingsDefinition {
+                id: plugin.manifest.id.clone(),
+                name: plugin.manifest.name.clone(),
+                preferences: plugin.manifest.preferences.clone(),
+                commands: plugin
+                    .manifest
+                    .commands
+                    .iter()
+                    .map(|command| PluginCommandSettingsDefinition {
+                        id: command.id.clone(),
+                        title: command.title.clone(),
+                        action_words: command.action_words.clone(),
+                        customizable_action_words: command.customizable_action_words,
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        definitions.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        definitions
+    }
+
     pub fn discover_with_config(
         locale: &str,
         plugin_configs: &std::collections::BTreeMap<String, PluginConfig>,
@@ -1116,7 +1224,13 @@ impl PluginManager {
                 };
                 match serde_json::from_str::<PluginManifest>(&text) {
                     Ok(manifest) => {
-                        let settings = plugin_config_for(&manifest.id, plugin_configs);
+                        let settings = merge_preference_defaults(
+                            plugin_config_for(&manifest.id, plugin_configs),
+                            &manifest,
+                        );
+                        let action_word_overrides = Arc::new(RwLock::new(
+                            configured_action_word_overrides(&manifest, &settings),
+                        ));
                         let status = Arc::new(Mutex::new(PluginRuntimeStatus {
                             state: if settings.enabled {
                                 "ready".into()
@@ -1171,6 +1285,7 @@ impl PluginManager {
                             enabled: Arc::new(AtomicBool::new(settings.enabled)),
                             weight: Arc::new(AtomicI32::new(settings.weight)),
                             preferences: Arc::new(Mutex::new(settings.preferences)),
+                            action_word_overrides,
                             status,
                         });
                     }
@@ -1210,7 +1325,12 @@ impl PluginManager {
         plugin_configs: &std::collections::BTreeMap<String, PluginConfig>,
     ) {
         for plugin in &self.plugins {
-            let settings = plugin_config_for(&plugin.manifest.id, plugin_configs);
+            let settings = merge_preference_defaults(
+                plugin_config_for(&plugin.manifest.id, plugin_configs),
+                &plugin.manifest,
+            );
+            let action_word_overrides =
+                configured_action_word_overrides(&plugin.manifest, &settings);
             plugin.enabled.store(settings.enabled, Ordering::Release);
             plugin.weight.store(settings.weight, Ordering::Release);
             if let Ok(mut status) = plugin.status.lock() {
@@ -1226,6 +1346,9 @@ impl PluginManager {
             }
             if let Ok(mut preferences) = plugin.preferences.lock() {
                 *preferences = settings.preferences;
+            }
+            if let Ok(mut overrides) = plugin.action_word_overrides.write() {
+                *overrides = action_word_overrides;
             }
         }
     }
@@ -1400,7 +1523,7 @@ impl PluginManager {
             .manifest
             .commands
             .iter()
-            .flat_map(|command| command.action_words.iter())
+            .flat_map(|command| command_action_words(plugin, command))
             .next()
             .map(|word| format!("{} ", word.trim()))
     }
@@ -1652,6 +1775,7 @@ impl PluginManager {
             .commands
             .iter()
             .find(|command| command.id == command_id)?;
+        let action_words = command_action_words(plugin, command);
         let icon = plugin
             .embedded
             .as_ref()
@@ -1688,7 +1812,7 @@ impl PluginManager {
             identity: session.id.clone(),
             title: command.title.clone(),
             category: ResultCategory::Other,
-            aliases: command.action_words.to_vec(),
+            aliases: action_words.clone(),
             location: plugin.manifest.name.clone(),
             launch_target: PathBuf::new(),
             launch_arguments: String::new(),
@@ -1697,8 +1821,7 @@ impl PluginManager {
             sources: vec![format!("plugin:{}", plugin.manifest.id).into()],
             launch_entries: Vec::new(),
             actions: vec![Action::EnterSearchEngine {
-                prefix: command
-                    .action_words
+                prefix: action_words
                     .first()
                     .map(|word| format!("{} ", word.trim()))
                     .unwrap_or_default(),
@@ -2008,8 +2131,7 @@ fn action_word_query(plugin: &InstalledPlugin, query: &str) -> (String, Option<S
     };
     let argument = parts.next();
     let Some(command) = plugin.manifest.commands.iter().find(|command| {
-        command
-            .action_words
+        command_action_words(plugin, command)
             .iter()
             .any(|action_word| action_word.eq_ignore_ascii_case(word))
     }) else {
@@ -2172,7 +2294,7 @@ fn to_result(
         .map(|command| command.keywords.clone())
         .unwrap_or_default();
     let command_action_words = command
-        .map(|command| command.action_words.clone())
+        .map(|command| command_action_words(plugin, command))
         .unwrap_or_default();
     // A default-search session entry is a discoverable fallback, not an
     // exact alias for every query. Treat it like configured custom commands
@@ -2242,8 +2364,8 @@ fn to_result(
             updates: item.session_updates,
         }]
     } else if item.session_entry {
-        command
-            .and_then(|command| command.action_words.first())
+        command_action_words
+            .first()
             .map(|word| Action::EnterSearchEngine {
                 prefix: format!("{} ", word.trim()),
             })
@@ -2292,8 +2414,7 @@ fn to_result(
             .weight
             .load(Ordering::Acquire)
             // Plugin-authored item bias is a small tie-breaker, never a way
-            // to bypass root-search relevance. The user-controlled plugin
-            // weight remains a separate explicit preference.
+            // to bypass root-search relevance or the user's explicit order.
             .saturating_add(item.ranking_bias.clamp(-100, 100)),
         allow_favorite,
         visibility: match item.visible_when {
@@ -2587,11 +2708,13 @@ mod tests {
                     placeholder: None,
                     keywords: vec!["gh".into()],
                     action_words: vec!["gh".into()],
+                    customizable_action_words: true,
                     presentation: None,
                     mode: None,
                     require_separator: false,
                     icon: None,
                 }],
+                preferences: Vec::new(),
                 engine: SearchEngineSettings::default(),
                 permissions: Vec::new(),
                 default_locale: "en".into(),
@@ -2601,6 +2724,7 @@ mod tests {
             enabled: Arc::new(AtomicBool::new(true)),
             weight: Arc::new(AtomicI32::new(0)),
             preferences: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
+            action_word_overrides: Arc::new(RwLock::new(BTreeMap::new())),
             status: Arc::new(Mutex::new(PluginRuntimeStatus {
                 state: "ready".into(),
                 last_method: None,

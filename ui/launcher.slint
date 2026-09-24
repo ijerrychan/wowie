@@ -91,14 +91,20 @@ export component Launcher inherits Window {
     // With details open, both columns contribute to the window's required
     // height. Using only the detail card here clipped long result lists to a
     // short plugin detail content.
-    preferred-height: root.empty-root-collapsed ? root.empty-window-height : root.result-window-height;
-    // Keep the empty launcher compact. Once a query has results, preserve
-    // enough room for five rows while allowing the user to resize larger.
-    min-height: root.empty-root-collapsed ? root.empty-window-height : root.minimum-results-window-height;
-    max-height: root.empty-root-collapsed ? root.empty-window-height : 1000000px;
+    preferred-height: root.effective-window-height;
+    default-font-family: root.ui-font-family;
+    default-font-size: root.ui-font-size;
+    // Preserve enough room for five rows while allowing the user to resize larger.
+    min-height: root.compact-results-hidden ? root.compact-window-height : root.minimum-results-window-height;
+    max-height: 1000000px;
     background: transparent;
 
     in-out property <int> window-width: 900;
+    in property <string> ui-font-family: "";
+    in property <length> ui-font-size: 14px;
+    in property <bool> compact-search: false;
+    in property <bool> root-query-empty: true;
+    in-out property <bool> empty-query-results-visible: false;
     in property <length> list-item-height: 50px;
     in property <length> grid-item-size: 124px;
     in property <bool> dark-mode: true;
@@ -136,7 +142,6 @@ export component Launcher inherits Window {
     in-out property <int> query-history-restore-id: 0;
     in-out property <int> query-history-cursor: 0;
     in property <bool> shortcut-session-active: false;
-    in property <bool> show-results-on-empty-query: true;
     in property <bool> shortcut-session-execute-mode: false;
     in property <string> shortcut-session-prefix: "";
     in property <string> shortcut-session-placeholder: "";
@@ -153,6 +158,7 @@ export component Launcher inherits Window {
     out property <length> context-menu-anchor-x: root.width - root.context-menu-anchor-right-inset;
     out property <length> context-menu-anchor-y: root.height - root.context-menu-anchor-bottom-inset;
     callback query-changed(string);
+    callback compact-results-requested;
     callback normalize-query(string) -> string;
     callback query-history-up-requested;
     callback visible-range-changed(int, int);
@@ -178,12 +184,12 @@ export component Launcher inherits Window {
     private property <length> result-row-height: root.list-item-height;
     private property <length> result-icon-size: 24px;
     private property <length> empty-state-padding: 8px;
-    private property <bool> empty-root-collapsed: !root.shortcut-session-active && !root.show-results-on-empty-query && (search-field.text != "" ? !root.query-results-ready : root.selected-index < 0);
-    private property <length> content-bottom-padding: root.empty-root-collapsed ? root.empty-state-padding : 4px;
-    private property <length> empty-window-height: 2 * root.window-inset + root.search-row-height + 2 * root.empty-state-padding;
+    private property <length> content-bottom-padding: 4px;
     private property <length> minimum-results-window-height: 100px + 5 * root.result-row-height;
     in-out property <length> result-window-height: root.minimum-results-window-height;
-    out property <bool> result-mode: !root.empty-root-collapsed;
+    out property <length> effective-window-height: root.compact-results-hidden ? root.compact-window-height : root.result-window-height;
+    private property <length> compact-window-height: 2 * root.window-inset + 2 * root.empty-state-padding + root.search-row-height;
+    private property <bool> compact-results-hidden: root.compact-search && root.root-query-empty && !root.shortcut-session-active && !root.empty-query-results-visible;
     private property <length> operation-hint-height: 24px;
     private property <length> context-menu-gap: 6px;
     private property <length> no-results-height: 160px;
@@ -221,7 +227,7 @@ export component Launcher inherits Window {
     private property <length> detail-block-spacing: 6px;
     private property <length> detail-action-footer-extra: 50px;
     private property <length> detail-panel-content-height: root.detail-content-footer-height + root.detail-content-height + (root.detail-actions.length > 0 ? root.detail-action-footer-extra : 0px);
-    private property <length> operation-hint-spacing: root.result-mode ? root.content-spacing + root.operation-hint-height : 0px;
+    private property <length> operation-hint-spacing: root.content-spacing + root.operation-hint-height;
     private property <length> no-results-spacing: 0px;
     // Keep the session transition geometry together so the search field and
     // both icons always move as one unit.
@@ -240,7 +246,7 @@ export component Launcher inherits Window {
     private property <float> fullscreen-layout-progress: root.grid-detail-active ? 1.0 : 0.0;
     private property <length> fullscreen-layout-shift: root.search-row-height * root.fullscreen-layout-progress;
     private property <length> search-row-layout-height: root.search-row-height - root.fullscreen-layout-shift;
-    private property <length> available-results-height: max(0px, root.height - 2 * root.window-inset - root.empty-state-padding - root.content-bottom-padding - root.search-row-layout-height - root.content-spacing - root.operation-hint-spacing - root.no-results-spacing);
+    private property <length> available-results-height: root.compact-results-hidden ? 0px : max(0px, root.height - 2 * root.window-inset - root.empty-state-padding - root.content-bottom-padding - root.search-row-layout-height - root.content-spacing - root.operation-hint-spacing - root.no-results-spacing);
     private property <length> visible-results-area-height: max(0px, root.available-results-height - root.fullscreen-layout-shift);
     private property <bool> detail-visible: root.detail-panel-visible && (root.selected-index >= 0 || root.empty-state-detail-active);
     private property <float> detail-progress: root.detail-visible ? 1.0 : 0.0;
@@ -248,12 +254,6 @@ export component Launcher inherits Window {
         duration: 180ms;
         easing: root.detail-visible ? ease-out-back : ease-in;
     }
-    // Fade and lift the result surface into view when the compact root search
-    // expands. This stays inside the clipped results area, so the native
-    // window resize and its screen-position correction remain independent.
-    private property <float> results-reveal-progress: root.result-mode ? 1.0 : 0.0;
-    animate results-reveal-progress { duration: 180ms; easing: ease-out-back; }
-    private property <length> results-reveal-offset: (1.0 - root.results-reveal-progress) * 10px;
     private property <length> detail-panel-width: (root.width - 2 * root.window-inset - 2 * root.content-padding) * root.detail-panel-share - root.detail-panel-alignment-shift;
     private property <bool> detail-panel-active: root.detail-visible || (!root.fullscreen-detail-mode && root.detail-progress > 0.0);
     private property <length> grid-icon-size: 44px;
@@ -328,6 +328,10 @@ export component Launcher inherits Window {
     }
 
     function move-selection-down() {
+        if (root.compact-search && root.root-query-empty && !root.shortcut-session-active && !root.empty-query-results-visible) {
+            root.empty-query-results-visible = true;
+            root.compact-results-requested();
+        }
         if (root.results.length == 0) { return; }
         root.selected-index = root.view-mode == "grid"
             ? (root.selected-index < 0 ? 0 : min(root.selected-index + root.grid-columns, root.results.length - 1))
@@ -366,9 +370,8 @@ export component Launcher inherits Window {
             search-field.focus();
         }
     }
-    // Result-model changes are re-emitted by the host on the next event-loop
-    // turn. Keeping this out of the synchronous change-handler chain avoids
-    // recursive ListView instantiation when a page is appended.
+    // The host coalesces range notifications on the next event-loop turn, so
+    // layout and selection changes cannot synchronously rebuild the ListView.
     changed visible-results-area-height => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
 
     Rectangle {
@@ -384,7 +387,7 @@ export component Launcher inherits Window {
         VerticalBox {
             padding: root.content-padding;
             padding-top: root.empty-state-padding;
-            padding-bottom: root.content-bottom-padding;
+            padding-bottom: root.compact-results-hidden ? root.empty-state-padding : root.content-bottom-padding;
             spacing: root.content-spacing;
 
             Rectangle {
@@ -424,7 +427,7 @@ export component Launcher inherits Window {
                     transition-animation-enabled: root.search-icon-animation-enabled;
                 }
                 Rectangle {
-                    x: root.shortcut-session-active ? root.session-input-x : root.default-input-x; y: 0px; width: parent.width - (root.shortcut-session-active ? 138px : 126px); height: root.search-row-layout-height;
+                    x: root.shortcut-session-active ? root.session-input-x : root.default-input-x; y: 0px; width: parent.width - (root.shortcut-session-active ? 70px : 58px); height: root.search-row-layout-height;
                     background: transparent;
                     clip: true;
                     animate x { duration: root.session-transition-duration; easing: ease-out-back; }
@@ -432,12 +435,12 @@ export component Launcher inherits Window {
                     Text {
                         x: root.search-input-scroll-x; y: 0px; width: parent.width - root.search-input-scroll-x; height: parent.height;
                         text: root.shortcut-session-active ? root.shortcut-session-placeholder : @tr("Search apps, files, settings, and more");
-                        color: root.text-tertiary; font-size: 16px; vertical-alignment: center;
+                        color: root.text-tertiary; font-size: 1.1429rem; vertical-alignment: center;
                         visible: search-field.text == "";
                     }
                     search-field := TextInput {
                         x: root.search-input-scroll-x; y: 0px; width: max(parent.width, self.preferred-width); height: parent.height;
-                        color: root.text-primary; font-size: 16px; vertical-alignment: center; horizontal-alignment: left; single-line: true;
+                        color: root.text-primary; font-size: 1.1429rem; vertical-alignment: center; horizontal-alignment: left; single-line: true;
                         selection-background-color: root.accent-color;
                         selection-foreground-color: #ffffff;
                         text <=> root.query-text;
@@ -505,9 +508,8 @@ export component Launcher inherits Window {
                 clip: true;
 
                 results-list := ListView {
-                    visible: root.view-mode == "list";
-                    x: 0px; y: root.results-reveal-offset + root.fullscreen-layout-shift;
-                    opacity: min(1.0, max(0.0, root.results-reveal-progress));
+                    visible: root.view-mode == "list" && !root.compact-results-hidden;
+                    x: 0px; y: root.fullscreen-layout-shift;
                     // Grid mode keeps its full width because the detail view
                     // overlays the grid instead of becoming a side column.
                     width: root.view-mode == "grid"
@@ -558,15 +560,15 @@ export component Launcher inherits Window {
                     if row.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row.icon; image-fit: contain; }
                     Rectangle {
                         x: 60px; y: 0px; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px - (row.favorite ? 22px : 0px) : parent.width - 60px - parent.shortcut-card-width - (row.favorite ? 40px : 0px); height: parent.height; background: transparent;
-                        Text { x: 0px; y: row-text-top; width: parent.width; height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 13px : row.presentation == "grid" ? 15px : 14px; font-weight: row.presentation == "grid" ? 400 : 500; vertical-alignment: center; overflow: elide; }
-                        Text { x: 0px; y: row-text-top + row-title-height + row-text-gap; width: parent.width - 4px; height: row-description-height; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "control-panel" ? @tr("Control Panel") : row.location_kind == "application" && row.location == "" ? @tr("Application") : row.location; color: root.text-secondary; font-size: row.presentation == "compact" ? 10px : 11px; vertical-alignment: center; overflow: elide; }
+                        Text { x: 0px; y: row-text-top; width: parent.width; height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 0.9286rem : row.presentation == "grid" ? 1.0714rem : 1.0000rem; font-weight: row.presentation == "grid" ? 400 : 500; vertical-alignment: center; overflow: elide; }
+                        Text { x: 0px; y: row-text-top + row-title-height + row-text-gap; width: parent.width - 4px; height: row-description-height; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "control-panel" ? @tr("Control Panel") : row.location_kind == "application" && row.location == "" ? @tr("Application") : row.location; color: root.text-secondary; font-size: row.presentation == "compact" ? 0.7143rem : 0.7857rem; vertical-alignment: center; overflow: elide; }
                     }
                     Rectangle {
                         x: parent.width - shortcut-card-width - 10px; y: (root.result-row-height - 24px) / 2; width: shortcut-card-width; height: 24px;
                         background: root.dark-mode ? #303030 : #eef0f4;
                         border-color: root.border; border-width: 1px; border-radius: 6px;
                         visible: row.shortcut_prefix != "" && !root.detail-visible;
-                        Text { width: parent.width - 8px; height: parent.height; x: 4px; text: row.shortcut_prefix; color: root.text-secondary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+                        Text { width: parent.width - 8px; height: parent.height; x: 4px; text: row.shortcut_prefix; color: root.text-secondary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
                     }
                     if row.favorite : BuiltinIcon {
                         x: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 26px : parent.width - shortcut-card-width - 32px;
@@ -577,9 +579,8 @@ export component Launcher inherits Window {
                 }
 
                 grid-results := Flickable {
-                    visible: root.view-mode == "grid";
-                    x: 0px; y: root.results-reveal-offset + root.fullscreen-layout-shift;
-                    opacity: min(1.0, max(0.0, root.results-reveal-progress));
+                    visible: root.view-mode == "grid" && !root.compact-results-hidden;
+                    x: 0px; y: root.fullscreen-layout-shift;
                     width: results-list.width; height: max(0px, parent.height - root.fullscreen-layout-shift);
                     content-width: self.width;
                     content-height: max(self.height, root.grid-row-count * root.grid-row-height + root.grid-gap);
@@ -638,7 +639,7 @@ export component Launcher inherits Window {
                                 height: root.grid-title-height;
                                 text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title;
                                 color: root.text-primary;
-                                font-size: 12px;
+                                font-size: 0.8571rem;
                                 font-weight: 400;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
@@ -712,8 +713,8 @@ export component Launcher inherits Window {
                             height: max(parent.height, root.detail-panel-content-height);
                             background: transparent;
 
-                            Text { x: root.grid-detail-active ? root.detail-grid-header-x : root.detail-content-inset; y: root.detail-header-top; width: parent.width - (root.grid-detail-active ? root.detail-grid-header-width-inset : 2 * root.detail-content-inset); height: 24px; text: root.detail-title; color: root.text-primary; font-size: 17px; font-weight: 600; overflow: elide; }
-                    Text { x: root.grid-detail-active ? root.detail-grid-header-x : root.detail-content-inset; y: root.detail-subtitle-top; width: parent.width - (root.grid-detail-active ? root.detail-grid-header-width-inset : 2 * root.detail-content-inset); height: 18px; text: root.detail-subtitle; color: root.text-secondary; font-size: 11px; overflow: elide; }
+                            Text { x: root.grid-detail-active ? root.detail-grid-header-x : root.detail-content-inset; y: root.detail-header-top; width: parent.width - (root.grid-detail-active ? root.detail-grid-header-width-inset : 2 * root.detail-content-inset); height: 24px; text: root.detail-title; color: root.text-primary; font-size: 1.2143rem; font-weight: 600; overflow: elide; }
+                    Text { x: root.grid-detail-active ? root.detail-grid-header-x : root.detail-content-inset; y: root.detail-subtitle-top; width: parent.width - (root.grid-detail-active ? root.detail-grid-header-width-inset : 2 * root.detail-content-inset); height: 18px; text: root.detail-subtitle; color: root.text-secondary; font-size: 0.7857rem; overflow: elide; }
                     VerticalBox {
                         x: root.detail-content-inset; y: root.detail-content-top; width: parent.width - 2 * root.detail-content-inset; height: parent.height - (root.detail-actions.length > 0 ? root.detail-content-footer-with-actions-height : root.detail-content-footer-height); spacing: root.detail-block-spacing;
                         for block in root.detail-blocks : Rectangle {
@@ -721,21 +722,21 @@ export component Launcher inherits Window {
                             background: transparent;
                             if (block.kind == "text" || block.kind == "text-copyable") : Rectangle {
                                 width: parent.width; height: parent.height;
-                                if (block.kind == "text-copyable") : TextInput { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 13px; vertical-alignment: top; single-line: false; wrap: word-wrap; read-only: true; selection-background-color: root.accent-color; selection-foreground-color: #ffffff; }
-                                if (block.kind == "text") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 13px; vertical-alignment: top; wrap: word-wrap; overflow: clip; }
+                                if (block.kind == "text-copyable") : TextInput { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 0.9286rem; vertical-alignment: top; single-line: false; wrap: word-wrap; read-only: true; selection-background-color: root.accent-color; selection-foreground-color: #ffffff; }
+                                if (block.kind == "text") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 0.9286rem; vertical-alignment: top; wrap: word-wrap; overflow: clip; }
                             }
                             if (block.kind == "markdown" || block.kind == "markdown-copyable") : Rectangle {
                                 width: parent.width; height: parent.height;
-                                if (block.kind == "markdown-copyable") : TextInput { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 13px; vertical-alignment: top; single-line: false; wrap: word-wrap; read-only: true; selection-background-color: root.accent-color; selection-foreground-color: #ffffff; }
-                                if (block.kind == "markdown") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 13px; vertical-alignment: top; wrap: word-wrap; overflow: clip; }
+                                if (block.kind == "markdown-copyable") : TextInput { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 0.9286rem; vertical-alignment: top; single-line: false; wrap: word-wrap; read-only: true; selection-background-color: root.accent-color; selection-foreground-color: #ffffff; }
+                                if (block.kind == "markdown") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 0.9286rem; vertical-alignment: top; wrap: word-wrap; overflow: clip; }
                             }
                             if (block.kind == "metric") : Rectangle {
                                 width: parent.width; height: parent.height; background: root.dark-mode ? #2b2b2b : #f1f3f6; border-radius: 8px;
-                                Text { x: 10px; y: 8px; width: parent.width - 20px; height: 14px; text: block.label; color: root.text-tertiary; font-size: 10px; }
-                                Text { x: 10px; y: 26px; width: parent.width - 20px; height: 18px; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 13px; font-weight: 600; overflow: elide; }
+                                Text { x: 10px; y: 8px; width: parent.width - 20px; height: 14px; text: block.label; color: root.text-tertiary; font-size: 0.7143rem; }
+                                Text { x: 10px; y: 26px; width: parent.width - 20px; height: 18px; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 0.9286rem; font-weight: 600; overflow: elide; }
                             }
                             if (block.kind == "icon") : Image { width: parent.width; height: parent.height; source: block.icon; image-fit: contain; visible: block.icon.width > 0; }
-                            if (block.kind == "icon") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; visible: block.icon.width == 0; }
+                            if (block.kind == "icon") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 2.2857rem; horizontal-alignment: center; vertical-alignment: center; visible: block.icon.width == 0; }
                             if (block.kind == "image") : Rectangle {
                                 width: parent.width; height: parent.height; background: root.detail-raised-surface; border-radius: 8px;
                                 Image { x: 8px; y: 8px; width: parent.width - 16px; height: parent.height - 16px; source: block.icon; image-fit: contain; visible: block.icon.width > 0; }
@@ -743,31 +744,31 @@ export component Launcher inherits Window {
                             }
                             if (block.kind == "code") : Rectangle {
                                 width: parent.width; height: parent.height; background: root.detail-code-surface; border-radius: 8px;
-                                Text { x: 10px; y: 6px; width: parent.width - 20px; height: 14px; text: block.label; color: root.text-tertiary; font-size: 10px; visible: block.label != ""; }
-                                Text { x: 10px; y: block.label == "" ? 8px : 24px; width: parent.width - 20px; height: parent.height - (block.label == "" ? 16px : 30px); text: block.value; color: root.text-primary; font-size: 11px; overflow: clip; }
+                                Text { x: 10px; y: 6px; width: parent.width - 20px; height: 14px; text: block.label; color: root.text-tertiary; font-size: 0.7143rem; visible: block.label != ""; }
+                                Text { x: 10px; y: block.label == "" ? 8px : 24px; width: parent.width - 20px; height: parent.height - (block.label == "" ? 16px : 30px); text: block.value; color: root.text-primary; font-size: 0.7857rem; overflow: clip; }
                             }
                             if (block.kind == "table") : Rectangle {
                                 width: parent.width; height: parent.height; background: root.detail-raised-surface; border-radius: 8px;
-                                Text { x: 10px; y: 6px; width: parent.width - 20px; height: 16px; text: block.label; color: root.text-secondary; font-size: 10px; overflow: elide; }
-                                Text { x: 10px; y: 24px; width: parent.width - 20px; height: parent.height - 30px; text: block.value; color: root.text-primary; font-size: 11px; overflow: clip; }
+                                Text { x: 10px; y: 6px; width: parent.width - 20px; height: 16px; text: block.label; color: root.text-secondary; font-size: 0.7143rem; overflow: elide; }
+                                Text { x: 10px; y: 24px; width: parent.width - 20px; height: parent.height - 30px; text: block.value; color: root.text-primary; font-size: 0.7857rem; overflow: clip; }
                             }
                             if (block.kind == "link") : Rectangle {
                                 width: parent.width; height: parent.height; background: transparent;
-                                Text { width: parent.width; height: parent.height; text: block.label + "  " + block.value; color: root.accent; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                                Text { width: parent.width; height: parent.height; text: block.label + "  " + block.value; color: root.accent; font-size: 0.8571rem; vertical-alignment: center; overflow: elide; }
                                 TouchArea { clicked => { root.detail-link-requested(block.value); } }
                             }
                             if (block.kind == "loading") : Text {
-                                width: parent.width; height: parent.height; text: "⏳  " + block.value; color: root.text-secondary; font-size: 12px; vertical-alignment: center; overflow: elide;
+                                width: parent.width; height: parent.height; text: "⏳  " + block.value; color: root.text-secondary; font-size: 0.8571rem; vertical-alignment: center; overflow: elide;
                             }
                             if (block.kind == "error") : Text {
-                                width: parent.width; height: parent.height; text: "⚠  " + block.value; color: #d96c6c; font-size: 12px; vertical-alignment: center; overflow: elide;
+                                width: parent.width; height: parent.height; text: "⚠  " + block.value; color: #d96c6c; font-size: 0.8571rem; vertical-alignment: center; overflow: elide;
                             }
                             if (block.kind == "separator") : Rectangle { y: 0px; width: parent.width; height: 1px; background: transparent; }
                             if (block.kind == "weather") : Text {
                                 width: parent.width; height: parent.height;
                                 text: block.value == "clear" ? "☀" : block.value == "snow" ? "❄" : block.value == "storm" ? "⚡" : block.value == "rain" ? "☂" : "☁";
                                 color: block.value == "clear" ? #ffc144 : block.value == "storm" ? #ffd34e : block.value == "rain" ? #4da3e6 : #b8c5d4;
-                                font-size: 38px; horizontal-alignment: center; vertical-alignment: center;
+                                font-size: 2.7143rem; horizontal-alignment: center; vertical-alignment: center;
                             }
                         }
                     }
@@ -778,9 +779,9 @@ export component Launcher inherits Window {
                         action-area := TouchArea { clicked => { root.detail-action-requested(index); } }
                         BuiltinIcon { x: 8px; y: 6px; width: 16px; height: 16px; kind: action.icon_kind; }
                         if action.icon_kind == "" : Image { x: 8px; y: 6px; width: 16px; height: 16px; source: action.icon; image-fit: contain; }
-                        Text { x: 28px; y: 0px; width: parent.width - 36px; height: parent.height; text: action.title; color: root.text-secondary; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+                        Text { x: 28px; y: 0px; width: parent.width - 36px; height: parent.height; text: action.title; color: root.text-secondary; font-size: 0.7143rem; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
                     }
-                    Text { x: root.detail-content-inset; y: parent.height - root.detail-source-bottom; width: parent.width - 2 * root.detail-content-inset; height: 18px; text: root.detail-source; color: root.text-tertiary; font-size: 10px; overflow: elide; }
+                    Text { x: root.detail-content-inset; y: parent.height - root.detail-source-bottom; width: parent.width - 2 * root.detail-content-inset; height: 18px; text: root.detail-source; color: root.text-tertiary; font-size: 0.7143rem; overflow: elide; }
                         }
                     }
                     if root.grid-detail-active : Rectangle {
@@ -807,15 +808,15 @@ export component Launcher inherits Window {
                     if root.empty-state-icon-kind != "" : BuiltinIcon { x: (parent.width - 44px) / 2; y: 0px; width: 44px; height: 44px; kind: root.empty-state-icon-kind; }
                     if root.empty-state-icon-kind == "" && root.empty-state-icon.width > 0 : Image { x: (parent.width - 44px) / 2; y: 0px; width: 44px; height: 44px; source: root.empty-state-icon; image-fit: contain; }
                     if root.empty-state-icon-kind == "" && root.empty-state-icon.width == 0 : BuiltinIcon { x: (parent.width - 36px) / 2; y: 4px; width: 36px; height: 36px; kind: "magnify"; }
-                    Text { x: 24px; y: 52px; width: parent.width - 48px; height: 40px; text: root.empty-state-title != "" ? root.empty-state-title : @tr("No results"); color: root.text-secondary; font-size: 15px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; overflow: clip; }
-                    if root.empty-state-description != "" : Text { x: 24px; y: 98px; width: parent.width - 48px; height: 58px; text: root.empty-state-description; color: root.text-tertiary; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; overflow: clip; }
+                    Text { x: 24px; y: 52px; width: parent.width - 48px; height: 40px; text: root.empty-state-title != "" ? root.empty-state-title : @tr("No results"); color: root.text-secondary; font-size: 1.0714rem; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; overflow: clip; }
+                    if root.empty-state-description != "" : Text { x: 24px; y: 98px; width: parent.width - 48px; height: 58px; text: root.empty-state-description; color: root.text-tertiary; font-size: 0.8571rem; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; overflow: clip; }
                 }
             }
 
-            if (root.result-mode) : Rectangle {
+            if (!root.compact-results-hidden) : Rectangle {
                 height: root.operation-hint-height; background: transparent;
                 Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: root.border; }
-                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.view-mode == "grid" ? (root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓ ← →  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓ ← →  Navigate     Enter  Open     Esc  Hide"))) : (root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Esc  Hide"))); color: root.text-tertiary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.view-mode == "grid" ? (root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓ ← →  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓ ← →  Navigate     Enter  Open     Esc  Hide"))) : (root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Esc  Hide"))); color: root.text-tertiary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; }
             }
         }
     }
@@ -823,7 +824,7 @@ export component Launcher inherits Window {
         x: 18px; y: parent.height - 38px; width: parent.width - 36px; height: 26px;
         background: root.dark-mode ? #3b2525 : #fff0f0;
         border-color: #b85c5c; border-width: 1px; border-radius: 6px;
-        Text { x: 8px; y: 0px; width: parent.width - 16px; height: parent.height; text: @tr("Could not open application") + ": " + root.launch-error; color: #d96c6c; font-size: 11px; vertical-alignment: center; overflow: elide; }
+        Text { x: 8px; y: 0px; width: parent.width - 16px; height: parent.height; text: @tr("Could not open application") + ": " + root.launch-error; color: #d96c6c; font-size: 0.7857rem; vertical-alignment: center; overflow: elide; }
     }
 }
 
@@ -831,7 +832,11 @@ export component ContextMenu inherits Window {
     title: "Wowie Context Menu";
     no-frame: true;
     forward-focus: focus-scope;
+    default-font-family: root.ui-font-family;
+    default-font-size: root.ui-font-size;
     in property <length> menu-width: 292px;
+    in property <string> ui-font-family: "";
+    in property <length> ui-font-size: 14px;
     width: root.menu-width;
     height: max(40px, 8px + root.actions.length * root.menu-item-height);
     background: transparent;
@@ -921,11 +926,11 @@ export component ContextMenu inherits Window {
                 height: action.subtitle == "" ? parent.height : 16px;
                 text: action.kind == "section" ? @tr("Other launch entries") : action.id == "add-favorite" ? @tr("Add to favorites") : action.id == "remove-favorite" ? @tr("Remove from favorites") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.id == "copy-title" ? @tr("Copy title") : action.id == "copy-path" ? @tr("Copy path") : action.id == "copy-url" ? @tr("Copy URL") : action.title;
                 color: action.kind == "section" ? root.text-secondary : root.text-primary;
-                font-size: action.kind == "section" ? 11px : 13px;
+                font-size: action.kind == "section" ? 0.7857rem : 0.9286rem;
                 vertical-alignment: center; overflow: elide;
             }
-            Text { x: 36px; y: 17px; width: action.shortcut == "" ? parent.width - 50px : parent.width - 162px; height: 12px; text: action.subtitle; color: root.text-secondary; font-size: 10px; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
-            Text { x: parent.width - 120px; y: 0px; width: 108px; height: parent.height; text: action.shortcut; color: root.text-secondary; font-size: 10px; horizontal-alignment: right; vertical-alignment: center; overflow: elide; visible: action.shortcut != ""; }
+            Text { x: 36px; y: 17px; width: action.shortcut == "" ? parent.width - 50px : parent.width - 162px; height: 12px; text: action.subtitle; color: root.text-secondary; font-size: 0.7143rem; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
+            Text { x: parent.width - 120px; y: 0px; width: 108px; height: parent.height; text: action.shortcut; color: root.text-secondary; font-size: 0.7143rem; horizontal-alignment: right; vertical-alignment: center; overflow: elide; visible: action.shortcut != ""; }
             }
         }
     }

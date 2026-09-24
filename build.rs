@@ -4,6 +4,7 @@ fn main() {
     println!("cargo:rerun-if-changed=lang");
     println!("cargo:rerun-if-changed=wowie.ico");
     println!("cargo:rerun-if-changed=wowie.png");
+    println!("cargo:rerun-if-changed=ui/settings.slint");
     let mut languages = std::fs::read_dir("lang")
         .expect("failed to read translation directory")
         .filter_map(|entry| entry.ok())
@@ -64,6 +65,8 @@ fn main() {
     }
 
     let config = slint_build::CompilerConfiguration::new().with_bundled_translations("lang");
+    slint_build::compile_with_config("ui/settings.slint", config.clone())
+        .expect("failed to compile settings UI");
     slint_build::compile_with_config("ui/launcher.slint", config)
         .expect("failed to compile Slint UI");
 }
@@ -89,12 +92,12 @@ fn generate_provider_catalog() {
     std::fs::write(
         out_dir.join("dynamic_providers.rs"),
         format!(
-            "{}\npub fn register_all(registry: &mut crate::provider::ProviderRegistry, shortcuts: Vec<crate::config::ShortcutConfig>) {{\n{}\n}}\n",
+            "{}\npub fn register_all(registry: &mut crate::provider::ProviderRegistry, shortcuts: Vec<crate::config::ShortcutConfig>, shortcut_keywords: crate::config::ShortcutKeywords) {{\n{}\n}}\n",
             dynamic
                 .iter()
                 .map(|name| format!("#[path = \"{}/{}.rs\"] pub mod {};", dynamic_dir, name, name))
                 .collect::<Vec<_>>().join("\n"),
-            dynamic.iter().map(|name| format!("    {}::register(registry, shortcuts.clone());", name)).collect::<Vec<_>>().join("\n")
+            dynamic.iter().map(|name| format!("    {}::register(registry, shortcuts.clone(), shortcut_keywords.clone());", name)).collect::<Vec<_>>().join("\n")
         ),
     ).expect("failed to write dynamic provider catalog");
 

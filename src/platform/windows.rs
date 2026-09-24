@@ -6,7 +6,7 @@ use std::{
     collections::HashMap,
     ffi::c_void,
     fs,
-    os::windows::ffi::OsStrExt,
+    os::windows::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
     sync::{mpsc, Mutex, OnceLock},
     thread,
@@ -1444,19 +1444,15 @@ impl PlatformIntegration for WindowsPlatform {
         })
     }
 
-    fn start_tray(&self, exit_label: String) -> super::TrayRegistration {
-        tray::start(exit_label)
+    fn start_tray(&self, labels: super::TrayMenuLabels) -> super::TrayRegistration {
+        tray::start(labels)
     }
 
-    fn position_palette(&self, window: &slint::Window, result_mode: bool, result_height: f32) {
+    fn position_palette(&self, window: &slint::Window, result_height: f32) {
         let size = window.size();
         let scale = window.scale_factor();
         let window_width = size.width as i32;
-        let window_height = if result_mode {
-            size.height as i32
-        } else {
-            (result_height * scale).round() as i32
-        };
+        let window_height = (result_height * scale).round() as i32;
         use windows_sys::Win32::Graphics::Gdi::{
             GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
         };
@@ -1703,6 +1699,49 @@ fn hwnd_from_window(window: &slint::Window) -> Option<windows_sys::Win32::Founda
     Some(handle.hwnd.get() as _)
 }
 
+pub(super) fn pick_folder(owner: &slint::Window) -> Result<Option<PathBuf>> {
+    use anyhow::{anyhow, Context};
+    use windows::Win32::{
+        Foundation::HWND,
+        System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER},
+        UI::Shell::{
+            FileOpenDialog, IFileOpenDialog, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST,
+            FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
+        },
+    };
+
+    let _com = ComScope::initialize().ok_or_else(|| anyhow!("initialize folder picker COM"))?;
+    let dialog: IFileOpenDialog = unsafe {
+        CoCreateInstance(
+            &FileOpenDialog,
+            None::<&windows::core::IUnknown>,
+            CLSCTX_INPROC_SERVER,
+        )
+    }
+    .context("create folder picker")?;
+    unsafe {
+        dialog.SetOptions(
+            dialog.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST,
+        )?;
+    }
+    let hwnd = hwnd_from_window(owner).map(HWND);
+    if let Err(error) = unsafe { dialog.Show(hwnd) } {
+        // HRESULT_FROM_WIN32(ERROR_CANCELLED) is the normal result of Cancel.
+        if error.code().0 as u32 == 0x8007_04c7 {
+            return Ok(None);
+        }
+        return Err(error).context("show folder picker");
+    }
+    let item = unsafe { dialog.GetResult() }.context("read selected folder")?;
+    let display_name =
+        unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) }.context("read selected folder path")?;
+    let path = PathBuf::from(std::ffi::OsString::from_wide(unsafe {
+        display_name.as_wide()
+    }));
+    unsafe { CoTaskMemFree(Some(display_name.0.cast())) };
+    Ok(Some(path))
+}
+
 fn parse_hotkey(value: &str) -> Option<(u32, u32)> {
     let mut modifiers = 0;
     let mut key = None;
@@ -1710,29 +1749,69 @@ fn parse_hotkey(value: &str) -> Option<(u32, u32)> {
         .split('+')
         .map(|part| part.trim().to_ascii_uppercase())
     {
-        modifiers |= match part.as_str() {
-            "ALT" => MOD_ALT,
-            "CTRL" | "CONTROL" => MOD_CONTROL,
-            "SHIFT" => MOD_SHIFT,
-            "WIN" | "META" => MOD_WIN,
-            "SPACE" => {
-                key = Some(0x20);
-                0
-            }
-            "ENTER" | "RETURN" => {
-                key = Some(0x0D);
-                0
-            }
-            "ESC" | "ESCAPE" => {
-                key = Some(0x1B);
-                0
-            }
-            letter if letter.len() == 1 && letter.as_bytes()[0].is_ascii_alphabetic() => {
-                key = Some(letter.as_bytes()[0].to_ascii_uppercase() as u32);
-                0
-            }
-            _ => return None,
+        let modifier = match part.as_str() {
+            "ALT" => Some(MOD_ALT),
+            "CTRL" | "CONTROL" => Some(MOD_CONTROL),
+            "SHIFT" => Some(MOD_SHIFT),
+            "WIN" | "META" => Some(MOD_WIN),
+            _ => None,
         };
+        if let Some(modifier) = modifier {
+            modifiers |= modifier;
+            continue;
+        }
+
+        let virtual_key = match part.as_str() {
+            "SPACE" => Some(0x20),
+            "ENTER" | "RETURN" => Some(0x0D),
+            "TAB" => Some(0x09),
+            "BACKSPACE" => Some(0x08),
+            "ESC" | "ESCAPE" => Some(0x1B),
+            "INSERT" => Some(0x2D),
+            "DELETE" => Some(0x2E),
+            "HOME" => Some(0x24),
+            "END" => Some(0x23),
+            "PAGEUP" => Some(0x21),
+            "PAGEDOWN" => Some(0x22),
+            "UP" => Some(0x26),
+            "DOWN" => Some(0x28),
+            "LEFT" => Some(0x25),
+            "RIGHT" => Some(0x27),
+            "-" | "_" => Some(0xBD),
+            "=" | "+" | "PLUS" => Some(0xBB),
+            "," | "<" => Some(0xBC),
+            "." | ">" => Some(0xBE),
+            "/" | "?" => Some(0xBF),
+            ";" | ":" => Some(0xBA),
+            "'" | "\"" => Some(0xDE),
+            "[" | "{" => Some(0xDB),
+            "]" | "}" => Some(0xDD),
+            "\\" | "|" => Some(0xDC),
+            "`" | "~" => Some(0xC0),
+            "!" => Some(b'1' as u32),
+            "@" => Some(b'2' as u32),
+            "#" => Some(b'3' as u32),
+            "$" => Some(b'4' as u32),
+            "%" => Some(b'5' as u32),
+            "^" => Some(b'6' as u32),
+            "&" => Some(b'7' as u32),
+            "*" => Some(b'8' as u32),
+            "(" => Some(b'9' as u32),
+            ")" => Some(b'0' as u32),
+            function if function.starts_with('F') => function[1..]
+                .parse::<u32>()
+                .ok()
+                .filter(|number| (1..=24).contains(number))
+                .map(|number| 0x70 + number - 1),
+            character
+                if character.len() == 1 && (character.as_bytes()[0].is_ascii_alphanumeric()) =>
+            {
+                Some(character.as_bytes()[0].to_ascii_uppercase() as u32)
+            }
+            _ => None,
+        }
+        .filter(|_| key.is_none())?;
+        key = Some(virtual_key);
     }
     (modifiers != 0).then(|| Some((modifiers, key?)))?
 }

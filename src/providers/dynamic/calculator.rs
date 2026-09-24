@@ -28,7 +28,11 @@ impl Default for CalculatorProvider {
     }
 }
 
-pub fn register(registry: &mut ProviderRegistry, _shortcuts: Vec<crate::config::ShortcutConfig>) {
+pub fn register(
+    registry: &mut ProviderRegistry,
+    _shortcuts: Vec<crate::config::ShortcutConfig>,
+    _shortcut_keywords: crate::config::ShortcutKeywords,
+) {
     registry.register_search_engine(CalculatorProvider::new());
 }
 

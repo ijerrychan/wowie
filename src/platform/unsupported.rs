@@ -1,4 +1,4 @@
-use super::{HotkeyRegistration, PlatformIntegration, TrayRegistration};
+use super::{HotkeyRegistration, PlatformIntegration, TrayMenuLabels, TrayRegistration};
 use anyhow::Result;
 use std::sync::mpsc::Receiver;
 
@@ -27,7 +27,7 @@ impl PlatformIntegration for UnsupportedPlatform {
         })
     }
 
-    fn start_tray(&self, _exit_label: String) -> TrayRegistration {
+    fn start_tray(&self, _labels: TrayMenuLabels) -> TrayRegistration {
         let (_sender, receiver) = std::sync::mpsc::channel();
         let (updates, _update_receiver) = std::sync::mpsc::channel();
         TrayRegistration {
@@ -36,7 +36,7 @@ impl PlatformIntegration for UnsupportedPlatform {
         }
     }
 
-    fn position_palette(&self, _window: &slint::Window, _result_mode: bool, _result_height: f32) {}
+    fn position_palette(&self, _window: &slint::Window, _result_height: f32) {}
     fn position_context_menu(
         &self,
         _window: &slint::Window,

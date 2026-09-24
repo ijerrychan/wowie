@@ -322,3 +322,518 @@ msgstr "输入要翻译的文本"
 msgctxt "Launcher"
 msgid "Everything IPC"
 msgstr "Everything IPC"
+
+msgctxt "SettingsWindow"
+msgid "Settings"
+msgstr "设置"
+
+msgctxt "SettingsWindow"
+msgid "Apply"
+msgstr "应用"
+
+msgctxt "Settings"
+msgid "General"
+msgstr "通用"
+
+msgctxt "Settings"
+msgid "Appearance"
+msgstr "外观"
+
+msgctxt "Settings"
+msgid "Search"
+msgstr "搜索"
+
+msgctxt "Settings"
+msgid "Providers"
+msgstr "数据源"
+
+msgctxt "Settings"
+msgid "Shortcuts"
+msgstr "快捷搜索"
+
+msgctxt "Settings"
+msgid "Plugins"
+msgstr "插件"
+
+msgctxt "Settings"
+msgid "Global hotkey"
+msgstr "全局快捷键"
+
+msgctxt "Settings"
+msgid "Keyboard shortcut used to open the launcher."
+msgstr "用于打开启动器的快捷键。"
+
+msgctxt "Settings"
+msgid "Show on startup"
+msgstr "启动时显示"
+
+msgctxt "Settings"
+msgid "Open the launcher when Wowie starts."
+msgstr "在 Wowie 启动时显示启动器。"
+
+msgctxt "Settings"
+msgid "Open the launcher when Wowie starts. Restart Wowie to apply."
+msgstr "在 Wowie 启动时显示启动器。重启 Wowie 后生效。"
+
+msgctxt "Settings"
+msgid "Hide when focus is lost"
+msgstr "失焦时隐藏"
+
+msgctxt "Settings"
+msgid "Dismiss the launcher after another window receives focus."
+msgstr "当其他窗口获得焦点时隐藏启动器。"
+
+msgctxt "Settings"
+msgid "Theme"
+msgstr "主题"
+
+msgctxt "Settings"
+msgid "Choose the interface color theme."
+msgstr "选择界面配色主题。"
+
+msgctxt "Settings"
+msgid "System"
+msgstr "系统"
+
+msgctxt "Settings"
+msgid "Light"
+msgstr "浅色"
+
+msgctxt "Settings"
+msgid "Dark"
+msgstr "深色"
+
+msgctxt "Settings"
+msgid "System default"
+msgstr "系统默认"
+
+msgctxt "Settings"
+msgid "English"
+msgstr "英语"
+
+msgctxt "Settings"
+msgid "Simplified Chinese"
+msgstr "简体中文"
+
+msgctxt "Settings"
+msgid "Language"
+msgstr "语言"
+
+msgctxt "Settings"
+msgid "Language used by Wowie and its built-in providers."
+msgstr "Wowie 和内置数据源使用的语言。"
+
+msgctxt "Settings"
+msgid "Renderer"
+msgstr "渲染器"
+
+msgctxt "Settings"
+msgid "Graphics backend. Restart Wowie to switch the renderer."
+msgstr "图形后端。切换渲染器需重启 Wowie。"
+
+msgctxt "Settings"
+msgid "Font family"
+msgstr "字体"
+
+msgctxt "Settings"
+msgid "Choose an installed font family. Select System default to use the OS default."
+msgstr "选择已安装的字体。选择“系统默认”将使用操作系统的默认字体。"
+
+msgctxt "Settings"
+msgid "Font size"
+msgstr "字体大小"
+
+msgctxt "Settings"
+msgid "Base text size used throughout the interface."
+msgstr "用于整个界面的基准字号。"
+
+msgctxt "Settings"
+msgid "List row height"
+msgstr "列表行高"
+
+msgctxt "Settings"
+msgid "Height of each result in list view."
+msgstr "列表视图中每项结果的高度。"
+
+msgctxt "Settings"
+msgid "Grid item size"
+msgstr "网格项目大小"
+
+msgctxt "Settings"
+msgid "Minimum tile size in grid view."
+msgstr "网格视图中每个项目的最小尺寸。"
+
+msgctxt "Settings"
+msgid "Fuzzy search"
+msgstr "模糊搜索"
+
+msgctxt "Settings"
+msgid "Match results even when query characters are not adjacent."
+msgstr "即使查询字符不相邻，也匹配结果。"
+
+msgctxt "Settings"
+msgid "Compact empty search"
+msgstr "空搜索紧凑显示"
+
+msgctxt "Settings"
+msgid "Hide results for an empty root search until you press Down."
+msgstr "空 root search 时隐藏结果；按向下键后显示。"
+
+msgctxt "Settings"
+msgid "Separate launch entries"
+msgstr "分开展示启动项"
+
+msgctxt "Settings"
+msgid "Show each additional application launch action as its own result."
+msgstr "将应用的其他启动操作分别显示为独立结果。"
+
+msgctxt "Settings"
+msgid "Advanced result details"
+msgstr "高级结果详情"
+
+msgctxt "Settings"
+msgid "Show additional diagnostic details in result panels."
+msgstr "在结果详情面板中显示额外诊断信息。"
+
+msgctxt "Settings"
+msgid "Advanced launch actions"
+msgstr "高级启动操作"
+
+msgctxt "Settings"
+msgid "Include advanced launch actions in result menus."
+msgstr "在结果菜单中包含高级启动操作。"
+
+msgctxt "Settings"
+msgid "Store apps"
+msgstr "商店应用"
+
+msgctxt "Settings"
+msgid "Include installed Microsoft Store apps."
+msgstr "包含已安装的 Microsoft Store 应用。"
+
+msgctxt "Settings"
+msgid "Start menu"
+msgstr "开始菜单"
+
+msgctxt "Settings"
+msgid "Include shortcuts from the Start menu."
+msgstr "包含开始菜单中的快捷方式。"
+
+msgctxt "Settings"
+msgid "Desktop shortcuts"
+msgstr "桌面快捷方式"
+
+msgctxt "Settings"
+msgid "Include shortcuts from the desktop."
+msgstr "包含桌面上的快捷方式。"
+
+msgctxt "Settings"
+msgid "Control Panel"
+msgstr "控制面板"
+
+msgctxt "Settings"
+msgid "Include Control Panel destinations."
+msgstr "包含控制面板项目。"
+
+msgctxt "Settings"
+msgid "Indexed directories"
+msgstr "索引目录"
+
+msgctxt "Settings"
+msgid "Semicolon-separated folders to index."
+msgstr "要索引的文件夹，以分号分隔。"
+
+msgctxt "Settings"
+msgid "Semicolon-separated existing folders to index."
+msgstr "要索引的现有文件夹，以分号分隔。"
+
+msgctxt "Settings"
+msgid "Add indexed folder"
+msgstr "添加索引文件夹"
+
+msgctxt "Settings"
+msgid "Enter an existing folder path, then add it to the index."
+msgstr "输入现有文件夹路径，然后添加到索引。"
+
+msgctxt "Settings"
+msgid "Choose an existing folder, or paste its path below."
+msgstr "选择现有文件夹，也可以在下方粘贴路径。"
+
+msgctxt "SettingsWindow"
+msgid "Browse"
+msgstr "浏览"
+
+msgctxt "SettingsWindow"
+msgid "Enter runs the typed input directly."
+msgstr "按 Enter 直接执行当前输入。"
+
+msgctxt "SettingsWindow"
+msgid "Enter opens the selected result."
+msgstr "按 Enter 打开选中的结果。"
+
+msgctxt "SettingsWindow"
+msgid "Custom shortcuts have no detail view; Panel behaves like Search."
+msgstr "自定义快捷项没有详情视图；面板模式与搜索模式相同。"
+
+msgctxt "Settings"
+msgid "Indexed folder"
+msgstr "索引文件夹"
+
+msgctxt "Settings"
+msgid "Add shortcut"
+msgstr "添加快捷项"
+
+msgctxt "Settings"
+msgid "Create a shortcut with separate fields."
+msgstr "按字段创建快捷项，无需编写 JSON。"
+
+msgctxt "SettingsWindow"
+msgid "Add"
+msgstr "添加"
+
+msgctxt "SettingsWindow"
+msgid "Apply"
+msgstr "应用"
+
+msgctxt "SettingsWindow"
+msgid "Edit"
+msgstr "编辑"
+
+msgctxt "SettingsWindow"
+msgid "Remove"
+msgstr "移除"
+
+msgctxt "SettingsWindow"
+msgid "Cancel"
+msgstr "取消"
+
+msgctxt "SettingsWindow"
+msgid "Save"
+msgstr "保存"
+
+msgctxt "SettingsWindow"
+msgid "Name"
+msgstr "名称"
+
+msgctxt "SettingsWindow"
+msgid "Prefix"
+msgstr "前缀"
+
+msgctxt "SettingsWindow"
+msgid "Type"
+msgstr "类型"
+
+msgctxt "SettingsWindow"
+msgid "Mode"
+msgstr "模式"
+
+msgctxt "SettingsWindow"
+msgid "URL"
+msgstr "网址"
+
+msgctxt "SettingsWindow"
+msgid "Application"
+msgstr "应用程序"
+
+msgctxt "SettingsWindow"
+msgid "Command"
+msgstr "命令"
+
+msgctxt "SettingsWindow"
+msgid "Execute"
+msgstr "执行"
+
+msgctxt "SettingsWindow"
+msgid "Search"
+msgstr "搜索"
+
+msgctxt "SettingsWindow"
+msgid "Panel"
+msgstr "面板"
+
+msgctxt "SettingsWindow"
+msgid "URL template (include {query})"
+msgstr "网址模板（包含 {query}）"
+
+msgctxt "SettingsWindow"
+msgid "Target path or command"
+msgstr "目标路径或命令"
+
+msgctxt "SettingsWindow"
+msgid "Arguments"
+msgstr "参数"
+
+msgctxt "SettingsWindow"
+msgid "Input placeholder"
+msgstr "输入框提示文字"
+
+msgctxt "SettingsWindow"
+msgid "Description"
+msgstr "描述"
+
+msgctxt "Settings"
+msgid "Indexed extensions"
+msgstr "索引扩展名"
+
+msgctxt "Settings"
+msgid "Semicolon-separated file extensions, with or without dots."
+msgstr "文件扩展名，以分号分隔；可带或不带点号。"
+
+msgctxt "Settings"
+msgid "Search shortcuts"
+msgstr "搜索快捷项"
+
+msgctxt "Settings"
+msgid "Edit the shortcut array as JSON. Changes are normalized when saved."
+msgstr "以 JSON 编辑快捷项数组；保存时会规范化配置。"
+
+msgctxt "Settings"
+msgid "Applications"
+msgstr "应用"
+
+msgctxt "Settings"
+msgid "Games"
+msgstr "游戏"
+
+msgctxt "Settings"
+msgid "Websites"
+msgstr "网站"
+
+msgctxt "Settings"
+msgid "Calculator"
+msgstr "计算器"
+
+msgctxt "Settings"
+msgid "Control Panel results"
+msgstr "控制面板结果"
+
+msgctxt "Settings"
+msgid "Documents"
+msgstr "文档"
+
+msgctxt "Settings"
+msgid "Other results"
+msgstr "其他结果"
+
+msgctxt "Settings"
+msgid "Unclassified results"
+msgstr "未分类结果"
+
+msgctxt "Settings"
+msgid "Small tie-break adjustment, from -100 to 100."
+msgstr "轻量次级排序调整，范围为 -100 至 100。"
+
+msgctxt "Settings"
+msgid "Enabled"
+msgstr "启用插件"
+
+msgctxt "Settings"
+msgid "Enable or disable this plugin."
+msgstr "启用或禁用此插件。"
+
+msgctxt "Settings"
+msgid "Search priority"
+msgstr "搜索优先级"
+
+msgctxt "Settings"
+msgid "A small tie-break adjustment for this plugin. Range: -1000 to 1000."
+msgstr "此插件的次级排序微调值，范围为 -1000 至 1000。"
+
+msgctxt "Settings"
+msgid "No plugins installed"
+msgstr "未安装插件"
+
+msgctxt "Settings"
+msgid "Install a plugin to manage its settings here."
+msgstr "安装插件后可在此管理其设置。"
+
+msgctxt "Settings"
+msgid "Plugin settings"
+msgstr "插件设置"
+
+msgctxt "Settings"
+msgid "Select a plugin from the sidebar to manage its settings."
+msgstr "从左侧子选项中选择插件以管理其设置。"
+
+msgctxt "Settings"
+msgid "Google Translate API key"
+msgstr "Google 翻译 API 密钥"
+
+msgctxt "Settings"
+msgid "Optional API key for the translation service."
+msgstr "翻译服务可选的 API 密钥。"
+
+msgctxt "Settings"
+msgid "Result type order"
+msgstr "结果类型顺序"
+
+msgctxt "Settings"
+msgid "More accurate text matches stay first. This order breaks ties between result types."
+msgstr "文本匹配更准确的结果始终靠前；此顺序仅用于匹配程度相同的结果类型。"
+
+msgctxt "Settings"
+msgid "Move this result type earlier or later."
+msgstr "调整此类结果的优先顺序。"
+
+msgctxt "Settings"
+msgid "Plugin order"
+msgstr "插件顺序"
+
+msgctxt "Settings"
+msgid "Within the same result type, this order breaks ties between plugins."
+msgstr "在结果类型相同的情况下，此顺序用于决定不同插件结果的先后。"
+
+msgctxt "Settings"
+msgid "Move this plugin earlier or later."
+msgstr "调整此插件结果的优先顺序。"
+
+msgctxt "Settings"
+msgid "Reset result order"
+msgstr "重置结果顺序"
+
+msgctxt "Settings"
+msgid "Restore the default order for result types and plugins."
+msgstr "恢复结果类型和插件的默认顺序。"
+
+msgctxt "SettingsWindow"
+msgid "Up"
+msgstr "上移"
+
+msgctxt "SettingsWindow"
+msgid "Down"
+msgstr "下移"
+
+msgctxt "SettingsWindow"
+msgid "Reset"
+msgstr "重置"
+msgctxt "Settings"
+msgid "Favorites and session history stay first. Among other results, stronger text matches stay first; this order breaks ties."
+msgstr "收藏项和当前会话的历史结果保持靠前。其他结果先按文本匹配强度排序，再按此列表中的顺序打破平局。"
+
+msgctxt "Settings"
+msgid "Web search keyword"
+msgstr "网页搜索关键词"
+
+msgctxt "Settings"
+msgid "Keyword used to enter the built-in web search shortcut."
+msgstr "用于进入内置网页搜索快捷项的关键词。"
+
+msgctxt "Settings"
+msgid "Command keyword"
+msgstr "命令关键词"
+
+msgctxt "Settings"
+msgid "Keyword used to enter the built-in command shortcut."
+msgstr "用于进入内置命令快捷项的关键词。"
+
+msgctxt "Settings"
+msgid "Trigger words"
+msgstr "触发词"
+
+msgctxt "Settings"
+msgid "Comma-separated words that activate this command. Leave empty to use plugin defaults."
+msgstr "用逗号分隔此命令的触发词。留空则使用插件默认值。"
+
+msgctxt "SettingsWindow"
+msgid "Press a modifier and key, or Escape to cancel"
+msgstr "按下一个修饰键和按键，或按 Esc 取消"

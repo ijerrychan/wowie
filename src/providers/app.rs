@@ -72,6 +72,54 @@ struct PersistedAppIndex {
 const APP_INDEX_CACHE_VERSION: u32 = 4;
 const APP_INDEX_CACHE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
+pub(crate) fn launch_entry_label(entry: &crate::result::LaunchEntry) -> String {
+    if crate::platform::windows_rules::is_shortcut_path(&entry.path) {
+        if let Some(name) = entry.path.file_stem().and_then(|name| name.to_str()) {
+            if !name.is_empty() {
+                return name.to_owned();
+            }
+        }
+    }
+    let name = entry
+        .target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| entry.target.to_string_lossy().into_owned());
+    if entry.arguments.trim().is_empty() {
+        name
+    } else {
+        format!("{name} {}", entry.arguments.trim())
+    }
+}
+
+pub(crate) fn visible_launch_entries<'a>(
+    item: &'a SearchResult,
+    show_advanced_launch_entries: bool,
+) -> Vec<(usize, &'a crate::result::LaunchEntry)> {
+    let Some(default) = preferred_launch_entry(item) else {
+        return Vec::new();
+    };
+    item.launch_entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            // Installer shortcuts that only identify an icon are not launch
+            // actions, even when advanced entries are enabled.
+            if crate::platform::windows_rules::is_icon_path(&entry.target)
+                || same_launch_behavior(default, entry)
+            {
+                return None;
+            }
+            let allowed = show_advanced_launch_entries
+                || (crate::platform::windows_rules::is_shortcut_path(&entry.path)
+                    && entry.arguments.trim() != default.arguments.trim());
+            allowed.then_some((index, entry))
+        })
+        .collect()
+}
+
 struct ProviderDefinition {
     source: crate::platform::AppProviderSource,
     enabled: fn(&crate::config::ProviderConfig) -> bool,

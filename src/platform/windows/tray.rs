@@ -1,4 +1,4 @@
-use super::super::{PlatformEvent, TrayRegistration};
+use super::super::{PlatformEvent, TrayMenuLabels, TrayRegistration};
 use std::{
     mem,
     sync::{Arc, Mutex},
@@ -11,6 +11,7 @@ const WM_LBUTTONUP: usize = 0x0202;
 const WM_RBUTTONUP: usize = 0x0205;
 const WM_NULL: u32 = 0x0000;
 const WM_QUIT: u32 = 0x0012;
+const ID_SETTINGS: usize = 1000;
 const ID_EXIT: usize = 1001;
 const NIF_MESSAGE: u32 = 0x00000001;
 const NIF_ICON: u32 = 0x00000002;
@@ -18,6 +19,7 @@ const NIF_TIP: u32 = 0x00000004;
 const NIM_ADD: u32 = 0x00000000;
 const NIM_DELETE: u32 = 0x00000002;
 const MF_STRING: u32 = 0x00000000;
+const MF_SEPARATOR: u32 = 0x00000800;
 const TPM_RIGHTBUTTON: u32 = 0x0002;
 const TPM_RETURNCMD: u32 = 0x0100;
 const GWLP_USERDATA: i32 = -21;
@@ -75,7 +77,7 @@ struct WindowClass {
 
 struct CallbackState {
     sender: std::sync::mpsc::Sender<PlatformEvent>,
-    exit_label: Arc<Mutex<String>>,
+    labels: Arc<Mutex<TrayMenuLabels>>,
 }
 
 #[link(name = "user32")]
@@ -142,30 +144,43 @@ unsafe extern "system" fn window_proc(
                 }
             }
             WM_RBUTTONUP if !state().is_null() => {
-                if let Ok(exit_label) = (*state()).exit_label.lock() {
-                    show_menu(hwnd, &exit_label);
+                if let Ok(labels) = (*state()).labels.lock() {
+                    show_menu(hwnd, &labels);
                 }
             }
             _ => {}
         }
         return 0;
     }
-    if message == WM_COMMAND && (wparam & 0xffff) == ID_EXIT {
-        if !state().is_null() {
-            let _ = (*state()).sender.send(PlatformEvent::Quit);
+    if message == WM_COMMAND {
+        if state().is_null() {
+            return 0;
         }
-        PostQuitMessage(0);
-        return 0;
+        match wparam & 0xffff {
+            ID_SETTINGS => {
+                let _ = (*state()).sender.send(PlatformEvent::OpenSettings);
+                return 0;
+            }
+            ID_EXIT => {
+                let _ = (*state()).sender.send(PlatformEvent::Quit);
+                PostQuitMessage(0);
+                return 0;
+            }
+            _ => {}
+        }
     }
     DefWindowProcW(hwnd, message, wparam, lparam)
 }
 
-unsafe fn show_menu(hwnd: isize, exit_label: &str) {
+unsafe fn show_menu(hwnd: isize, labels: &TrayMenuLabels) {
     let menu = CreatePopupMenu();
     if menu == 0 {
         return;
     }
-    let exit = wide(exit_label);
+    let settings = wide(&labels.settings);
+    let exit = wide(&labels.exit);
+    AppendMenuW(menu, MF_STRING, ID_SETTINGS, settings.as_ptr());
+    AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
     AppendMenuW(menu, MF_STRING, ID_EXIT, exit.as_ptr());
     let mut point = Point { x: 0, y: 0 };
     GetCursorPos(&mut point);
@@ -190,17 +205,17 @@ fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-pub(crate) fn start(exit_label: String) -> TrayRegistration {
+pub(crate) fn start(labels: TrayMenuLabels) -> TrayRegistration {
     let (sender, receiver) = std::sync::mpsc::channel();
-    let (updates, update_receiver) = std::sync::mpsc::channel::<String>();
-    let exit_label = Arc::new(Mutex::new(exit_label));
-    let exit_label_for_thread = Arc::clone(&exit_label);
+    let (updates, update_receiver) = std::sync::mpsc::channel::<TrayMenuLabels>();
+    let labels = Arc::new(Mutex::new(labels));
+    let labels_for_thread = Arc::clone(&labels);
     thread::spawn(move || unsafe {
         let class_name = wide("WowieTrayWindow");
         let instance = GetModuleHandleW(std::ptr::null());
         let state = Box::into_raw(Box::new(CallbackState {
             sender,
-            exit_label: exit_label_for_thread,
+            labels: labels_for_thread,
         }));
         let class = WindowClass {
             style: 0,
@@ -272,7 +287,7 @@ pub(crate) fn start(exit_label: String) -> TrayRegistration {
         };
         loop {
             while let Ok(updated) = update_receiver.try_recv() {
-                if let Ok(mut current) = (*state).exit_label.lock() {
+                if let Ok(mut current) = (*state).labels.lock() {
                     *current = updated;
                 }
             }

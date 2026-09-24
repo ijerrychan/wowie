@@ -4,14 +4,21 @@ use crate::ranking::Ranker;
 use crate::result::{ResultVisibility, SearchResult};
 use anyhow::{Context, Result};
 use nucleo_matcher::{Config as MatcherConfig, Matcher, Utf32Str};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 pub struct SearchCore {
     providers: ProviderRegistry,
     dynamic_results: Mutex<Vec<SearchResult>>,
+    separate_launch_entries: AtomicBool,
+    show_advanced_launch_entries: AtomicBool,
+    category_order: Mutex<HashMap<String, usize>>,
+    plugin_order: Mutex<HashMap<String, usize>>,
     ranker: Ranker,
     fuzzy_search: AtomicBool,
 }
@@ -25,6 +32,10 @@ impl SearchCore {
                 &std::collections::BTreeMap::new(),
             )),
             dynamic_results: Mutex::new(Vec::new()),
+            separate_launch_entries: AtomicBool::new(false),
+            show_advanced_launch_entries: AtomicBool::new(false),
+            category_order: Mutex::new(HashMap::new()),
+            plugin_order: Mutex::new(HashMap::new()),
             ranker: Ranker::in_memory(),
             fuzzy_search: AtomicBool::new(true),
         }
@@ -36,9 +47,31 @@ impl SearchCore {
         plugins: PluginManager,
         shortcuts: Vec<crate::config::ShortcutConfig>,
     ) -> Self {
+        Self::with_plugins_and_shortcuts_and_keywords(
+            results,
+            plugins,
+            shortcuts,
+            crate::config::ShortcutKeywords::default(),
+        )
+    }
+
+    pub fn with_plugins_and_shortcuts_and_keywords(
+        results: Vec<SearchResult>,
+        plugins: PluginManager,
+        shortcuts: Vec<crate::config::ShortcutConfig>,
+        shortcut_keywords: crate::config::ShortcutKeywords,
+    ) -> Self {
         Self {
-            providers: ProviderRegistry::default_providers(plugins, shortcuts),
+            providers: ProviderRegistry::default_providers_with_keywords(
+                plugins,
+                shortcuts,
+                shortcut_keywords,
+            ),
             dynamic_results: Mutex::new(Vec::new()),
+            separate_launch_entries: AtomicBool::new(false),
+            show_advanced_launch_entries: AtomicBool::new(false),
+            category_order: Mutex::new(HashMap::new()),
+            plugin_order: Mutex::new(HashMap::new()),
             ranker: Ranker::load(),
             fuzzy_search: AtomicBool::new(true),
         }
@@ -54,8 +87,44 @@ impl SearchCore {
         self.providers.replace_shortcuts(shortcuts);
     }
 
+    pub fn replace_shortcut_config(
+        &self,
+        shortcuts: Vec<crate::config::ShortcutConfig>,
+        shortcut_keywords: crate::config::ShortcutKeywords,
+    ) {
+        self.providers
+            .replace_shortcut_config(shortcuts, shortcut_keywords);
+    }
+
     pub fn replace_fuzzy_search(&self, enabled: bool) {
         self.fuzzy_search.store(enabled, Ordering::Release);
+    }
+
+    pub fn replace_separate_launch_entries(&self, enabled: bool) {
+        self.separate_launch_entries
+            .store(enabled, Ordering::Release);
+    }
+
+    pub fn replace_show_advanced_launch_entries(&self, enabled: bool) {
+        self.show_advanced_launch_entries
+            .store(enabled, Ordering::Release);
+    }
+
+    pub fn replace_priority_order(&self, categories: &[String], plugins: &[String]) {
+        if let Ok(mut current) = self.category_order.lock() {
+            *current = categories
+                .iter()
+                .enumerate()
+                .map(|(index, id)| (id.clone(), index))
+                .collect();
+        }
+        if let Ok(mut current) = self.plugin_order.lock() {
+            *current = plugins
+                .iter()
+                .enumerate()
+                .map(|(index, id)| (id.clone(), index))
+                .collect();
+        }
     }
 
     pub fn replace_provider_language(&self, language: String) {
@@ -259,6 +328,53 @@ impl SearchCore {
                         || candidate.item.visibility == ResultVisibility::EmptyQueryOnly)
             })
             .collect::<Vec<_>>();
+        if matches!(context, crate::page::SearchContext::Default)
+            && !query.is_empty()
+            && self.separate_launch_entries.load(Ordering::Acquire)
+        {
+            let show_advanced_launch_entries =
+                self.show_advanced_launch_entries.load(Ordering::Acquire);
+            let mut separated = Vec::with_capacity(dynamic.len());
+            for candidate in dynamic {
+                if crate::providers::app::preferred_launch_entry(&candidate.item).is_none() {
+                    separated.push(candidate);
+                    continue;
+                }
+                let other_entries = crate::providers::app::visible_launch_entries(
+                    &candidate.item,
+                    show_advanced_launch_entries,
+                )
+                .into_iter()
+                .map(|(_, entry)| entry.clone())
+                .collect::<Vec<_>>();
+                separated.push(candidate.clone());
+                separated.extend(other_entries.into_iter().map(|entry| {
+                    let mut item = candidate.item.clone();
+                    let label = crate::providers::app::launch_entry_label(&entry);
+                    let launch_hash = stable_launch_entry_hash(&entry);
+                    item.id = format!("{}:launch:{launch_hash:016x}", item.id);
+                    item.identity = format!("{}:launch:{launch_hash:016x}", item.identity);
+                    item.title = format!("{} — {}", item.title, label);
+                    if !label.is_empty() && !item.aliases.iter().any(|alias| alias == &label) {
+                        item.aliases.push(label);
+                    }
+                    item.source = entry.source.clone();
+                    item.location = entry.path.to_string_lossy().into_owned();
+                    item.launch_target = entry.target.clone();
+                    item.launch_arguments = entry.arguments.clone();
+                    item.launch_working_directory = entry.working_directory.clone();
+                    item.launch_entries = vec![entry.clone()];
+                    item.actions
+                        .retain(|action| !matches!(action, crate::result::Action::Launch(_)));
+                    item.actions.insert(0, crate::result::Action::Launch(entry));
+                    EngineSearchResult {
+                        item,
+                        settings: candidate.settings.clone(),
+                    }
+                }));
+            }
+            dynamic = separated;
+        }
         if root_empty_query {
             let mut candidate_ids = dynamic
                 .iter()
@@ -289,6 +405,16 @@ impl SearchCore {
             cached.clear();
             cached.extend(dynamic.iter().map(|candidate| candidate.item.clone()));
         }
+        let category_order = self
+            .category_order
+            .lock()
+            .map(|priorities| priorities.clone())
+            .unwrap_or_default();
+        let plugin_order = self
+            .plugin_order
+            .lock()
+            .map(|priorities| priorities.clone())
+            .unwrap_or_default();
         let mut ranked: Vec<(RankKey, &SearchResult)> = dynamic.iter().filter_map(|candidate| {
                 let item = &candidate.item;
                 // Every provider contributes ordinary SearchResults. The
@@ -354,8 +480,16 @@ impl SearchCore {
                             fallback,
                             match_class: score.class,
                             match_quality: score.quality,
+                            category_order: category_order
+                                .get(category_priority_key(item.category))
+                                .copied()
+                                .unwrap_or(usize::MAX),
+                            plugin_order: item
+                                .source
+                                .as_str()
+                                .strip_prefix("plugin:")
+                                .and_then(|plugin_id| plugin_order.get(plugin_id).copied()),
                             behavior: self.ranker.score(&item.id, &query),
-                            category_bias: category_bias(item.category),
                             engine_bias: candidate.settings.ranking_bias.clamp(-100, 100),
                             provider_bias: item.ranking_bias,
                         },
@@ -375,11 +509,15 @@ impl SearchCore {
                         .cmp(&a.0.favorite_order.is_some())
                 })
                 .then_with(|| a.0.favorite_order.cmp(&b.0.favorite_order))
-                .then_with(|| a.0.fallback.cmp(&b.0.fallback))
                 .then_with(|| b.0.match_class.cmp(&a.0.match_class))
                 .then_with(|| b.0.match_quality.cmp(&a.0.match_quality))
+                .then_with(|| a.0.fallback.cmp(&b.0.fallback))
+                .then_with(|| a.0.category_order.cmp(&b.0.category_order))
+                .then_with(|| match (a.0.plugin_order, b.0.plugin_order) {
+                    (Some(left), Some(right)) => left.cmp(&right),
+                    _ => std::cmp::Ordering::Equal,
+                })
                 .then_with(|| b.0.behavior.cmp(&a.0.behavior))
-                .then_with(|| b.0.category_bias.cmp(&a.0.category_bias))
                 .then_with(|| b.0.engine_bias.cmp(&a.0.engine_bias))
                 .then_with(|| b.0.provider_bias.cmp(&a.0.provider_bias))
                 .then_with(|| a.1.title.cmp(&b.1.title))
@@ -428,26 +566,47 @@ struct RankKey {
     fallback: bool,
     match_class: u8,
     match_quality: i32,
+    category_order: usize,
+    plugin_order: Option<usize>,
     behavior: i32,
-    category_bias: i16,
     engine_bias: i32,
     provider_bias: i32,
 }
 
-/// Conservative defaults used only to break otherwise equivalent matches.
-/// A category is content metadata, not user intent, so it must never outrank
-/// a stronger textual match or learned selection.
-fn category_bias(category: crate::result::ResultCategory) -> i16 {
+fn category_priority_key(category: crate::result::ResultCategory) -> &'static str {
     use crate::result::ResultCategory;
     match category {
-        ResultCategory::Calculator => 35,
-        ResultCategory::Application => 30,
-        ResultCategory::ControlPanel => 20,
-        ResultCategory::Game => 15,
-        ResultCategory::Document => 5,
-        ResultCategory::Unclassified | ResultCategory::Other => 0,
-        ResultCategory::Website => -10,
+        ResultCategory::Unclassified => "unclassified",
+        ResultCategory::Application => "application",
+        ResultCategory::Game => "game",
+        ResultCategory::Website => "website",
+        ResultCategory::Calculator => "calculator",
+        ResultCategory::ControlPanel => "control_panel",
+        ResultCategory::Document => "document",
+        ResultCategory::Other => "other",
     }
+}
+
+fn stable_launch_entry_hash(entry: &crate::result::LaunchEntry) -> u64 {
+    let fields = [
+        entry.source.as_str().into_owned(),
+        entry.path.to_string_lossy().into_owned(),
+        entry.target.to_string_lossy().into_owned(),
+        entry.arguments.clone(),
+        entry
+            .working_directory
+            .as_ref()
+            .map(|directory| directory.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    ];
+    let mut hash = 0xcbf29ce484222325_u64;
+    for field in fields {
+        for byte in field.bytes().chain(std::iter::once(0xff)) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    hash
 }
 
 fn match_score(
@@ -678,6 +837,10 @@ mod tests {
             dynamic_results: Mutex::new(Vec::new()),
             ranker: Ranker::in_memory(),
             fuzzy_search: AtomicBool::new(true),
+            separate_launch_entries: AtomicBool::new(false),
+            show_advanced_launch_entries: AtomicBool::new(false),
+            category_order: Mutex::new(HashMap::new()),
+            plugin_order: Mutex::new(HashMap::new()),
         };
         let session = core
             .search_context("> ")
