@@ -506,7 +506,9 @@ export component SettingsWindow inherits Window {
                         height: 36px;
                         border-radius: 8px;
                         background: category.id == root.selected-category ? (root.dark-mode ? #383838 : #e8ecf3) : (category-area.has-hover ? root.hover : transparent);
-                        Text { x: 11px; width: parent.width - 34px; height: parent.height; text: category.title; color: category.id == root.selected-category ? root.accent-color : root.primary; font-size: 0.9286rem; vertical-alignment: center; overflow: elide; }
+                        // Keep the selected category readable without adopting
+                        // the user's potentially very bright system accent.
+                        Text { x: 11px; width: parent.width - 34px; height: parent.height; text: category.title; color: root.primary; font-size: 0.9286rem; vertical-alignment: center; overflow: elide; }
                         if category.has-children : Image {
                             x: parent.width - 25px; y: 10px; width: 16px; height: 16px;
                             source: root.plugins-expanded ? @image-url("../assets/icons/chevron-down.svg") : @image-url("../assets/icons/chevron-right.svg");

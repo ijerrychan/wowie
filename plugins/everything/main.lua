@@ -99,7 +99,6 @@ wowie.on("empty_state", function(context)
         detail = {
             title = text("Everything search guide", "Everything 搜索说明"),
             subtitle = text("Everything native query syntax", "Everything 原生搜索语法"),
-            fullscreen = true,
             scrollable = true,
             blocks = {{
                 type = "text",

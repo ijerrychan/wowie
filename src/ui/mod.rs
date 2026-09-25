@@ -47,9 +47,64 @@ const PROVIDER_REFRESH_INTERVAL: Duration = Duration::from_millis(200);
 pub(super) const PALETTE_POSITION_DELAY: Duration = Duration::from_millis(10);
 const SEARCH_PAGE_PREFETCH_DISTANCE: usize = 12;
 /// Keep the Slint model bounded even when several providers return broad
-/// matches. SearchCore retains the complete dynamic cache for launch lookup;
-/// this is only the interactive surface limit.
+/// matches. SearchCore shares exactly the snapshot accepted by this surface.
 const MAX_RENDERED_RESULTS: usize = 256;
+
+fn load_editable_config(settings: &slint::Weak<SettingsWindow>) -> Option<config::Config> {
+    match config::Config::load_for_update() {
+        Ok(config) => Some(config),
+        Err(error) => {
+            eprintln!("could not load settings for editing: {error:#}");
+            if let Some(settings) = settings.upgrade() {
+                settings.set_status_message(error.to_string().into());
+            }
+            None
+        }
+    }
+}
+
+fn execute_context_plugin_action(
+    engine: Arc<search::SearchCore>,
+    item: SearchResult,
+    action_id: String,
+    weak: slint::Weak<Launcher>,
+    generation: Arc<AtomicU64>,
+) {
+    let request_generation = generation.load(Ordering::Acquire);
+    crate::utils::background::spawn(move || {
+        let result = engine.execute_transient_plugin_action(&item, &action_id);
+        let _ = slint::invoke_from_event_loop(move || {
+            if generation.load(Ordering::Acquire) != request_generation {
+                return;
+            }
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            match result {
+                Ok(output) => {
+                    window.set_last_action_id(item.id.into());
+                    window.set_last_action_result(output.title.into());
+                    window.set_last_action_subtitle(output.subtitle.into());
+                    window.set_launch_error(String::new().into());
+                }
+                Err(error) => window.set_launch_error(error.to_string().into()),
+            }
+        });
+    });
+}
+
+/// Preserve page order while excluding IDs already shown or repeated in the
+/// page. The same surface limit applies to both initial and paginated results.
+fn accepted_page_items(existing: &[SearchResult], more: Vec<SearchResult>) -> Vec<SearchResult> {
+    let mut seen = existing
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<HashSet<_>>();
+    more.into_iter()
+        .filter(|item| seen.insert(item.id.clone()))
+        .take(MAX_RENDERED_RESULTS.saturating_sub(existing.len()))
+        .collect()
+}
 
 /// Clear the shared query and leave any active search-engine session.
 ///
@@ -213,7 +268,6 @@ struct SearchPresentation {
     is_search_engine: bool,
     detail: Option<result::DetailView>,
     detail_panel: bool,
-    view_mode: String,
     search_engine: Option<crate::page::SearchEngineSession>,
     empty_state: Option<SearchResult>,
 }
@@ -282,7 +336,6 @@ fn build_search_presentation(
     let detail = (!has_dynamic_detail)
         .then(|| found.first().and_then(|item| item.detail.clone()))
         .flatten();
-    let view_mode = engine.preferred_view_mode(&search_context).to_owned();
     SearchPresentation {
         found: Arc::new(found),
         rows,
@@ -291,13 +344,14 @@ fn build_search_presentation(
         is_search_engine,
         detail,
         detail_panel,
-        view_mode,
         search_engine,
         empty_state,
     }
 }
 
 fn apply_empty_state(window: &Launcher, state: Option<&SearchResult>, icon_service: &IconService) {
+    let generation = window.get_empty_state_icon_generation().wrapping_add(1);
+    window.set_empty_state_icon_generation(generation);
     window.set_empty_state_detail_active(false);
     if let Some(state) = state {
         window.set_empty_state_title(state.title.clone().into());
@@ -310,14 +364,24 @@ fn apply_empty_state(window: &Launcher, state: Option<&SearchResult>, icon_servi
         );
         let icon_kind = static_icon_kind(state.icon.as_ref());
         window.set_empty_state_icon_kind(icon_kind.into());
+        window.set_empty_state_icon(slint::Image::default());
         if icon_kind.is_empty() {
-            let image = icon_service
-                .resolve_at(state, DISPLAY_ICON_SIZE)
-                .map(|icon| results::icon_to_image(&icon))
-                .unwrap_or_default();
-            window.set_empty_state_icon(image);
-        } else {
-            window.set_empty_state_icon(slint::Image::default());
+            let item = state.clone();
+            let service = icon_service.clone();
+            let weak = window.as_weak();
+            crate::utils::background::spawn(move || {
+                let Some(icon) = service.resolve_at(&item, DISPLAY_ICON_SIZE) else {
+                    return;
+                };
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(window) = weak.upgrade() else {
+                        return;
+                    };
+                    if window.get_empty_state_icon_generation() == generation {
+                        window.set_empty_state_icon(results::icon_to_image(&icon));
+                    }
+                });
+            });
         }
     } else {
         window.set_empty_state_title(String::new().into());
@@ -334,9 +398,9 @@ fn apply_search_detail_state(
     icon_service: &IconService,
 ) {
     set_detail_view(window, detail, icon_service);
-    // Grid selection stays lightweight. Its detail surface is opened only by
-    // an explicit launch request, not as a side effect of moving selection.
-    window.set_detail_panel_visible(show_panel && window.get_view_mode() != "grid");
+    // The detail surface is opened only by an explicit launch request, not as
+    // a side effect of moving selection.
+    window.set_detail_panel_visible(show_panel);
 }
 
 fn apply_search_engine(window: &Launcher, session: Option<&crate::page::SearchEngineSession>) {
@@ -488,7 +552,6 @@ pub fn run() -> Result<()> {
     window.set_root_query_empty(true);
     window.set_empty_query_results_visible(false);
     window.set_list_item_height(config.list_item_height as f32);
-    window.set_grid_item_size(config.grid_item_size as f32);
     window.set_dark_mode(dark_mode);
     let accent = platform.system_accent_color();
     window.set_accent_color(slint::Color::from_rgb_u8(
@@ -566,7 +629,9 @@ pub fn run() -> Result<()> {
         let plugin_settings = plugin_settings.clone();
         let plugin_settings_for_drag = plugin_settings.clone();
         settings_window.on_setting_changed(move |id, value| {
-            let (mut config, _) = config::Config::load();
+            let Some(mut config) = load_editable_config(&settings_for_change) else {
+                return;
+            };
             let setting_result = settings::apply(&mut config, &plugin_settings, &id, &value)
                 .and_then(|()| config.save());
             if let Err(error) = setting_result {
@@ -613,7 +678,9 @@ pub fn run() -> Result<()> {
                     return;
                 }
             };
-            let (mut config, _) = config::Config::load();
+            let Some(mut config) = load_editable_config(&settings_for_priority_drop) else {
+                return;
+            };
             let result = settings::move_priority(
                 &mut config,
                 &plugin_settings_for_drag,
@@ -649,7 +716,9 @@ pub fn run() -> Result<()> {
         let settings = settings_window.as_weak();
         let plugin_settings = plugin_settings.clone();
         settings_window.on_shortcut_saved(move |index, shortcut: SettingsShortcut| {
-            let (mut config, _) = config::Config::load();
+            let Some(mut config) = load_editable_config(&settings) else {
+                return;
+            };
             let result = settings::save_shortcut(&mut config, index, shortcut, &plugin_settings)
                 .and_then(|()| config.save());
             if let Some(window) = settings.upgrade() {
@@ -668,7 +737,9 @@ pub fn run() -> Result<()> {
         let settings = settings_window.as_weak();
         let plugin_settings = plugin_settings.clone();
         settings_window.on_shortcut_removed(move |index| {
-            let (mut config, _) = config::Config::load();
+            let Some(mut config) = load_editable_config(&settings) else {
+                return;
+            };
             let result = settings::remove_shortcut(&mut config, index).and_then(|()| config.save());
             if let Some(window) = settings.upgrade() {
                 match result {
@@ -697,7 +768,9 @@ pub fn run() -> Result<()> {
                     return;
                 }
             };
-            let (mut config, _) = config::Config::load();
+            let Some(mut config) = load_editable_config(&settings) else {
+                return;
+            };
             let result =
                 settings::set_directory(&mut config, &id, path).and_then(|()| config.save());
             match result {
@@ -764,6 +837,8 @@ pub fn run() -> Result<()> {
                     .map(|state| (state.0, Arc::clone(&state.1)))
                     .unwrap_or_else(|_| (0, Arc::new(Vec::new())));
                 if query_id == 0
+                    || query_generation.load(Ordering::Acquire) != query_id
+                    || items.len() >= MAX_RENDERED_RESULTS
                     || end.max(0) as usize + SEARCH_PAGE_PREFETCH_DISTANCE < items.len()
                 {
                     return;
@@ -804,8 +879,11 @@ pub fn run() -> Result<()> {
                 let query_generation = Arc::clone(&query_generation);
                 let page_load = Arc::clone(&page_load);
                 let show_advanced_details = Arc::clone(&show_advanced_details);
-                std::thread::spawn(move || {
-                    let more = engine.load_more_in_context(&context, &query, items.len());
+                crate::utils::background::spawn(move || {
+                    let more = accepted_page_items(
+                        &items,
+                        engine.load_more_in_context(&context, &query, items.len()),
+                    );
                     let _ = slint::invoke_from_event_loop(move || {
                         if query_generation.load(Ordering::Acquire) != query_id {
                             return;
@@ -829,6 +907,7 @@ pub fn run() -> Result<()> {
                                 return;
                             }
                             state.1 = Arc::new(combined);
+                            engine.publish_results(Arc::clone(&state.1));
                         } else {
                             return;
                         }
@@ -870,9 +949,9 @@ pub fn run() -> Result<()> {
     {
         let engine = engine.clone();
         let weak = window.as_weak();
-        let current_query = Arc::clone(&current_query);
         let active_session = Arc::clone(&active_session);
         let icon_items = Arc::clone(&icon_items);
+        let action_generation = Arc::clone(&query_generation);
         window.on_detail_action_requested(move |index| {
             let Some(window) = weak.upgrade() else {
                 return;
@@ -904,27 +983,29 @@ pub fn run() -> Result<()> {
             };
             let item_id = item.id.clone();
             let action_id = detail_action.id.clone();
+            let query = window.get_query_text().to_string();
+            let session = active_session
+                .lock()
+                .ok()
+                .and_then(|session| session.clone());
+            let request_generation = action_generation.load(Ordering::Acquire);
             let engine = Arc::clone(&engine);
-            let current_query = Arc::clone(&current_query);
-            let active_session = Arc::clone(&active_session);
             let weak = weak.clone();
-            std::thread::spawn(move || {
+            let action_generation = Arc::clone(&action_generation);
+            crate::utils::background::spawn(move || {
                 let result = engine.execute_transient_plugin_action(&item, &action_id);
+                if result.is_ok() {
+                    engine.record_action_success(&item_id, &query, session.as_ref());
+                }
                 let _ = slint::invoke_from_event_loop(move || {
+                    if action_generation.load(Ordering::Acquire) != request_generation {
+                        return;
+                    }
                     let Some(window) = weak.upgrade() else {
                         return;
                     };
                     match result {
                         Ok(output) => {
-                            let query = current_query
-                                .lock()
-                                .map(|query| query.clone())
-                                .unwrap_or_default();
-                            let session = active_session
-                                .lock()
-                                .ok()
-                                .and_then(|session| session.clone());
-                            engine.record_action_success(&item_id, &query, session.as_ref());
                             window.set_last_action_id(item_id.into());
                             window.set_last_action_result(output.title.into());
                             window.set_last_action_subtitle(output.subtitle.into());
@@ -955,7 +1036,7 @@ pub fn run() -> Result<()> {
                 let detail_generation = Arc::clone(&detail_generation);
                 let icon_service = icon_service.clone();
                 // Leave one render interval after the 180ms Slint animation
-                // before clearing its content and fullscreen layout state.
+                // before clearing its content and detail layout state.
                 Timer::single_shot(Duration::from_millis(200), move || {
                     if detail_generation.load(Ordering::Acquire) != close_generation {
                         return;
@@ -1066,6 +1147,8 @@ pub fn run() -> Result<()> {
         let visible = Arc::clone(&visible);
         let active_session = Arc::clone(&active_session);
         let query_history = Arc::clone(&query_history);
+        let action_generation = Arc::clone(&query_generation);
+        let executing = Arc::new(AtomicBool::new(false));
         window.on_session_execute_requested(move || {
             let Some(window) = weak.upgrade() else {
                 return;
@@ -1080,27 +1163,55 @@ pub fn run() -> Result<()> {
             if session.mode != crate::page::SearchEngineMode::Execute {
                 return;
             }
+            if executing.swap(true, Ordering::AcqRel) {
+                return;
+            }
             let query = window.get_query_text().to_string();
             session.argument = query.clone();
             let context = crate::page::SearchContext::Engine(session.clone());
-            let Some(item) = engine
-                .search_in_context(&context, &query)
-                .into_iter()
-                .find(|item| item.primary_action().is_some())
-            else {
-                return;
-            };
-            match launcher::launch(&item) {
-                Ok(()) => {
+            let request_generation = action_generation.load(Ordering::Acquire);
+            let engine = Arc::clone(&engine);
+            let weak = weak.clone();
+            let active_session = Arc::clone(&active_session);
+            let query_history = Arc::clone(&query_history);
+            let visible = Arc::clone(&visible);
+            let action_generation = Arc::clone(&action_generation);
+            let executing = Arc::clone(&executing);
+            crate::utils::background::spawn(move || {
+                let result = engine
+                    .search_in_context(&context, &query)
+                    .into_iter()
+                    .find(|item| item.primary_action().is_some())
+                    .map(|item| launcher::launch(&item).map(|()| item));
+                if let Some(Ok(item)) = &result {
                     engine.record_action_success(&item.id, &query, Some(&session));
                     record_query_history(&query_history, &query, Some(session));
-                    window.set_launch_error(String::new().into());
-                    clear_query(&window, &active_session);
-                    let _ = window.hide();
-                    visible.store(false, Ordering::Release);
                 }
-                Err(error) => window.set_launch_error(error.to_string().into()),
-            }
+                let reset_executing = Arc::clone(&executing);
+                if slint::invoke_from_event_loop(move || {
+                    reset_executing.store(false, Ordering::Release);
+                    if action_generation.load(Ordering::Acquire) != request_generation {
+                        return;
+                    }
+                    let Some(window) = weak.upgrade() else {
+                        return;
+                    };
+                    match result {
+                        Some(Ok(_)) => {
+                            window.set_launch_error(String::new().into());
+                            clear_query(&window, &active_session);
+                            let _ = window.hide();
+                            visible.store(false, Ordering::Release);
+                        }
+                        Some(Err(error)) => window.set_launch_error(error.to_string().into()),
+                        None => {}
+                    }
+                })
+                .is_err()
+                {
+                    executing.store(false, Ordering::Release);
+                }
+            });
         });
     }
     {
@@ -1189,6 +1300,13 @@ pub fn run() -> Result<()> {
                 *current = query.to_string();
             }
             if let Some(window) = weak.upgrade() {
+                window.set_empty_state_icon_generation(
+                    window.get_empty_state_icon_generation().wrapping_add(1),
+                );
+                window.set_empty_state_icon(slint::Image::default());
+                window.set_detail_content_generation(
+                    window.get_detail_content_generation().wrapping_add(1),
+                );
                 let native_window = window.window();
                 let current_height = native_window
                     .size()
@@ -1251,7 +1369,7 @@ pub fn run() -> Result<()> {
                 if query_generation.load(Ordering::Acquire) != query_id {
                     return;
                 }
-                std::thread::spawn(move || {
+                crate::utils::background::spawn(move || {
                     let presentation = build_search_presentation(
                         &engine,
                         query.as_str(),
@@ -1268,7 +1386,6 @@ pub fn run() -> Result<()> {
                         is_search_engine,
                         detail,
                         detail_panel,
-                        view_mode,
                         search_engine,
                         empty_state,
                     } = presentation;
@@ -1277,9 +1394,7 @@ pub fn run() -> Result<()> {
                             return;
                         }
                         if let Some(window) = weak.upgrade() {
-                            if window.get_view_mode() != view_mode {
-                                window.set_view_mode(view_mode.into());
-                            }
+                            engine.publish_results(Arc::clone(&found_for_icons));
                             apply_search_engine(&window, search_engine.as_ref());
                             apply_empty_state(&window, empty_state.as_ref(), &icon_service);
                             if let Ok(mut state) = empty_state_item_for_query.lock() {
@@ -1476,6 +1591,8 @@ pub fn run() -> Result<()> {
         let detail_registry = detail_registry.clone();
         let detail_language = config.language.clone();
         let icon_items = Arc::clone(&icon_items);
+        let action_generation = Arc::clone(&query_generation);
+        let action_in_flight = Arc::new(AtomicBool::new(false));
         window.on_launch_requested(move |index| {
             let item = weak.upgrade().and_then(|window| {
                 window
@@ -1564,9 +1681,6 @@ pub fn run() -> Result<()> {
                     }
                     return;
                 }
-                let open_grid_detail = weak
-                    .upgrade()
-                    .is_some_and(|window| window.get_view_mode() == "grid");
                 let open_shortcut_panel = current_query
                     .lock()
                     .ok()
@@ -1577,7 +1691,7 @@ pub fn run() -> Result<()> {
                 let open_detail_action = item
                     .primary_action()
                     .is_some_and(result::Action::is_open_detail);
-                if (open_grid_detail || open_shortcut_panel || item.primary_action().is_none())
+                if (open_shortcut_panel || item.primary_action().is_none())
                     && (item.detail.is_some() || has_dynamic_detail)
                     || open_detail_action
                 {
@@ -1607,67 +1721,124 @@ pub fn run() -> Result<()> {
                     return;
                 }
                 if item.primary_action().is_some_and(result::Action::is_plugin) {
-                    match engine.execute_action(&item.id) {
-                        Ok(output) => {
-                            let query = current_query
-                                .lock()
-                                .map(|query| query.clone())
-                                .unwrap_or_default();
-                            let session = active_session
-                                .lock()
-                                .ok()
-                                .and_then(|session| session.clone());
+                    let Some((_, action_id)) =
+                        item.primary_action().and_then(result::Action::plugin_parts)
+                    else {
+                        return;
+                    };
+                    if action_in_flight.swap(true, Ordering::AcqRel) {
+                        return;
+                    }
+                    let action_id = action_id.to_owned();
+                    let query = weak
+                        .upgrade()
+                        .map(|window| window.get_query_text().to_string())
+                        .unwrap_or_default();
+                    let session = active_session
+                        .lock()
+                        .ok()
+                        .and_then(|session| session.clone());
+                    let request_generation = action_generation.load(Ordering::Acquire);
+                    let engine = Arc::clone(&engine);
+                    let weak = weak.clone();
+                    let action_generation = Arc::clone(&action_generation);
+                    let action_in_flight = Arc::clone(&action_in_flight);
+                    crate::utils::background::spawn(move || {
+                        let output = engine.execute_transient_plugin_action(&item, &action_id);
+                        if output.is_ok() {
                             engine.record_action_success(&item.id, &query, session.as_ref());
-                            if let Some(window) = weak.upgrade() {
-                                window.set_last_action_id(item.id.clone().into());
-                                window.set_last_action_result(output.title.into());
-                                window.set_last_action_subtitle(output.subtitle.into());
-                                window.set_launch_error(String::new().into());
+                        }
+                        let reset_in_flight = Arc::clone(&action_in_flight);
+                        if slint::invoke_from_event_loop(move || {
+                            reset_in_flight.store(false, Ordering::Release);
+                            if action_generation.load(Ordering::Acquire) != request_generation {
+                                return;
                             }
-                        }
-                        Err(error) => {
-                            eprintln!("plugin action failed: {error:#}");
-                            if let Some(window) = weak.upgrade() {
-                                window.set_launch_error(error.to_string().into());
-                            }
-                        }
-                    }
-                    return;
-                }
-                let result = launcher::launch(&item);
-                match result {
-                    Ok(()) => {
-                        let query = weak
-                            .upgrade()
-                            .map(|window| window.get_query_text().to_string())
-                            .or_else(|| current_query.lock().ok().map(|query| query.clone()))
-                            .unwrap_or_default();
-                        let session = active_session
-                            .lock()
-                            .ok()
-                            .and_then(|session| session.clone());
-                        engine.record_action_success(&item.id, &query, session.as_ref());
-                        record_query_history(&query_history, &query, session);
-                        if let Some(window) = weak.upgrade() {
-                            window.set_launch_error(String::new().into());
-                            clear_query(&window, &active_session);
-                            let _ = window.hide();
-                        }
-                        visible.store(false, Ordering::Release);
-                    }
-                    Err(error) => {
-                        eprintln!("launch failed: {error:#}");
-                        if let Some(window) = weak.upgrade() {
-                            window.set_launch_error(error.to_string().into());
-                            let weak = window.as_weak();
-                            Timer::single_shot(LAUNCH_ERROR_DURATION, move || {
-                                if let Some(window) = weak.upgrade() {
+                            let Some(window) = weak.upgrade() else {
+                                return;
+                            };
+                            match output {
+                                Ok(output) => {
+                                    window.set_last_action_id(item.id.into());
+                                    window.set_last_action_result(output.title.into());
+                                    window.set_last_action_subtitle(output.subtitle.into());
                                     window.set_launch_error(String::new().into());
                                 }
-                            });
+                                Err(error) => {
+                                    eprintln!("plugin action failed: {error:#}");
+                                    window.set_launch_error(error.to_string().into());
+                                }
+                            }
+                        })
+                        .is_err()
+                        {
+                            action_in_flight.store(false, Ordering::Release);
                         }
-                    }
+                    });
+                    return;
                 }
+                if action_in_flight.swap(true, Ordering::AcqRel) {
+                    return;
+                }
+                let query = weak
+                    .upgrade()
+                    .map(|window| window.get_query_text().to_string())
+                    .or_else(|| current_query.lock().ok().map(|query| query.clone()))
+                    .unwrap_or_default();
+                let session = active_session
+                    .lock()
+                    .ok()
+                    .and_then(|session| session.clone());
+                let request_generation = action_generation.load(Ordering::Acquire);
+                let engine = Arc::clone(&engine);
+                let weak = weak.clone();
+                let query_history = Arc::clone(&query_history);
+                let active_session = Arc::clone(&active_session);
+                let visible = Arc::clone(&visible);
+                let action_generation = Arc::clone(&action_generation);
+                let action_in_flight = Arc::clone(&action_in_flight);
+                crate::utils::background::spawn(move || {
+                    let result = launcher::launch(&item);
+                    if result.is_ok() {
+                        engine.record_action_success(&item.id, &query, session.as_ref());
+                        record_query_history(&query_history, &query, session);
+                    }
+                    let reset_in_flight = Arc::clone(&action_in_flight);
+                    if slint::invoke_from_event_loop(move || {
+                        reset_in_flight.store(false, Ordering::Release);
+                        if action_generation.load(Ordering::Acquire) != request_generation {
+                            return;
+                        }
+                        let Some(window) = weak.upgrade() else {
+                            return;
+                        };
+                        match result {
+                            Ok(()) => {
+                                window.set_launch_error(String::new().into());
+                                clear_query(&window, &active_session);
+                                let _ = window.hide();
+                                visible.store(false, Ordering::Release);
+                            }
+                            Err(error) => {
+                                eprintln!("launch failed: {error:#}");
+                                window.set_launch_error(error.to_string().into());
+                                let weak = window.as_weak();
+                                let generation = Arc::clone(&action_generation);
+                                Timer::single_shot(LAUNCH_ERROR_DURATION, move || {
+                                    if generation.load(Ordering::Acquire) == request_generation {
+                                        if let Some(window) = weak.upgrade() {
+                                            window.set_launch_error(String::new().into());
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    })
+                    .is_err()
+                    {
+                        action_in_flight.store(false, Ordering::Release);
+                    }
+                });
             }
         });
     }
@@ -1783,7 +1954,7 @@ pub fn run() -> Result<()> {
             let icon_service = icon_service.clone();
             let context_weak = context_weak.clone();
             let context_generation = Arc::clone(&context_generation);
-            std::thread::spawn(move || {
+            crate::utils::background::spawn(move || {
                 let icons = resolve_plugin_action_icons(&item_for_icons, &icon_service);
                 if icons.is_empty() {
                     return;
@@ -1842,6 +2013,7 @@ pub fn run() -> Result<()> {
         let visible = Arc::clone(&visible);
         let engine = Arc::clone(&engine);
         let active_session_for_favorite = Arc::clone(&active_session);
+        let action_generation = Arc::clone(&query_generation);
         let favorite_limit_message =
             i18n::tr(&config.language, "Maximum number of favorites reached").to_owned();
         context_window.on_action_requested(move |action_id| {
@@ -1921,7 +2093,7 @@ pub fn run() -> Result<()> {
                     &visible,
                 );
                 let weak_for_result = weak.clone();
-                std::thread::spawn(move || {
+                crate::utils::background::spawn(move || {
                     let result = launcher::open_containing_directory(&item);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Err(error) = result {
@@ -1960,21 +2132,14 @@ pub fn run() -> Result<()> {
                         launcher::launch_entry(&entry, as_admin)
                     }
                     result::ContextMenuBehavior::Plugin { .. } => {
-                        match engine.execute_transient_plugin_action(
-                            &item,
-                            &format!("context-menu:{context_action_id}"),
-                        ) {
-                            Ok(output) => {
-                                if let Some(window) = weak.upgrade() {
-                                    window.set_last_action_id(item.id.clone().into());
-                                    window.set_last_action_result(output.title.into());
-                                    window.set_last_action_subtitle(output.subtitle.into());
-                                    window.set_launch_error(String::new().into());
-                                }
-                                return;
-                            }
-                            Err(error) => Err(error),
-                        }
+                        execute_context_plugin_action(
+                            Arc::clone(&engine),
+                            item,
+                            format!("context-menu:{context_action_id}"),
+                            weak.clone(),
+                            Arc::clone(&action_generation),
+                        );
+                        return;
                     }
                 };
                 if let Some(window) = weak.upgrade() {
@@ -1986,7 +2151,13 @@ pub fn run() -> Result<()> {
                 return;
             }
             if let Some(plugin_action_id) = action_id.strip_prefix("plugin-action:") {
-                let result = engine.execute_transient_plugin_action(&item, plugin_action_id);
+                execute_context_plugin_action(
+                    Arc::clone(&engine),
+                    item,
+                    plugin_action_id.to_owned(),
+                    weak.clone(),
+                    Arc::clone(&action_generation),
+                );
                 hide_context_menu(
                     &context_weak,
                     &weak,
@@ -1996,17 +2167,6 @@ pub fn run() -> Result<()> {
                     false,
                     &visible,
                 );
-                if let Some(window) = weak.upgrade() {
-                    match result {
-                        Ok(output) => {
-                            window.set_last_action_id(item.id.clone().into());
-                            window.set_last_action_result(output.title.into());
-                            window.set_last_action_subtitle(output.subtitle.into());
-                            window.set_launch_error(String::new().into());
-                        }
-                        Err(error) => window.set_launch_error(error.to_string().into()),
-                    }
-                }
                 return;
             }
             let result = match action_id.as_str() {
@@ -2156,7 +2316,6 @@ pub fn run() -> Result<()> {
                         let window_width = updated.window_width as i32;
                         let window_height = updated.window_height as f32;
                         let list_item_height = updated.list_item_height as f32;
-                        let grid_item_size = updated.grid_item_size as f32;
                         let compact_search = updated.compact_search;
                         let font_family = updated.font_family.clone();
                         let font_size = updated.font_size as f32;
@@ -2192,7 +2351,6 @@ pub fn run() -> Result<()> {
                                     );
                                 }
                                 window.set_list_item_height(list_item_height);
-                                window.set_grid_item_size(grid_item_size);
                                 window.set_dark_mode(dark_mode);
                                 let accent = platform_for_config.system_accent_color();
                                 window.set_accent_background(slint::Color::from_argb_u8(
@@ -2243,7 +2401,6 @@ pub fn run() -> Result<()> {
                         is_search_engine,
                         detail,
                         detail_panel,
-                        view_mode,
                         search_engine,
                         empty_state,
                     } = build_search_presentation(
@@ -2258,6 +2415,7 @@ pub fn run() -> Result<()> {
                         &detail_registry,
                         &icon_service,
                     );
+                    let engine_for_ui = Arc::clone(&engine);
                     let query_generation_for_ui = Arc::clone(&query_generation);
                     let weak_for_ui = weak.clone();
                     let icon_items_for_ui = Arc::clone(&icon_items);
@@ -2271,9 +2429,7 @@ pub fn run() -> Result<()> {
                             return;
                         }
                         if let Some(window) = weak_for_ui.upgrade() {
-                            if window.get_view_mode() != view_mode {
-                                window.set_view_mode(view_mode.into());
-                            }
+                            engine_for_ui.publish_results(Arc::clone(&found_for_icons));
                             apply_search_engine(&window, search_engine.as_ref());
                             apply_empty_state(&window, empty_state.as_ref(), &icon_service_for_ui);
                             if let Ok(mut state) = empty_state_item_for_results.lock() {
@@ -2534,6 +2690,49 @@ mod tests {
     use super::*;
     use crate::platform::SourceId;
     use std::path::PathBuf;
+
+    #[test]
+    fn pagination_deduplicates_and_respects_the_surface_limit() {
+        let make = |id: usize| SearchResult {
+            id: id.to_string(),
+            identity: id.to_string(),
+            title: id.to_string(),
+            category: result::ResultCategory::Other,
+            aliases: Vec::new(),
+            location: String::new(),
+            launch_target: PathBuf::new(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: SourceId::Shortcut,
+            sources: Vec::new(),
+            launch_entries: Vec::new(),
+            actions: Vec::new(),
+            detail: None,
+            description: None,
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
+            icon: None,
+            ranking_bias: 0,
+            allow_favorite: true,
+            visibility: result::ResultVisibility::Always,
+        };
+        let existing = (0..MAX_RENDERED_RESULTS - 2).map(make).collect::<Vec<_>>();
+        let accepted = accepted_page_items(
+            &existing,
+            vec![make(0), make(254), make(254), make(255), make(256)],
+        );
+        assert_eq!(
+            accepted
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["254", "255"]
+        );
+        let full = (0..MAX_RENDERED_RESULTS).map(make).collect::<Vec<_>>();
+        assert!(accepted_page_items(&full, vec![make(256)]).is_empty());
+        assert!(accepted_page_items(&existing, vec![make(0)]).is_empty());
+    }
 
     #[test]
     fn execute_sessions_only_allow_favorites_when_the_query_is_empty() {

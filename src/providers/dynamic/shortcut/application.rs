@@ -1,4 +1,7 @@
-use super::{build_result, configured_description, expand_raw_template, result_id, ShortcutQuery, ShortcutSpec};
+use super::{
+    build_result, configured_description, expand_raw_template, result_id, ShortcutQuery,
+    ShortcutSpec,
+};
 use crate::{config::ShortcutConfig, result::SearchResult};
 use std::path::PathBuf;
 

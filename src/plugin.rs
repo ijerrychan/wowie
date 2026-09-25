@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use mlua::{Function, HookTriggers, Lua, LuaSerdeExt, Value, VmState};
 use nucleo_matcher::{Config as MatcherConfig, Matcher, Utf32Str};
 use rayon::prelude::*;
-use serde::{de, Deserialize, Deserializer};
+use serde::{de, de::DeserializeOwned, Deserialize, Deserializer};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
@@ -43,6 +43,25 @@ const MAX_PLUGIN_CONTEXT_ACTIONS: usize = 16;
 const MAX_PLUGIN_CONTEXT_ACTION_ID_BYTES: usize = 128;
 const MAX_PLUGIN_CONTEXT_TITLE_CHARS: usize = 160;
 const MAX_PLUGIN_CONTEXT_SUBTITLE_CHARS: usize = 240;
+const MAX_PLUGIN_SOURCE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PLUGIN_MANIFEST_BYTES: usize = 256 * 1024;
+const MAX_PLUGIN_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PLUGIN_SMALL_RESPONSE_BYTES: usize = 512 * 1024;
+const MAX_PLUGIN_ITEMS: usize = 512;
+const MAX_PLUGIN_ITEM_ID_CHARS: usize = 256;
+const MAX_PLUGIN_ITEM_TITLE_CHARS: usize = 512;
+const MAX_PLUGIN_ITEM_SUBTITLE_CHARS: usize = 4096;
+const MAX_PLUGIN_ITEM_ALIASES: usize = 32;
+const MAX_PLUGIN_ALIAS_CHARS: usize = 256;
+const MAX_PLUGIN_ACTIONS: usize = 32;
+const MAX_PLUGIN_DETAIL_BLOCKS: usize = 128;
+const MAX_PLUGIN_DETAIL_ACTIONS: usize = 32;
+const MAX_PLUGIN_DETAIL_TEXT_CHARS: usize = 64 * 1024;
+const MAX_PLUGIN_DETAIL_ROWS: usize = 256;
+const MAX_PLUGIN_DETAIL_CELLS: usize = 64;
+const MAX_PLUGIN_JSON_DEPTH: usize = 32;
+const MAX_PLUGIN_JSON_NODES: usize = 20_000;
+const MAX_PLUGIN_JSON_STRING_BYTES: usize = 2 * 1024 * 1024;
 const ROOT_PLUGIN_QUERY_BUDGET: Duration = Duration::from_millis(150);
 const SESSION_PLUGIN_QUERY_BUDGET: Duration = Duration::from_millis(750);
 const QUERY_HOOK_INSTRUCTION_INTERVAL: u32 = 10_000;
@@ -129,9 +148,6 @@ pub struct PluginCommand {
     /// Let users replace the words that enter this command from root search.
     #[serde(default)]
     pub customizable_action_words: bool,
-    /// Optional launcher presentation hint for this command.
-    #[serde(default)]
-    pub presentation: Option<String>,
     /// How an action word owns the launcher interaction. Plugin commands
     /// default to provider-backed search for backwards compatibility.
     #[serde(default)]
@@ -238,8 +254,21 @@ impl EmbeddedPlugin {
         preferences: &std::collections::BTreeMap<String, serde_json::Value>,
     ) -> Result<Self> {
         let entry = root.join(&manifest.entry_point);
-        let source = fs::read_to_string(&entry)
-            .with_context(|| format!("read plugin entry point {}", entry.display()))?;
+        let metadata = fs::metadata(&entry)
+            .with_context(|| format!("read plugin entry point metadata {}", entry.display()))?;
+        if metadata.len() > MAX_PLUGIN_SOURCE_BYTES as u64 {
+            anyhow::bail!(
+                "plugin entry point {} exceeds {} bytes",
+                entry.display(),
+                MAX_PLUGIN_SOURCE_BYTES
+            );
+        }
+        let source = crate::utils::read_bounded(
+            fs::File::open(&entry)
+                .with_context(|| format!("open plugin entry point {}", entry.display()))?,
+            MAX_PLUGIN_SOURCE_BYTES,
+        )?;
+        let source = String::from_utf8(source).context("plugin entry point is not UTF-8")?;
         Self::from_source(
             &source,
             &manifest.entry_point,
@@ -260,11 +289,16 @@ impl EmbeddedPlugin {
         permissions: &[String],
         storage_dir: Option<PathBuf>,
     ) -> Result<Self> {
+        if source.len() > MAX_PLUGIN_SOURCE_BYTES {
+            anyhow::bail!("plugin source exceeds {} bytes", MAX_PLUGIN_SOURCE_BYTES);
+        }
         let lua = Lua::new();
         let wowie = lua.create_table()?;
         let locale_value = locale.to_owned();
         let fallback_value = fallback_locale.to_owned();
         let preferences_value = preferences.clone();
+        let preferences_json = serde_json::to_value(&preferences_value)?;
+        validate_json_shape(&preferences_json)?;
 
         let on = lua.create_function(|lua, (method, callback): (String, Function)| {
             lua.globals().set(format!("__wowie_{method}"), callback)?;
@@ -316,6 +350,7 @@ impl EmbeddedPlugin {
                 validate_plugin_http_url(&url).map_err(mlua::Error::external)?;
                 let value: serde_json::Value =
                     crate::utils::http::get_json(&url).map_err(mlua::Error::external)?;
+                validate_json_shape(&value).map_err(mlua::Error::external)?;
                 lua.to_value(&value)
             })?,
         )?;
@@ -334,9 +369,11 @@ impl EmbeddedPlugin {
             lua.create_function(move |lua, (url, form): (String, mlua::Table)| {
                 require_plugin_permission(network_allowed, "network")?;
                 validate_plugin_http_url(&url).map_err(mlua::Error::external)?;
+                validate_lua_value(&Value::Table(form.clone())).map_err(mlua::Error::external)?;
                 let form: BTreeMap<String, String> = lua.from_value(Value::Table(form))?;
                 let value: serde_json::Value = crate::utils::http::post_form_json(&url, &form)
                     .map_err(mlua::Error::external)?;
+                validate_json_shape(&value).map_err(mlua::Error::external)?;
                 lua.to_value(&value)
             })?,
         )?;
@@ -347,6 +384,12 @@ impl EmbeddedPlugin {
                 move |lua, (url, body, headers): (String, mlua::Table, Option<mlua::Table>)| {
                     require_plugin_permission(network_allowed, "network")?;
                     validate_plugin_http_url(&url).map_err(mlua::Error::external)?;
+                    validate_lua_value(&Value::Table(body.clone()))
+                        .map_err(mlua::Error::external)?;
+                    if let Some(headers) = &headers {
+                        validate_lua_value(&Value::Table(headers.clone()))
+                            .map_err(mlua::Error::external)?;
+                    }
                     let body: serde_json::Value = lua.from_value(Value::Table(body))?;
                     let headers: BTreeMap<String, String> = headers
                         .map(|headers| lua.from_value(Value::Table(headers)))
@@ -355,6 +398,7 @@ impl EmbeddedPlugin {
                     let value: serde_json::Value =
                         crate::utils::http::post_json_with_headers(&url, &body, &headers)
                             .map_err(mlua::Error::external)?;
+                    validate_json_shape(&value).map_err(mlua::Error::external)?;
                     lua.to_value(&value)
                 },
             )?,
@@ -380,9 +424,14 @@ impl EmbeddedPlugin {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
                     Err(error) => return Err(mlua::Error::external(error)),
                 }
-                let bytes = fs::read(path).map_err(mlua::Error::external)?;
+                let bytes = crate::utils::read_bounded(
+                    fs::File::open(path).map_err(mlua::Error::external)?,
+                    MAX_PLUGIN_STORAGE_VALUE_BYTES,
+                )
+                .map_err(mlua::Error::external)?;
                 let value: serde_json::Value =
                     serde_json::from_slice(&bytes).map_err(mlua::Error::external)?;
+                validate_json_shape(&value).map_err(mlua::Error::external)?;
                 lua.to_value(&value).map(Some)
             })?,
         )?;
@@ -390,7 +439,9 @@ impl EmbeddedPlugin {
         wowie.set(
             "storage_write",
             lua.create_function(move |lua, (key, value): (String, Value)| {
+                validate_lua_value(&value).map_err(mlua::Error::external)?;
                 let value: serde_json::Value = lua.from_value(value)?;
+                validate_json_shape(&value).map_err(mlua::Error::external)?;
                 let bytes = serde_json::to_vec(&value).map_err(mlua::Error::external)?;
                 if bytes.len() > MAX_PLUGIN_STORAGE_VALUE_BYTES {
                     return Err(mlua::Error::runtime("plugin storage value is too large"));
@@ -445,8 +496,13 @@ impl EmbeddedPlugin {
                         "plugin file is too large or not a file",
                     ));
                 }
+                let bytes = crate::utils::read_bounded(
+                    fs::File::open(path).map_err(mlua::Error::external)?,
+                    4 * 1024 * 1024,
+                )
+                .map_err(mlua::Error::external)?;
                 Ok(Some(
-                    fs::read_to_string(path).map_err(mlua::Error::external)?,
+                    String::from_utf8(bytes).map_err(mlua::Error::external)?,
                 ))
             })?,
         )?;
@@ -537,12 +593,18 @@ impl EmbeddedPlugin {
 
         let plugin = Self { lua };
         let initialize = serde_json::json!({
+            "request_id": next_request_id("initialize"),
             "locale": locale,
             "fallback_locale": fallback_locale,
             "preferences": preferences_value,
         });
         if plugin.has_handler("initialize")? {
-            plugin.call("initialize", &initialize, None, None)?;
+            let request_id = initialize
+                .get("request_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let output = plugin.call("initialize", &initialize, None, None)?;
+            validate_protocol_response(&output, request_id)?;
         }
         Ok(plugin)
     }
@@ -588,9 +650,18 @@ impl EmbeddedPlugin {
         let value = if matches!(value, Value::Nil) {
             serde_json::Value::Object(Default::default())
         } else {
+            validate_lua_value(&value)?;
             self.lua.from_value(value)?
         };
-        Ok(serde_json::to_string(&value)?)
+        let output = serde_json::to_string(&value)?;
+        if output.len() > MAX_PLUGIN_RESPONSE_BYTES {
+            anyhow::bail!(
+                "plugin {method} response exceeds {} bytes",
+                MAX_PLUGIN_RESPONSE_BYTES
+            );
+        }
+        validate_json_shape(&value)?;
+        Ok(output)
     }
 
     fn call_query(
@@ -881,11 +952,20 @@ where
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     match value {
-        serde_json::Value::Array(items) => items
-            .into_iter()
-            .map(serde_json::from_value)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(de::Error::custom),
+        serde_json::Value::Array(items) => {
+            if items.len() > MAX_PLUGIN_ITEMS {
+                return Err(de::Error::custom(format!(
+                    "plugin returned too many items ({}; limit {})",
+                    items.len(),
+                    MAX_PLUGIN_ITEMS
+                )));
+            }
+            items
+                .into_iter()
+                .map(serde_json::from_value)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(de::Error::custom)
+        }
         // Lua has no distinct empty-array type. An empty table is encoded as
         // an object by mlua, so accept it as the protocol's empty item list.
         serde_json::Value::Object(items) if items.is_empty() => Ok(Vec::new()),
@@ -991,8 +1071,6 @@ struct PluginDetailView {
     width: Option<PluginDetailWidth>,
     #[serde(default)]
     scrollable: bool,
-    #[serde(default)]
-    fullscreen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1198,7 +1276,7 @@ impl PluginManager {
                     .collect(),
             })
             .collect::<Vec<_>>();
-        definitions.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        definitions.sort_by_cached_key(|definition| definition.name.to_lowercase());
         definitions
     }
 
@@ -1219,7 +1297,23 @@ impl PluginManager {
             for entry in entries.flatten() {
                 let dir = entry.path();
                 let manifest_path = dir.join("manifest.json");
-                let Ok(text) = fs::read_to_string(&manifest_path) else {
+                let Ok(metadata) = fs::metadata(&manifest_path) else {
+                    continue;
+                };
+                if metadata.len() > MAX_PLUGIN_MANIFEST_BYTES as u64 {
+                    eprintln!(
+                        "[plugin] ignoring oversized manifest {}",
+                        manifest_path.display()
+                    );
+                    continue;
+                }
+                let Ok(file) = fs::File::open(&manifest_path) else {
+                    continue;
+                };
+                let Ok(bytes) = crate::utils::read_bounded(file, MAX_PLUGIN_MANIFEST_BYTES) else {
+                    continue;
+                };
+                let Ok(text) = String::from_utf8(bytes) else {
                     continue;
                 };
                 match serde_json::from_str::<PluginManifest>(&text) {
@@ -1660,19 +1754,6 @@ impl PluginManager {
         }
     }
 
-    pub fn preferred_view_mode_for_session(&self, session: &SearchEngineSession) -> &'static str {
-        self.plugin_command_for_session(session)
-            .and_then(|(plugin, command_id)| {
-                let command = plugin
-                    .manifest
-                    .commands
-                    .iter()
-                    .find(|command| command.id == command_id)?;
-                (command.presentation.as_deref() == Some("grid")).then_some("grid")
-            })
-            .unwrap_or("list")
-    }
-
     fn empty_state_for_session(
         &self,
         session: &SearchEngineSession,
@@ -1711,16 +1792,17 @@ impl PluginManager {
                 return None;
             }
         };
-        let response: EmptyStateResponse = match serde_json::from_str(&output) {
-            Ok(response) => response,
-            Err(error) => {
-                eprintln!(
-                    "[plugin:{}] invalid empty-state response: {error}",
-                    plugin.manifest.id
-                );
-                return None;
-            }
-        };
+        let response: EmptyStateResponse =
+            match parse_plugin_response(&output, MAX_PLUGIN_SMALL_RESPONSE_BYTES) {
+                Ok(response) => response,
+                Err(error) => {
+                    eprintln!(
+                        "[plugin:{}] invalid empty-state response: {error}",
+                        plugin.manifest.id
+                    );
+                    return None;
+                }
+            };
         if let Err(error) = validate_response_id(response.request_id.as_deref(), &request_id) {
             eprintln!(
                 "[plugin:{}] invalid empty-state response: {error:#}",
@@ -1735,13 +1817,15 @@ impl PluginManager {
             );
             return None;
         }
+        let title = limit_context_text(&response.title, MAX_PLUGIN_ITEM_TITLE_CHARS);
+        let description = limit_context_text(&response.description, MAX_PLUGIN_ITEM_SUBTITLE_CHARS);
         Some(SearchResult {
             id: format!("plugin:{}:{}:empty-state", plugin.manifest.id, command_id),
             identity: format!("plugin:{}:{}:empty-state", plugin.manifest.id, command_id),
-            title: response.title,
+            title,
             category: ResultCategory::Other,
             aliases: Vec::new(),
-            location: response.description.clone(),
+            location: description.clone(),
             launch_target: PathBuf::new(),
             launch_arguments: String::new(),
             launch_working_directory: None,
@@ -1752,7 +1836,7 @@ impl PluginManager {
             detail: response
                 .detail
                 .map(|detail| to_detail_view(&plugin.root, detail, &locale)),
-            description: Some(response.description),
+            description: Some(description),
             app_user_model_id: None,
             package_family_name: None,
             package_metadata: None,
@@ -1794,7 +1878,8 @@ impl PluginManager {
                     "preferences": plugin_preferences(plugin),
                 });
                 let output = embedded.call("search_engine_icon", &request, None, None).ok()?;
-                let response: SearchEngineIconResponse = serde_json::from_str(&output).ok()?;
+                let response: SearchEngineIconResponse =
+                    parse_plugin_response(&output, MAX_PLUGIN_SMALL_RESPONSE_BYTES).ok()?;
                 validate_response_id(response.request_id.as_deref(), &request_id).ok()?;
                 if response.error.is_some() {
                     return None;
@@ -1944,7 +2029,7 @@ impl PluginManager {
                 .map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?;
             let output = embedded.call("execute", &request, Some(item_id), Some(action_id))?;
             validate_protocol_response(&output, &request_id)?;
-            Ok(output)
+            bound_execute_response(&output)
         })();
         match result {
             Ok(output) => {
@@ -2018,10 +2103,6 @@ impl crate::provider::SearchEngineProvider for PluginManager {
     fn search_engine_result(&self, session: &SearchEngineSession) -> Option<SearchResult> {
         PluginManager::search_engine_result(self, session)
     }
-
-    fn preferred_view_mode(&self, session: &SearchEngineSession) -> &'static str {
-        PluginManager::preferred_view_mode_for_session(self, session)
-    }
 }
 
 impl crate::details::DynamicDetailProvider for PluginManager {
@@ -2056,8 +2137,8 @@ impl crate::details::DynamicDetailProvider for PluginManager {
             .lock()
             .map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?;
         let output = embedded.call("detail", &request, Some(&item.id), None)?;
-        let response: DetailResponse =
-            serde_json::from_str(&output).context("decode plugin detail response")?;
+        let response: DetailResponse = parse_plugin_response(&output, MAX_PLUGIN_RESPONSE_BYTES)
+            .context("decode plugin detail response")?;
         if let Some(error) = response.error {
             anyhow::bail!("{}: {}", error.code, error.message);
         }
@@ -2082,7 +2163,6 @@ impl crate::details::DynamicDetailProvider for PluginManager {
             actions: Vec::new(),
             preferred_width: None,
             scrollable: false,
-            fullscreen: false,
         }
     }
 }
@@ -2188,8 +2268,8 @@ fn query_plugin(
             .map_err(|_| anyhow::anyhow!("plugin VM lock poisoned"))?
     };
     let output = embedded.call_query(&request, options.cancellation)?;
-    let response: QueryResponse =
-        serde_json::from_str(&output).context("decode plugin response")?;
+    let response: QueryResponse = parse_plugin_response(&output, MAX_PLUGIN_RESPONSE_BYTES)
+        .context("decode plugin response")?;
     validate_query_response(&response, &request_id)?;
     Ok(response
         .items
@@ -2251,8 +2331,15 @@ fn validate_query_response(response: &QueryResponse, request_id: &str) -> Result
 }
 
 fn validate_protocol_response(output: &str, request_id: &str) -> Result<()> {
+    if output.len() > MAX_PLUGIN_SMALL_RESPONSE_BYTES {
+        anyhow::bail!(
+            "plugin response exceeds {} bytes",
+            MAX_PLUGIN_SMALL_RESPONSE_BYTES
+        );
+    }
     let value: serde_json::Value =
         serde_json::from_str(output).context("decode plugin response envelope")?;
+    validate_json_shape(&value)?;
     if let Some(response_id) = value.get("request_id").and_then(|value| value.as_str()) {
         validate_response_id(Some(response_id), request_id)?;
     }
@@ -2262,6 +2349,110 @@ fn validate_protocol_response(output: &str, request_id: &str) -> Result<()> {
         anyhow::bail!("plugin error [{}]: {}", error.code, error.message);
     }
     Ok(())
+}
+
+fn bound_execute_response(output: &str) -> Result<String> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(output).context("decode plugin execute response")?;
+    if let serde_json::Value::Object(fields) = &mut value {
+        for key in ["title", "subtitle"] {
+            if let Some(serde_json::Value::String(text)) = fields.get_mut(key) {
+                *text = limit_context_text(text, MAX_PLUGIN_ITEM_SUBTITLE_CHARS);
+            }
+        }
+    }
+    serde_json::to_string(&value).context("encode bounded plugin execute response")
+}
+
+fn validate_json_shape(value: &serde_json::Value) -> Result<()> {
+    fn visit(
+        value: &serde_json::Value,
+        depth: usize,
+        nodes: &mut usize,
+        string_bytes: &mut usize,
+    ) -> Result<()> {
+        if depth > MAX_PLUGIN_JSON_DEPTH {
+            anyhow::bail!("plugin response nesting exceeds {MAX_PLUGIN_JSON_DEPTH} levels");
+        }
+        *nodes = nodes.saturating_add(1);
+        if *nodes > MAX_PLUGIN_JSON_NODES {
+            anyhow::bail!("plugin response contains too many JSON values");
+        }
+        match value {
+            serde_json::Value::String(text) => {
+                *string_bytes = string_bytes.saturating_add(text.len());
+                if *string_bytes > MAX_PLUGIN_JSON_STRING_BYTES {
+                    anyhow::bail!("plugin response contains too much string data");
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    visit(value, depth + 1, nodes, string_bytes)?;
+                }
+            }
+            serde_json::Value::Object(values) => {
+                for (key, value) in values {
+                    *string_bytes = string_bytes.saturating_add(key.len());
+                    visit(value, depth + 1, nodes, string_bytes)?;
+                }
+            }
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            }
+        }
+        Ok(())
+    }
+
+    let mut nodes = 0;
+    let mut string_bytes = 0;
+    visit(value, 0, &mut nodes, &mut string_bytes)
+}
+
+fn validate_lua_value(value: &Value) -> Result<()> {
+    fn visit(
+        value: &Value,
+        depth: usize,
+        nodes: &mut usize,
+        string_bytes: &mut usize,
+    ) -> Result<()> {
+        if depth > MAX_PLUGIN_JSON_DEPTH {
+            anyhow::bail!("plugin callback nesting exceeds {MAX_PLUGIN_JSON_DEPTH} levels");
+        }
+        *nodes = nodes.saturating_add(1);
+        if *nodes > MAX_PLUGIN_JSON_NODES {
+            anyhow::bail!("plugin callback contains too many Lua values");
+        }
+        match value {
+            Value::String(text) => {
+                *string_bytes = string_bytes.saturating_add(text.as_bytes().len());
+                if *string_bytes > MAX_PLUGIN_JSON_STRING_BYTES {
+                    anyhow::bail!("plugin callback contains too much string data");
+                }
+            }
+            Value::Table(table) => {
+                for pair in table.clone().pairs::<Value, Value>() {
+                    let (key, value) = pair?;
+                    visit(&key, depth + 1, nodes, string_bytes)?;
+                    visit(&value, depth + 1, nodes, string_bytes)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    let mut nodes = 0;
+    let mut string_bytes = 0;
+    visit(value, 0, &mut nodes, &mut string_bytes)
+}
+
+fn parse_plugin_response<T: DeserializeOwned>(output: &str, max_bytes: usize) -> Result<T> {
+    if output.len() > max_bytes {
+        anyhow::bail!("plugin response exceeds {max_bytes} bytes");
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(output).context("decode plugin response")?;
+    validate_json_shape(&value)?;
+    serde_json::from_value(value).context("decode plugin response payload")
 }
 
 fn validate_response_id(response_id: Option<&str>, request_id: &str) -> Result<()> {
@@ -2282,6 +2473,7 @@ fn to_result(
     requested_query: &str,
     language: &str,
 ) -> SearchResult {
+    let item = sanitize_plugin_item(item);
     let item_command_id = item.command_id.as_deref().or(requested_command_id);
     let command = item_command_id.and_then(|command_id| {
         plugin
@@ -2424,6 +2616,46 @@ fn to_result(
     }
 }
 
+fn sanitize_plugin_item(mut item: PluginItem) -> PluginItem {
+    item.id = limit_context_text(&item.id, MAX_PLUGIN_ITEM_ID_CHARS);
+    item.title = limit_context_text(&item.title, MAX_PLUGIN_ITEM_TITLE_CHARS);
+    item.subtitle = limit_context_text(&item.subtitle, MAX_PLUGIN_ITEM_SUBTITLE_CHARS);
+    item.aliases = item
+        .aliases
+        .into_iter()
+        .take(MAX_PLUGIN_ITEM_ALIASES)
+        .map(|alias| limit_context_text(&alias, MAX_PLUGIN_ALIAS_CHARS))
+        .collect();
+    item.target = item
+        .target
+        .map(|target| limit_context_text(&target, MAX_PLUGIN_ITEM_SUBTITLE_CHARS));
+    item.actions.truncate(MAX_PLUGIN_ACTIONS);
+    for action in &mut item.actions {
+        action.id = limit_context_text(&action.id, MAX_PLUGIN_CONTEXT_ACTION_ID_BYTES);
+    }
+    item.context_actions.truncate(MAX_PLUGIN_CONTEXT_ACTIONS);
+    for action in &mut item.context_actions {
+        action.id = limit_context_text(&action.id, MAX_PLUGIN_CONTEXT_ACTION_ID_BYTES);
+        action.title = limit_context_text(&action.title, MAX_PLUGIN_CONTEXT_TITLE_CHARS);
+        action.subtitle = limit_context_text(&action.subtitle, MAX_PLUGIN_CONTEXT_SUBTITLE_CHARS);
+    }
+    item.command_id = item
+        .command_id
+        .map(|command_id| limit_context_text(&command_id, MAX_PLUGIN_ITEM_ID_CHARS));
+    item.session_updates = item
+        .session_updates
+        .into_iter()
+        .take(MAX_PLUGIN_ITEMS)
+        .map(|(key, value)| {
+            (
+                limit_context_text(&key, MAX_PLUGIN_ITEM_ID_CHARS),
+                limit_context_text(&value, MAX_PLUGIN_ITEM_SUBTITLE_CHARS),
+            )
+        })
+        .collect();
+    item
+}
+
 fn parse_plugin_category(value: &str) -> ResultCategory {
     match value.trim().to_ascii_lowercase().as_str() {
         "game" => ResultCategory::Game,
@@ -2475,6 +2707,7 @@ fn to_detail_view(
         actions: view
             .actions
             .into_iter()
+            .take(MAX_PLUGIN_DETAIL_ACTIONS)
             .map(|action| crate::result::DetailAction {
                 title: if action.title.is_empty() {
                     detail_text(action.id.as_str().into())
@@ -2488,6 +2721,7 @@ fn to_detail_view(
         blocks: view
             .blocks
             .into_iter()
+            .take(MAX_PLUGIN_DETAIL_BLOCKS)
             .map(|block| match block {
                 PluginDetailBlock::Text {
                     text,
@@ -2547,10 +2781,20 @@ fn to_detail_view(
                     code,
                 },
                 PluginDetailBlock::Table { columns, rows } => crate::result::DetailBlock::Table {
-                    columns: columns.into_iter().map(detail_text).collect(),
+                    columns: columns
+                        .into_iter()
+                        .take(MAX_PLUGIN_DETAIL_CELLS)
+                        .map(detail_text)
+                        .collect(),
                     rows: rows
                         .into_iter()
-                        .map(|row| row.into_iter().map(detail_text).collect())
+                        .take(MAX_PLUGIN_DETAIL_ROWS)
+                        .map(|row| {
+                            row.into_iter()
+                                .take(MAX_PLUGIN_DETAIL_CELLS)
+                                .map(detail_text)
+                                .collect()
+                        })
                         .collect(),
                 },
                 PluginDetailBlock::Link { label, url } => {
@@ -2590,14 +2834,11 @@ fn to_detail_view(
                 .clamp(width.min.min(width.max), width.max.max(width.min))
         }),
         scrollable: view.scrollable,
-        fullscreen: view.fullscreen,
     }
 }
 
 fn detail_text(value: String) -> String {
-    // Translation and other preview text can legitimately span many lines;
-    // the detail Flickable owns scrolling, so do not truncate it at 512 chars.
-    value
+    limit_context_text(&value, MAX_PLUGIN_DETAIL_TEXT_CHARS)
 }
 
 fn limit_context_text(value: &str, max_chars: usize) -> String {
@@ -2622,6 +2863,56 @@ fn is_supported_detail_url(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn plugin_file_apis_preserve_missing_utf8_and_storage_behavior() {
+        let root = std::env::temp_dir().join(format!(
+            "wowie-plugin-files-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let plugin = EmbeddedPlugin::from_source(
+            "",
+            "test.lua",
+            "en",
+            "en",
+            &BTreeMap::new(),
+            &["filesystem".into()],
+            Some(root.clone()),
+        )
+        .unwrap();
+        plugin
+            .lua
+            .globals()
+            .set("test_root", root.to_string_lossy().replace('\\', "/"))
+            .unwrap();
+        fs::write(root.join("valid.txt"), "hello").unwrap();
+        fs::write(root.join("invalid.txt"), [0xff]).unwrap();
+        let file = fs::File::create(root.join("large.txt")).unwrap();
+        file.set_len(4 * 1024 * 1024 + 1).unwrap();
+        drop(file);
+        plugin
+            .lua
+            .load(
+                r#"
+            assert(wowie.storage_read("missing") == nil)
+            wowie.storage_write("cache", {version = 1, title = "hello"})
+            assert(wowie.storage_read("cache").title == "hello")
+            assert(wowie.fs_read_text(test_root .. "/missing.txt") == nil)
+            assert(wowie.fs_read_text(test_root .. "/valid.txt") == "hello")
+            assert(not pcall(wowie.fs_read_text, test_root .. "/invalid.txt"))
+            assert(not pcall(wowie.fs_read_text, test_root .. "/large.txt"))
+            assert(not pcall(wowie.storage_read, "../cache"))
+        "#,
+            )
+            .exec()
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn manifest_defaults_are_valid() {
         let m: PluginManifest =
@@ -2654,7 +2945,6 @@ mod tests {
                     "title":"Search GitHub",
                     "keywords":["gh"],
                     "action_words":["gh"],
-                    "presentation":"grid",
                     "icon":{"type":"resource","path":"icons/github.png"}
                 }]
             }"#,
@@ -2662,7 +2952,6 @@ mod tests {
         .unwrap();
         assert_eq!(m.commands[0].id, "search");
         assert_eq!(m.commands[0].action_words, vec!["gh"]);
-        assert_eq!(m.commands[0].presentation.as_deref(), Some("grid"));
         assert!(matches!(m.commands[0].icon, Some(IconRef::Resource { .. })));
     }
 
@@ -2709,7 +2998,6 @@ mod tests {
                     keywords: vec!["gh".into()],
                     action_words: vec!["gh".into()],
                     customizable_action_words: true,
-                    presentation: None,
                     mode: None,
                     require_separator: false,
                     icon: None,

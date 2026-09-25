@@ -90,45 +90,7 @@ pub(super) fn filesystem_source_fingerprint(
         | crate::platform::AppProviderSource::AppsFolder
         | crate::platform::AppProviderSource::ControlPanel => return None,
     };
-    fn add(state: &mut u64, bytes: &[u8]) {
-        for byte in bytes {
-            *state ^= u64::from(*byte);
-            *state = state.wrapping_mul(0x100000001b3);
-        }
-    }
-    fn visit(path: &Path, state: &mut u64) {
-        add(state, path.to_string_lossy().as_bytes());
-        let Ok(metadata) = fs::symlink_metadata(path) else {
-            add(state, &[0]);
-            return;
-        };
-        add(state, &metadata.len().to_le_bytes());
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|time| time.as_nanos())
-            .unwrap_or_default();
-        add(state, &modified.to_le_bytes());
-        if !metadata.is_dir() {
-            return;
-        }
-        if let Ok(entries) = fs::read_dir(path) {
-            let mut children = entries
-                .flatten()
-                .map(|entry| entry.path())
-                .collect::<Vec<_>>();
-            children.sort();
-            for child in children {
-                visit(&child, state);
-            }
-        }
-    }
-    let mut fingerprint = 0xcbf29ce484222325;
-    for root in roots {
-        visit(&root, &mut fingerprint);
-    }
-    Some(fingerprint)
+    Some(crate::utils::filesystem_fingerprint(&roots))
 }
 
 pub(super) fn discover_file_source(include_executables: bool, source: &str) -> Vec<SearchResult> {
@@ -310,8 +272,16 @@ pub(super) fn collect_tree(
     // in `merge_sources`; sorting every directory here only repeats work.
     for entry in entries.flatten() {
         let path = entry.path();
-        // This mirrors WalkDir::follow_links(false) used by the legacy index.
-        if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+        // Keep discovery and fingerprinting on the same no-follow-links policy.
+        // Windows junctions are reparse points even when `file_type().is_dir()`
+        // reports a directory, so skip them before recursing or indexing.
+        if crate::utils::is_filesystem_link(&path) {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             collect_tree(
                 &path,
                 output,

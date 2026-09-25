@@ -72,15 +72,6 @@ fn definitions() -> Vec<Definition> {
             96,
             2,
         ),
-        number(
-            "grid_item_size",
-            "appearance",
-            "Grid item size",
-            "Minimum tile size in grid view.",
-            96,
-            240,
-            4,
-        ),
         choice(
             "font_family",
             "appearance",
@@ -985,7 +976,6 @@ pub(super) fn apply(
         "language" => config.language = value,
         "renderer" => config.renderer = value,
         "list_item_height" => config.list_item_height = parse_u32(&value, id)?,
-        "grid_item_size" => config.grid_item_size = parse_u32(&value, id)?,
         "font_family" => config.font_family = value.trim().to_owned(),
         "font_size" => config.font_size = parse_u32(&value, id)?.clamp(11, 20),
         "shortcut_keywords.web_search" => {
@@ -1148,7 +1138,7 @@ fn same_folder(left: &std::path::Path, right: &std::path::Path) -> bool {
     left.to_string_lossy().to_lowercase() == right.to_string_lossy().to_lowercase()
 }
 
-fn move_order(order: &mut Vec<String>, id: &str, direction: &str) -> Result<()> {
+fn move_order(order: &mut [String], id: &str, direction: &str) -> Result<()> {
     let index = order
         .iter()
         .position(|item| item == id)

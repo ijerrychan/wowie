@@ -1,6 +1,8 @@
+#[cfg(test)]
+use super::WEB_PREFIX;
 use super::{
     build_result, configured_description, expand_url_template, result_id, ShortcutQuery,
-    ShortcutSpec, WEB_PREFIX,
+    ShortcutSpec,
 };
 use crate::{
     config::ShortcutConfig,
@@ -9,14 +11,12 @@ use crate::{
 use std::path::PathBuf;
 
 /// Render the built-in `w address` shortcut and implicit URL matches.
+#[cfg(test)]
 pub(super) fn builtin(query: ShortcutQuery<'_>) -> Option<SearchResult> {
     builtin_with_prefix(query, WEB_PREFIX)
 }
 
-pub(super) fn builtin_with_prefix(
-    query: ShortcutQuery<'_>,
-    prefix: &str,
-) -> Option<SearchResult> {
+pub(super) fn builtin_with_prefix(query: ShortcutQuery<'_>, prefix: &str) -> Option<SearchResult> {
     render(
         query,
         crate::utils::i18n::tr(query.language, "Open website").into(),
@@ -30,6 +30,7 @@ pub(super) fn builtin_with_prefix(
 
 /// Render a configured URL shortcut. The `w` prefix intentionally keeps the
 /// built-in URL behavior even if a config entry uses it.
+#[cfg(test)]
 pub(super) fn configured(
     query: ShortcutQuery<'_>,
     shortcut: &ShortcutConfig,
@@ -75,21 +76,25 @@ fn render(
     } else {
         None
     };
-    let target_value = web_target
-        .as_deref()
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            if is_builtin_web {
-                fallback_web_url(argument.value)
-            } else {
-                expand_url_template(&template, argument.value)
-            }
-        });
+    let target_value = web_target.as_deref().map(str::to_owned).unwrap_or_else(|| {
+        if is_builtin_web {
+            fallback_web_url(argument.value)
+        } else {
+            expand_url_template(&template, argument.value)
+        }
+    });
     let target = PathBuf::from(target_value);
     let location = if is_builtin_web {
-        crate::utils::i18n::tr(query.language, "Visit the internet with your default browser").into()
+        crate::utils::i18n::tr(
+            query.language,
+            "Visit the internet with your default browser",
+        )
+        .into()
     } else {
-        configured_description(query, shortcut.expect("configured shortcut must be present"))
+        configured_description(
+            query,
+            shortcut.expect("configured shortcut must be present"),
+        )
     };
     let display_argument = web_target
         .clone()
@@ -225,7 +230,10 @@ mod tests {
     fn preview_uses_the_default_browser_icon() {
         let preview = builtin(query("w ")).expect("web preview");
         assert_eq!(preview.title, "Open website");
-        assert_eq!(preview.location, "Visit the internet with your default browser");
+        assert_eq!(
+            preview.location,
+            "Visit the internet with your default browser"
+        );
         assert!(preview.actions.is_empty());
         assert!(matches!(preview.icon, Some(IconSpec::DefaultOpen(_))));
     }

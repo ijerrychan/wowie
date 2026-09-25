@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use reqwest::blocking::{Client, RequestBuilder};
 use std::{sync::OnceLock, time::Duration};
 
+const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
+
 static CLIENT: OnceLock<Client> = OnceLock::new();
 
 fn client() -> Result<&'static Client> {
@@ -23,14 +25,7 @@ fn request(url: &str, timeout: Duration) -> Result<RequestBuilder> {
 }
 
 pub fn get_json<T: for<'de> serde::Deserialize<'de>>(url: &str) -> Result<T> {
-    let response = request(url, Duration::from_secs(4))?
-        .send()
-        .with_context(|| format!("request {url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        anyhow::bail!("HTTP request failed for {url} ({status})");
-    }
-    response.json().context("decode HTTP JSON")
+    send_json(request(url, Duration::from_secs(4))?, url)
 }
 
 /// Submit a small URL-encoded form through the shared bounded HTTP client.
@@ -40,17 +35,7 @@ pub fn post_form_json<T: for<'de> serde::Deserialize<'de>>(
     url: &str,
     form: &std::collections::BTreeMap<String, String>,
 ) -> Result<T> {
-    let response = client()?
-        .post(url)
-        .timeout(Duration::from_secs(4))
-        .form(form)
-        .send()
-        .with_context(|| format!("request {url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        anyhow::bail!("HTTP request failed for {url} ({status})");
-    }
-    response.json().context("decode HTTP JSON")
+    send_json(client()?.post(url).form(form), url)
 }
 
 /// Submit a JSON object through the shared bounded HTTP client.
@@ -63,34 +48,31 @@ pub fn post_json_with_headers<T: for<'de> serde::Deserialize<'de>>(
     for (name, value) in headers {
         request = request.header(name, value);
     }
-    let response = request
-        .json(body)
-        .send()
-        .with_context(|| format!("request {url}"))?;
+    send_json(request.json(body), url)
+}
+
+fn send_json<T: for<'de> serde::Deserialize<'de>>(request: RequestBuilder, url: &str) -> Result<T> {
+    let bytes = send_bytes(request, url, MAX_JSON_BYTES)?;
+    serde_json::from_slice(&bytes).context("decode HTTP JSON")
+}
+
+fn send_bytes(request: RequestBuilder, url: &str, max_bytes: usize) -> Result<Vec<u8>> {
+    let response = request.send().with_context(|| format!("request {url}"))?;
     let status = response.status();
     if !status.is_success() {
         anyhow::bail!("HTTP request failed for {url} ({status})");
     }
-    response.json().context("decode HTTP JSON")
-}
-
-pub fn get_bytes(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
-    let response = request(url, Duration::from_secs(2))?
-        .send()
-        .with_context(|| format!("request {url}"))?
-        .error_for_status()
-        .with_context(|| format!("HTTP request failed for {url}"))?;
     if response
         .content_length()
         .is_some_and(|length| length > max_bytes as u64)
     {
         anyhow::bail!("HTTP response exceeds the {max_bytes}-byte limit");
     }
-    let bytes = response.bytes().context("read HTTP response")?;
-    if bytes.len() > max_bytes {
-        anyhow::bail!("HTTP response exceeds the {max_bytes}-byte limit");
-    }
-    Ok(bytes.to_vec())
+    crate::utils::read_bounded(response, max_bytes).context("read HTTP response")
+}
+
+pub fn get_bytes(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
+    send_bytes(request(url, Duration::from_secs(2))?, url, max_bytes)
 }
 
 /// Fetch a bounded UTF-8 response through the shared HTTP client.

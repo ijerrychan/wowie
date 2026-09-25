@@ -180,10 +180,6 @@ pub trait SearchEngineProvider: Send + Sync {
         None
     }
 
-    fn preferred_view_mode(&self, _session: &SearchEngineSession) -> &'static str {
-        "list"
-    }
-
     fn replace_config(
         &mut self,
         _shortcuts: Vec<ShortcutConfig>,
@@ -265,6 +261,7 @@ impl ProviderRegistry {
         registry
     }
 
+    #[cfg(test)]
     pub fn default_providers(plugins: PluginManager, shortcuts: Vec<ShortcutConfig>) -> Self {
         Self::default_providers_with_keywords(plugins, shortcuts, ShortcutKeywords::default())
     }
@@ -426,24 +423,6 @@ impl ProviderRegistry {
         DEFAULT_SEARCH_DEBOUNCE
     }
 
-    pub fn preferred_view_mode(&self, context: &SearchContext) -> &'static str {
-        context
-            .session()
-            .map(|session| {
-                self.engines
-                    .iter()
-                    .find_map(|engine| {
-                        engine.lock().ok().and_then(|engine| {
-                            engine
-                                .owns_session(session)
-                                .then(|| engine.preferred_view_mode(session))
-                        })
-                    })
-                    .unwrap_or("list")
-            })
-            .unwrap_or("list")
-    }
-
     pub fn search_context(&self, query: &str) -> SearchContext {
         self.engines
             .iter()
@@ -482,10 +461,6 @@ impl ProviderRegistry {
             return false;
         }
         self.shortcut_hint(&item.id).is_some()
-    }
-
-    pub fn replace_shortcuts(&self, shortcuts: Vec<ShortcutConfig>) {
-        self.replace_shortcut_config(shortcuts, ShortcutKeywords::default());
     }
 
     pub fn replace_shortcut_config(

@@ -20,7 +20,9 @@ use crate::{
 };
 use std::path::PathBuf;
 
+#[cfg(test)]
 pub(super) const COMMAND_PREFIX: &str = "> ";
+#[cfg(test)]
 pub(super) const WEB_PREFIX: &str = "w ";
 
 /// The common query state shared by every shortcut implementation.
@@ -173,17 +175,18 @@ pub(super) fn effective_type<'a>(
     }
 }
 
-pub(super) fn configured_description(query: ShortcutQuery<'_>, shortcut: &ShortcutConfig) -> String {
+pub(super) fn configured_description(
+    query: ShortcutQuery<'_>,
+    shortcut: &ShortcutConfig,
+) -> String {
     if shortcut.description.is_empty() {
         crate::utils::i18n::tr(query.language, "Custom shortcut").into()
     } else {
-        expand_raw_template(&shortcut.description, query.resolve_argument(&shortcut.prefix).value)
+        expand_raw_template(
+            &shortcut.description,
+            query.resolve_argument(&shortcut.prefix).value,
+        )
     }
-}
-
-/// Dynamic results generated from the current query rather than an index.
-pub fn results(query: &str, configured: &[ShortcutConfig], language: &str) -> Vec<SearchResult> {
-    results_with_keywords(query, configured, language, &ShortcutKeywords::default())
 }
 
 pub fn results_with_keywords(
@@ -213,9 +216,7 @@ pub fn results_with_keywords(
         let result = match effective_type(shortcut, keywords) {
             "url" => web::configured_with_builtin(query, shortcut, index, &web_search_prefix),
             "application" => application::configured(query, shortcut, index),
-            "command" => {
-                command::configured_with_builtin(query, shortcut, index, &command_prefix)
-            }
+            "command" => command::configured_with_builtin(query, shortcut, index, &command_prefix),
             _ => None,
         };
         if let Some(result) = result {
@@ -228,9 +229,10 @@ pub fn results_with_keywords(
 
 /// Resolve the owning shortcut page without constructing a result list.
 ///
-/// This is deliberately separate from `results`: a provider may expose a
+/// This is deliberately separate from `results_with_keywords`: a provider may expose a
 /// session even when its current query has no result yet (for example, an
 /// empty provider search or a form-like panel).
+#[cfg(test)]
 pub fn session(
     query: &str,
     configured: &[ShortcutConfig],
@@ -315,14 +317,12 @@ pub struct ShortcutProvider {
 }
 
 impl ShortcutProvider {
+    #[cfg(test)]
     pub fn new(configured: Vec<ShortcutConfig>) -> Self {
         Self::new_with_keywords(configured, ShortcutKeywords::default())
     }
 
-    pub fn new_with_keywords(
-        configured: Vec<ShortcutConfig>,
-        keywords: ShortcutKeywords,
-    ) -> Self {
+    pub fn new_with_keywords(configured: Vec<ShortcutConfig>, keywords: ShortcutKeywords) -> Self {
         Self {
             configured,
             keywords,
@@ -629,7 +629,10 @@ mod tests {
             web_rows[0].launch_target,
             std::path::PathBuf::from("https://example.com/")
         );
-        assert_eq!(web_rows[1].launch_target, std::path::PathBuf::from("https://example.org/"));
+        assert_eq!(
+            web_rows[1].launch_target,
+            std::path::PathBuf::from("https://example.org/")
+        );
     }
 
     #[test]

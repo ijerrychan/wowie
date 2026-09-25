@@ -24,7 +24,10 @@ pub(super) fn create_window(config: &config::Config) -> Result<Launcher> {
 }
 
 pub(super) fn save_window_size(window: &Launcher) {
-    let (mut config, _) = config::Config::load();
+    let Ok(mut config) = config::Config::load_for_update() else {
+        eprintln!("could not save window size: configuration is unreadable or invalid");
+        return;
+    };
     let native_window = window.window();
     let logical_size = native_window
         .size()

@@ -76,23 +76,39 @@ impl Ranker {
         }
     }
 
+    #[cfg(test)]
     pub fn score(&self, item_id: &str, query: &str) -> i32 {
-        let Ok(history) = self.history.lock() else {
-            return 0;
-        };
-        let Some(record) = history.items.get(item_id) else {
-            return 0;
-        };
+        self.scores([item_id], query)[0]
+    }
+
+    /// Score one candidate batch against a consistent history and timestamp.
+    pub(crate) fn scores<'a>(
+        &self,
+        item_ids: impl IntoIterator<Item = &'a str>,
+        query: &str,
+    ) -> Vec<i32> {
+        let history = self.history.lock().ok();
         let now = unix_seconds();
-        let global = frecency(record.launches, record.last_used, now);
         let query = normalize_query(query);
-        let query_score = record
-            .query_launches
-            .get(&query)
-            .zip(record.query_last_used.get(&query))
-            .map(|(count, last_used)| frecency(*count, *last_used, now) * 2)
-            .unwrap_or(0);
-        (global + query_score).min(MAX_BEHAVIOR_SCORE)
+        item_ids
+            .into_iter()
+            .map(|item_id| {
+                let Some(record) = history
+                    .as_ref()
+                    .and_then(|history| history.items.get(item_id))
+                else {
+                    return 0;
+                };
+                let global = frecency(record.launches, record.last_used, now);
+                let query_score = record
+                    .query_launches
+                    .get(&query)
+                    .zip(record.query_last_used.get(&query))
+                    .map(|(count, last_used)| frecency(*count, *last_used, now) * 2)
+                    .unwrap_or(0);
+                (global + query_score).min(MAX_BEHAVIOR_SCORE)
+            })
+            .collect()
     }
 
     pub fn is_favorite(&self, item_id: &str) -> bool {
@@ -184,12 +200,8 @@ impl Ranker {
         record.launches = record.launches.saturating_add(1);
         record.last_used = now;
         if !query.is_empty() {
-            *record.query_launches.entry(query.clone()).or_default() = record
-                .query_launches
-                .get(&query)
-                .copied()
-                .unwrap_or(0)
-                .saturating_add(1);
+            let launches = record.query_launches.entry(query.clone()).or_default();
+            *launches = launches.saturating_add(1);
             record.query_last_used.insert(query, now);
         }
         if let Some((engine_id, limit)) = engine {
@@ -360,6 +372,19 @@ fn frecency(count: u32, last_used: u64, now: u64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_scores_preserve_candidate_order_and_query_normalization() {
+        let ranker = Ranker::in_memory();
+        ranker.record_success("first", "Calc");
+        ranker.record_success("second", "other");
+        let scores = ranker.scores(["second", "missing", "first", "first"], "  CALC ");
+        assert_eq!(scores[1], 0);
+        assert!(scores[2] > scores[0]);
+        assert_eq!(scores[2], scores[3]);
+        assert_eq!(scores[2], ranker.score("first", "calc"));
+        assert!(ranker.scores([], "calc").is_empty());
+    }
 
     #[test]
     fn successful_use_increases_query_score() {

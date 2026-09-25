@@ -1,18 +1,18 @@
+#[cfg(test)]
+use super::COMMAND_PREFIX;
 use super::{
-    build_result, configured_description, expand_raw_template, join_command_and_arguments, result_id, ShortcutQuery,
-    ShortcutSpec, COMMAND_PREFIX,
+    build_result, configured_description, expand_raw_template, join_command_and_arguments,
+    result_id, ShortcutQuery, ShortcutSpec,
 };
 use crate::{config::ShortcutConfig, platform, result::SearchResult};
 
 /// Render the built-in `> command` shortcut.
+#[cfg(test)]
 pub(super) fn builtin(query: ShortcutQuery<'_>) -> Option<SearchResult> {
     builtin_with_prefix(query, COMMAND_PREFIX)
 }
 
-pub(super) fn builtin_with_prefix(
-    query: ShortcutQuery<'_>,
-    prefix: &str,
-) -> Option<SearchResult> {
+pub(super) fn builtin_with_prefix(query: ShortcutQuery<'_>, prefix: &str) -> Option<SearchResult> {
     let argument = query.resolve_argument(prefix);
     let shell = platform::command_shell();
     Some(build_result(
@@ -39,6 +39,7 @@ pub(super) fn builtin_with_prefix(
 
 /// Render a configured command shortcut. A configured `>` shortcut retains
 /// the built-in behavior for backwards compatibility.
+#[cfg(test)]
 pub(super) fn configured(
     query: ShortcutQuery<'_>,
     shortcut: &ShortcutConfig,

@@ -183,7 +183,9 @@ pub(super) fn request_icons(
     let icon_service = icon_service.clone();
     let weak = weak.clone();
     let query_generation = Arc::clone(query_generation);
-    std::thread::spawn(move || {
+    let cancellation = crate::utils::background::CancellationToken::new();
+    let task_cancellation = cancellation.clone();
+    if !crate::utils::background::spawn_cancellable(task_cancellation, move || {
         let mut resolved = Vec::with_capacity(pending.len());
         for (index, item) in pending {
             if query_generation.load(Ordering::Acquire) != query_id {
@@ -213,7 +215,9 @@ pub(super) fn request_icons(
                 model.set_row_data(index, row);
             }
         });
-    });
+    }) {
+        cancellation.cancel();
+    }
 }
 
 pub(super) fn icon_to_image(data: &crate::platform::IconData) -> slint::Image {

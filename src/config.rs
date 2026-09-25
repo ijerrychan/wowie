@@ -11,15 +11,12 @@ const DEFAULT_RENDERER: &str = "femtovg";
 const DEFAULT_WINDOW_WIDTH: u32 = 720;
 const DEFAULT_WINDOW_HEIGHT: u32 = 550;
 const DEFAULT_LIST_ITEM_HEIGHT: u32 = 50;
-const DEFAULT_GRID_ITEM_SIZE: u32 = 124;
 const DEFAULT_FONT_SIZE: u32 = 14;
 const MIN_WINDOW_WIDTH: u32 = 420;
 pub(crate) const MIN_WINDOW_HEIGHT: u32 = 350;
 const MAX_WINDOW_WIDTH: u32 = 1200;
 const MIN_LIST_ITEM_HEIGHT: u32 = 36;
 const MAX_LIST_ITEM_HEIGHT: u32 = 96;
-const MIN_GRID_ITEM_SIZE: u32 = 96;
-const MAX_GRID_ITEM_SIZE: u32 = 240;
 const MIN_FONT_SIZE: u32 = 11;
 const MAX_FONT_SIZE: u32 = 20;
 const DEFAULT_THEME: &str = "system";
@@ -33,7 +30,6 @@ pub struct Config {
     pub window_width: u32,
     pub window_height: u32,
     pub list_item_height: u32,
-    pub grid_item_size: u32,
     pub font_family: String,
     pub font_size: u32,
     pub theme: String,
@@ -187,7 +183,6 @@ impl Default for Config {
             window_width: DEFAULT_WINDOW_WIDTH,
             window_height: DEFAULT_WINDOW_HEIGHT,
             list_item_height: DEFAULT_LIST_ITEM_HEIGHT,
-            grid_item_size: DEFAULT_GRID_ITEM_SIZE,
             font_family: String::new(),
             font_size: DEFAULT_FONT_SIZE,
             theme: DEFAULT_THEME.into(),
@@ -222,22 +217,35 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> (Self, bool) {
-        let path = config_path();
-        let Some(text) = fs::read_to_string(&path).ok() else {
-            return (Self::default(), true);
-        };
-        let mut config: Self = match serde_json::from_str(&text) {
-            Ok(config) => config,
+        match Self::load_for_update() {
+            Ok(config) => (config, true),
             Err(error) => {
-                eprintln!(
-                    "could not read configuration {}: {error}; using defaults",
-                    path.display()
-                );
-                return (Self::default(), false);
+                eprintln!("could not load configuration: {error:#}; using defaults");
+                (Self::default(), false)
+            }
+        }
+    }
+
+    /// Loading for an edit must fail on unreadable or invalid existing data,
+    /// so an unrelated setting change cannot overwrite the user's file.
+    pub fn load_for_update() -> anyhow::Result<Self> {
+        Self::load_from_path(&config_path())
+    }
+
+    fn load_from_path(path: &std::path::Path) -> anyhow::Result<Self> {
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => {
+                return Err(error).context(format!("read configuration {}", path.display()))
             }
         };
+        let mut config: Self = serde_json::from_str(&text)
+            .context(format!("parse configuration {}", path.display()))?;
         config.normalize();
-        (config, true)
+        Ok(config)
     }
 
     fn normalize(&mut self) {
@@ -258,9 +266,6 @@ impl Config {
         self.list_item_height = self
             .list_item_height
             .clamp(MIN_LIST_ITEM_HEIGHT, MAX_LIST_ITEM_HEIGHT);
-        self.grid_item_size = self
-            .grid_item_size
-            .clamp(MIN_GRID_ITEM_SIZE, MAX_GRID_ITEM_SIZE);
         self.font_family = self.font_family.trim().to_owned();
         self.font_size = self.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         if self.theme != "system" && self.theme != "light" && self.theme != "dark" {
@@ -379,12 +384,15 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = config_path();
+        self.save_to_path(&config_path())
+    }
+
+    fn save_to_path(&self, path: &std::path::Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).context("create config directory")?;
         }
         let json = serde_json::to_string_pretty(self).context("serialize config")?;
-        fs::write(path, format!("{json}\n")).context("write config")
+        crate::utils::atomic_write(path, format!("{json}\n").as_bytes()).context("write config")
     }
 }
 
@@ -466,6 +474,37 @@ pub fn watch_changes() -> std::sync::mpsc::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_existing_config_is_preserved_and_valid_writes_replace_it() {
+        let directory = std::env::temp_dir().join(format!(
+            "wowie-config-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = directory.join("config.json");
+        assert_eq!(
+            Config::load_from_path(&path).unwrap().hotkey,
+            DEFAULT_HOTKEY
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(&path, b"{invalid").unwrap();
+        assert!(Config::load_from_path(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"{invalid");
+
+        let config = Config {
+            hotkey: "Ctrl+Space".into(),
+            ..Config::default()
+        };
+        config.save_to_path(&path).unwrap();
+        assert_eq!(Config::load_from_path(&path).unwrap().hotkey, "Ctrl+Space");
+        assert!(!directory.join("config.json.tmp").exists());
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
     #[test]
     fn defaults_are_stable() {
         let config = Config::default();
@@ -473,7 +512,6 @@ mod tests {
         assert_eq!(config.renderer, "femtovg");
         assert_eq!(config.window_height, DEFAULT_WINDOW_HEIGHT);
         assert_eq!(config.list_item_height, DEFAULT_LIST_ITEM_HEIGHT);
-        assert_eq!(config.grid_item_size, DEFAULT_GRID_ITEM_SIZE);
         assert!(config.show_on_startup);
         assert!(config.hide_on_focus_loss);
         assert!(!config.show_advanced_details);
@@ -509,14 +547,12 @@ mod tests {
     fn item_sizes_are_normalized_to_safe_layout_ranges() {
         let mut config = Config {
             list_item_height: 0,
-            grid_item_size: u32::MAX,
             ..Config::default()
         };
 
         config.normalize();
 
         assert_eq!(config.list_item_height, MIN_LIST_ITEM_HEIGHT);
-        assert_eq!(config.grid_item_size, MAX_GRID_ITEM_SIZE);
     }
 
     #[test]
@@ -534,7 +570,10 @@ mod tests {
         config.normalize();
         let settings = config.plugins.get("github").unwrap();
         assert!(!settings.enabled);
-        assert_eq!(settings.weight, 1000);
+        assert_eq!(settings.weight, 0);
+        assert_eq!(config.plugin_order, ["github"]);
+        config.normalize();
+        assert_eq!(config.plugin_order, ["github"]);
     }
 
     #[test]

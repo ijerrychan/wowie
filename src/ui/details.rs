@@ -4,9 +4,9 @@ use super::{
 };
 use crate::{
     icon_service::IconService,
-    result::{DetailBlock as ResultDetailBlock, DetailView, SearchResult},
+    result::{DetailBlock as ResultDetailBlock, DetailView, IconSpec, SearchResult},
 };
-use slint::{ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     rc::Rc,
     sync::{
@@ -66,13 +66,16 @@ pub(super) fn request_dynamic_detail_with_id(
             actions: Vec::new(),
             preferred_width: None,
             scrollable: false,
-            fullscreen: false,
         };
         set_detail_view(&window, Some(&loading), &icon_service);
         window.set_detail_panel_visible(true);
     }
 
-    std::thread::spawn(move || {
+    let task_cancellation = crate::utils::background::CancellationToken::new();
+    crate::utils::background::spawn_cancellable(task_cancellation, move || {
+        if generation.load(Ordering::Acquire) != request_id {
+            return;
+        }
         let result = provider.load(&item, &language);
         let _ = slint::invoke_from_event_loop(move || {
             if generation.load(Ordering::Acquire) != request_id {
@@ -102,16 +105,18 @@ pub(super) fn set_detail_view(
     view: Option<&DetailView>,
     icon_service: &IconService,
 ) {
+    let generation = window.get_detail_content_generation().wrapping_add(1);
+    window.set_detail_content_generation(generation);
     if let Some(view) = view {
         window.set_detail_title(view.title.clone().into());
         window.set_detail_subtitle(view.subtitle.clone().into());
         window.set_detail_source(view.source.clone().into());
         window.set_detail_panel_preferred_width(view.preferred_width.unwrap_or(0));
         window.set_detail_panel_scrollable(view.scrollable);
-        window.set_detail_panel_fullscreen(view.fullscreen);
         window.set_detail_content_height(detail_content_height(view) as f32);
-        window.set_detail_blocks(detail_blocks_model(view, icon_service));
-        window.set_detail_actions(detail_actions_model(view, icon_service));
+        window.set_detail_blocks(detail_blocks_model(view));
+        window.set_detail_actions(detail_actions_model(view));
+        request_detail_icons(window, view, icon_service, generation);
     } else {
         window.set_detail_title(String::new().into());
         window.set_detail_subtitle(String::new().into());
@@ -119,7 +124,6 @@ pub(super) fn set_detail_view(
         window.set_detail_panel_preferred_width(0);
         window.set_detail_content_height(0.0);
         window.set_detail_panel_scrollable(false);
-        window.set_detail_panel_fullscreen(false);
         window.set_detail_blocks(ModelRc::from(Rc::new(VecModel::from(
             Vec::<DetailBlock>::new(),
         ))));
@@ -129,7 +133,7 @@ pub(super) fn set_detail_view(
     }
 }
 
-fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc<DetailBlock> {
+fn detail_blocks_model(view: &DetailView) -> ModelRc<DetailBlock> {
     let blocks = view
         .blocks
         .iter()
@@ -160,17 +164,13 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 icon: slint::Image::default(),
                 height: detail_block_height(block),
             },
-            ResultDetailBlock::Icon { glyph, color, icon } => DetailBlock {
+            ResultDetailBlock::Icon { glyph, color, .. } => DetailBlock {
                 kind: "icon".into(),
                 label: String::new().into(),
                 value: glyph.clone().into(),
                 color: color.clone().into(),
                 secondary: String::new().into(),
-                icon: icon
-                    .as_ref()
-                    .and_then(|icon| icon_service.resolve_spec_at(icon, 40))
-                    .map(|icon| icon_to_image(icon.as_ref()))
-                    .unwrap_or_default(),
+                icon: slint::Image::default(),
                 height: detail_block_height(block),
             },
             ResultDetailBlock::Weather { value } => DetailBlock {
@@ -206,8 +206,7 @@ fn detail_blocks_model(view: &DetailView, icon_service: &IconService) -> ModelRc
                 value: source.clone().into(),
                 color: String::new().into(),
                 secondary: alt.clone().into(),
-                icon: slint::Image::load_from_path(std::path::Path::new(source))
-                    .unwrap_or_default(),
+                icon: slint::Image::default(),
                 height: detail_block_height(block),
             },
             ResultDetailBlock::Code { language, code } => DetailBlock {
@@ -309,10 +308,7 @@ fn detail_content_height(view: &DetailView) -> i32 {
         + view.blocks.len().saturating_sub(1) as i32 * 6
 }
 
-fn detail_actions_model(
-    view: &DetailView,
-    icon_service: &IconService,
-) -> ModelRc<ContextActionRow> {
+fn detail_actions_model(view: &DetailView) -> ModelRc<ContextActionRow> {
     let actions = view
         .actions
         .iter()
@@ -322,13 +318,7 @@ fn detail_actions_model(
             title: action.title.clone().into(),
             subtitle: String::new().into(),
             kind: "detail".into(),
-            icon: action
-                .icon
-                .as_ref()
-                .filter(|icon| static_icon_kind(Some(icon)).is_empty())
-                .and_then(|icon| icon_service.resolve_spec_at(icon, 16))
-                .map(|icon| icon_to_image(icon.as_ref()))
-                .unwrap_or_default(),
+            icon: slint::Image::default(),
             icon_kind: static_icon_kind(action.icon.as_ref()).into(),
             shortcut: String::new().into(),
         })
@@ -336,45 +326,168 @@ fn detail_actions_model(
     ModelRc::from(Rc::new(VecModel::from(actions)))
 }
 
-#[cfg(any())]
-fn weather_detail_view(data: &crate::details::weather::WeatherData, language: &str) -> DetailView {
-    DetailView {
-        title: crate::utils::i18n::tr(language, "Weather").into(),
-        subtitle: data.location.clone(),
-        source: format!(
-            "{}: Open-Meteo · {}",
-            crate::utils::i18n::tr(language, "Source"),
-            data.source
-        ),
-        actions: Vec::new(),
-        blocks: vec![
-            ResultDetailBlock::Weather {
-                value: match data.weather_code {
-                    0 => "clear",
-                    71..=77 | 85..=86 => "snow",
-                    51..=67 | 80..=82 => "rain",
-                    95..=99 => "storm",
-                    _ => "cloud",
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DetailIconTarget {
+    Block(usize),
+    Action(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DetailMediaSource {
+    Icon(IconSpec, u32),
+    Image(std::path::PathBuf),
+}
+
+fn detail_icon_requests(view: &DetailView) -> Vec<(DetailIconTarget, DetailMediaSource)> {
+    let blocks = view
+        .blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| match block {
+            ResultDetailBlock::Icon {
+                icon: Some(icon), ..
+            } => Some((
+                DetailIconTarget::Block(index),
+                DetailMediaSource::Icon(icon.clone(), 40),
+            )),
+            ResultDetailBlock::Image { source, .. } => Some((
+                DetailIconTarget::Block(index),
+                DetailMediaSource::Image(source.into()),
+            )),
+            _ => None,
+        });
+    let actions = view
+        .actions
+        .iter()
+        .take(3)
+        .enumerate()
+        .filter_map(|(index, action)| {
+            let icon = action.icon.as_ref()?;
+            static_icon_kind(Some(icon)).is_empty().then(|| {
+                (
+                    DetailIconTarget::Action(index),
+                    DetailMediaSource::Icon(icon.clone(), 16),
+                )
+            })
+        });
+    blocks.chain(actions).collect()
+}
+
+fn request_detail_icons(
+    window: &Launcher,
+    view: &DetailView,
+    service: &IconService,
+    generation: i32,
+) {
+    let pending = detail_icon_requests(view);
+    if pending.is_empty() {
+        return;
+    }
+    let weak = window.as_weak();
+    let service = service.clone();
+    crate::utils::background::spawn(move || {
+        let resolved = pending
+            .into_iter()
+            .filter_map(|(target, source)| {
+                let image = match source {
+                    DetailMediaSource::Icon(icon, size) => service.resolve_spec_at(&icon, size),
+                    DetailMediaSource::Image(path) => service.resolve_detail_image(&path),
+                };
+                image.map(|image| (target, image))
+            })
+            .collect::<Vec<_>>();
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            if window.get_detail_content_generation() != generation {
+                return;
+            }
+            for (target, icon) in resolved {
+                match target {
+                    DetailIconTarget::Block(index) => {
+                        let model = window.get_detail_blocks();
+                        if let Some(mut row) = model.row_data(index) {
+                            row.icon = icon_to_image(icon.as_ref());
+                            model.set_row_data(index, row);
+                        }
+                    }
+                    DetailIconTarget::Action(index) => {
+                        let model = window.get_detail_actions();
+                        if let Some(mut row) = model.row_data(index) {
+                            row.icon = icon_to_image(icon.as_ref());
+                            model.set_row_data(index, row);
+                        }
+                    }
                 }
-                .into(),
-            },
-            ResultDetailBlock::Text {
-                text: format!("{}  {}", data.temperature, data.condition),
-                color: "primary".into(),
-            },
-            ResultDetailBlock::Separator,
-            ResultDetailBlock::Metric {
-                label: crate::utils::i18n::tr(language, "Humidity").into(),
-                value: data.humidity.clone(),
-                color: "secondary".into(),
-            },
-            ResultDetailBlock::Metric {
-                label: crate::utils::i18n::tr(language, "Wind").into(),
-                value: data.wind.clone(),
-                color: "secondary".into(),
-            },
-        ],
-        preferred_width: None,
-        scrollable: false,
+            }
+        });
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::result::DetailAction;
+
+    #[test]
+    fn detail_models_defer_remote_icons_and_only_request_visible_actions() {
+        let remote = IconSpec::Remote("https://example.invalid/icon.png".into());
+        let action = |id: &str, icon| DetailAction {
+            id: id.into(),
+            title: id.into(),
+            icon,
+        };
+        let view = DetailView {
+            title: "Preview".into(),
+            subtitle: String::new(),
+            source: String::new(),
+            blocks: vec![
+                ResultDetailBlock::Separator,
+                ResultDetailBlock::Icon {
+                    glyph: String::new(),
+                    color: String::new(),
+                    icon: Some(remote.clone()),
+                },
+                ResultDetailBlock::Image {
+                    source: "preview.png".into(),
+                    alt: "Preview".into(),
+                },
+            ],
+            actions: vec![
+                action("static", Some(IconSpec::Calculator)),
+                action("remote", Some(remote.clone())),
+                action("plain", None),
+                action("hidden", Some(remote.clone())),
+            ],
+            preferred_width: None,
+            scrollable: false,
+        };
+        // Building models must not require networking or icon decoding.
+        let blocks = detail_blocks_model(&view);
+        let actions = detail_actions_model(&view);
+        assert_eq!(blocks.row_count(), 3);
+        assert_eq!(actions.row_count(), 3);
+        assert_eq!(
+            actions.row_data(0).unwrap().icon_kind.as_str(),
+            "calculator"
+        );
+        assert_eq!(
+            detail_icon_requests(&view),
+            vec![
+                (
+                    DetailIconTarget::Block(1),
+                    DetailMediaSource::Icon(remote.clone(), 40)
+                ),
+                (
+                    DetailIconTarget::Block(2),
+                    DetailMediaSource::Image("preview.png".into())
+                ),
+                (
+                    DetailIconTarget::Action(1),
+                    DetailMediaSource::Icon(remote, 16)
+                ),
+            ]
+        );
     }
 }

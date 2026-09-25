@@ -15,6 +15,8 @@ use std::{
 // requested by their UI surface.
 const MAX_ICON_DIMENSION: u32 = 128;
 const MAX_EXTERNAL_ICON_DIMENSION: u32 = 64;
+const MAX_DETAIL_IMAGE_DIMENSION: u32 = 256;
+const MAX_DECODED_PIXELS: u64 = 16 * 1024 * 1024;
 const MAX_ICON_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_REMOTE_ICON_BYTES: usize = 1024 * 1024;
 const MAX_CACHED_ICON_BYTES: usize = 2 * 1024 * 1024;
@@ -29,35 +31,75 @@ pub struct IconService {
     in_flight: Arc<Mutex<HashMap<String, Arc<InFlight>>>>,
 }
 
-#[derive(Default)]
-struct IconCache {
-    entries: HashMap<String, CachedIcon>,
-    // The front is the least recently used key.
+type IconCache = ByteCache<IconData, MAX_CACHED_ICON_BYTES>;
+type SourceCache = ByteCache<Vec<u8>, MAX_CACHED_SOURCE_BYTES>;
+
+struct ByteCache<T, const LIMIT: usize> {
+    entries: HashMap<String, (Arc<T>, usize)>,
     lru: VecDeque<String>,
     bytes: usize,
 }
 
-struct CachedIcon {
-    icon: Arc<IconData>,
-    bytes: usize,
+impl<T, const LIMIT: usize> Default for ByteCache<T, LIMIT> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            lru: VecDeque::new(),
+            bytes: 0,
+        }
+    }
 }
 
-#[derive(Default)]
-struct SourceCache {
-    entries: HashMap<String, CachedSource>,
-    lru: VecDeque<String>,
-    bytes: usize,
+trait CacheSize {
+    fn cache_bytes(&self) -> usize;
 }
 
-struct CachedSource {
-    bytes: Arc<Vec<u8>>,
-    size: usize,
+impl CacheSize for IconData {
+    fn cache_bytes(&self) -> usize {
+        self.rgba.len()
+    }
+}
+
+impl CacheSize for Vec<u8> {
+    fn cache_bytes(&self) -> usize {
+        self.len()
+    }
 }
 
 #[derive(Default)]
 struct InFlight {
     result: Mutex<Option<Option<Arc<IconData>>>>,
     ready: Condvar,
+}
+
+impl InFlight {
+    fn wait(&self) -> Option<Arc<IconData>> {
+        let mut result = self.result.lock().ok()?;
+        while result.is_none() {
+            result = self.ready.wait(result).ok()?;
+        }
+        result.as_ref().cloned().flatten()
+    }
+}
+
+/// Always release waiters, including when a decoder unwinds.
+struct FlightOwner<'a> {
+    service: &'a IconService,
+    key: &'a str,
+    request: Arc<InFlight>,
+    result: Option<Arc<IconData>>,
+}
+
+impl Drop for FlightOwner<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.request.result.lock() {
+            *state = Some(self.result.clone());
+            self.request.ready.notify_all();
+        }
+        if let Ok(mut requests) = self.service.in_flight.lock() {
+            requests.remove(self.key);
+        }
+    }
 }
 
 impl IconService {
@@ -87,6 +129,24 @@ impl IconService {
         self.resolve_cached(key, || resolve_spec_with_cache(spec, size, &sources))
     }
 
+    /// Resolve a plugin-owned detail image with its own display size. Keep
+    /// filesystem access and image decoding off the UI thread.
+    pub fn resolve_detail_image(&self, path: &Path) -> Option<Arc<IconData>> {
+        let key = format!("detail-image:{}", path_cache_key(path));
+        let sources = Arc::clone(&self.sources);
+        self.resolve_cached(key, || {
+            let bytes = read_icon_bytes(path, &sources)?;
+            if path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+            {
+                load_svg_bytes(&bytes, MAX_DETAIL_IMAGE_DIMENSION)
+            } else {
+                decode_image_at(&bytes, MAX_DETAIL_IMAGE_DIMENSION)
+            }
+        })
+    }
+
     fn resolve_cached<F>(&self, key: String, resolve: F) -> Option<Arc<IconData>>
     where
         F: FnOnce() -> Option<IconData>,
@@ -110,103 +170,57 @@ impl IconService {
         };
 
         if !is_owner {
-            let mut result = in_flight.result.lock().ok()?;
-            while result.is_none() {
-                result = in_flight.ready.wait(result).ok()?;
-            }
-            return result.as_ref().cloned().flatten();
+            return in_flight.wait();
         }
+        let mut owner = FlightOwner {
+            service: self,
+            key: &key,
+            request: in_flight,
+            result: None,
+        };
 
-        let result = resolve().map(Arc::new);
+        let cached = self.cache.lock().ok().and_then(|mut cache| cache.get(&key));
+        let result = cached.or_else(|| resolve().map(Arc::new));
         if let Ok(mut cache) = self.cache.lock() {
             if let Some(icon) = result.as_ref() {
                 cache.insert(key.clone(), Arc::clone(icon));
             }
         }
-        if is_owner {
-            if let Ok(mut requests) = self.in_flight.lock() {
-                requests.remove(&key);
-            }
-            if let Ok(mut state) = in_flight.result.lock() {
-                *state = Some(result.clone());
-                in_flight.ready.notify_all();
-            }
-        }
+        owner.result = result.clone();
         result
     }
 }
 
-impl IconCache {
-    fn get(&mut self, key: &str) -> Option<Arc<IconData>> {
-        let icon = self.entries.get(key).map(|entry| Arc::clone(&entry.icon))?;
-        self.touch(key);
-        Some(icon)
+impl<T: CacheSize, const LIMIT: usize> ByteCache<T, LIMIT> {
+    fn get(&mut self, key: &str) -> Option<Arc<T>> {
+        let value = Arc::clone(&self.entries.get(key)?.0);
+        self.lru.retain(|existing| existing != key);
+        self.lru.push_back(key.to_owned());
+        Some(value)
     }
 
-    fn insert(&mut self, key: String, icon: Arc<IconData>) {
-        if let Some(previous) = self.entries.remove(&key) {
-            self.bytes = self.bytes.saturating_sub(previous.bytes);
+    fn insert(&mut self, key: String, value: Arc<T>) {
+        if let Some((_, size)) = self.entries.remove(&key) {
+            self.bytes -= size;
             self.lru.retain(|existing| existing != &key);
         }
-
-        let bytes = icon_bytes(&icon);
-        self.bytes += bytes;
-        self.lru.push_back(key.clone());
-        self.entries.insert(key, CachedIcon { icon, bytes });
-
-        while self.bytes > MAX_CACHED_ICON_BYTES {
+        let size = value.cache_bytes();
+        // Do not let oversized or empty entries evict useful data or bypass
+        // the byte budget with an unbounded number of zero-byte keys.
+        if size == 0 || size > LIMIT {
+            return;
+        }
+        while self.bytes > LIMIT - size {
             let Some(oldest) = self.lru.pop_front() else {
                 break;
             };
-            if let Some(removed) = self.entries.remove(&oldest) {
-                self.bytes = self.bytes.saturating_sub(removed.bytes);
+            if let Some((_, removed)) = self.entries.remove(&oldest) {
+                self.bytes -= removed;
             }
         }
-    }
-
-    fn touch(&mut self, key: &str) {
-        self.lru.retain(|existing| existing != key);
-        self.lru.push_back(key.to_owned());
-    }
-}
-
-fn icon_bytes(icon: &IconData) -> usize {
-    icon.rgba.len()
-}
-
-impl SourceCache {
-    fn get(&mut self, key: &str) -> Option<Arc<Vec<u8>>> {
-        let bytes = self
-            .entries
-            .get(key)
-            .map(|entry| Arc::clone(&entry.bytes))?;
-        self.touch(key);
-        Some(bytes)
-    }
-
-    fn insert(&mut self, key: String, bytes: Arc<Vec<u8>>) {
-        if let Some(previous) = self.entries.remove(&key) {
-            self.bytes = self.bytes.saturating_sub(previous.size);
-            self.lru.retain(|existing| existing != &key);
-        }
-
-        let size = bytes.len();
         self.bytes += size;
         self.lru.push_back(key.clone());
-        self.entries.insert(key, CachedSource { bytes, size });
-        while self.bytes > MAX_CACHED_SOURCE_BYTES {
-            let Some(oldest) = self.lru.pop_front() else {
-                break;
-            };
-            if let Some(removed) = self.entries.remove(&oldest) {
-                self.bytes = self.bytes.saturating_sub(removed.size);
-            }
-        }
-    }
-
-    fn touch(&mut self, key: &str) {
-        self.lru.retain(|existing| existing != key);
-        self.lru.push_back(key.to_owned());
+        self.entries.insert(key, (value, size));
     }
 }
 
@@ -286,8 +300,25 @@ fn fetch_favicon(target: &Path, size: u32, sources: &Mutex<SourceCache>) -> Opti
 }
 
 fn decode_image(bytes: &[u8], size: u32) -> Option<IconData> {
+    decode_image_at(
+        bytes,
+        normalize_icon_size(size).min(MAX_EXTERNAL_ICON_DIMENSION),
+    )
+}
+
+fn decode_image_at(bytes: &[u8], size: u32) -> Option<IconData> {
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let (source_width, source_height) = reader.into_dimensions().ok()?;
+    if source_width == 0
+        || source_height == 0
+        || u64::from(source_width) * u64::from(source_height) > MAX_DECODED_PIXELS
+    {
+        return None;
+    }
+    let size = size.min(source_width.max(source_height));
     let image = image::load_from_memory(bytes).ok()?;
-    let size = normalize_icon_size(size).min(MAX_EXTERNAL_ICON_DIMENSION);
     let image = image.thumbnail(size, size).to_rgba8();
     let (width, height) = image.dimensions();
     Some(IconData {
@@ -393,13 +424,19 @@ fn read_icon_bytes(path: &Path, sources: &Mutex<SourceCache>) -> Option<Arc<Vec<
         metadata.len()
     );
     let path = path.to_owned();
-    source_bytes(sources, key, move || std::fs::read(path).ok())
+    source_bytes(sources, key, move || {
+        crate::utils::read_bounded(
+            std::fs::File::open(path).ok()?,
+            MAX_ICON_FILE_BYTES as usize,
+        )
+        .ok()
+    })
 }
 
 fn load_svg_bytes(bytes: &[u8], size: u32) -> Option<IconData> {
     let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?;
     let source = tree.size();
-    let size = normalize_icon_size(size);
+    let size = size.clamp(1, MAX_DETAIL_IMAGE_DIMENSION);
     let scale = (size as f32 / source.width()).min(size as f32 / source.height());
     let width = (source.width() * scale).round().max(1.0) as u32;
     let height = (source.height() * scale).round().max(1.0) as u32;
@@ -456,9 +493,8 @@ fn icon_source_key(item: &SearchResult) -> String {
 
 fn icon_spec_key(icon: &IconSpec) -> String {
     match icon {
-        IconSpec::System(path) | IconSpec::Resource(path) => {
-            format!("explicit:{}", path_cache_key(path))
-        }
+        IconSpec::System(path) => format!("system:{}", path_cache_key(path)),
+        IconSpec::Resource(path) => format!("resource:{}", path_cache_key(path)),
         IconSpec::SystemIndexed { path, index } => {
             format!("explicit:{}#{}", path_cache_key(path), index)
         }
@@ -547,6 +583,96 @@ mod tests {
     use super::*;
     use crate::result::{ResultCategory, SearchResult};
     use std::path::PathBuf;
+
+    #[test]
+    fn detail_images_are_decoded_once_and_oversized_files_are_rejected() {
+        let directory = std::env::temp_dir().join(format!(
+            "wowie-detail-image-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let image_path = directory.join("preview.png");
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            3,
+            2,
+            image::Rgba([255, 0, 0, 255]),
+        ))
+        .save(&image_path)
+        .unwrap();
+        let service = IconService::new();
+        let first = service.resolve_detail_image(&image_path).unwrap();
+        let second = service.resolve_detail_image(&image_path).unwrap();
+        assert_eq!((first.width, first.height), (3, 2));
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let oversized = directory.join("oversized.png");
+        let file = std::fs::File::create(&oversized).unwrap();
+        file.set_len(MAX_ICON_FILE_BYTES + 1).unwrap();
+        drop(file);
+        assert!(service.resolve_detail_image(&oversized).is_none());
+        std::fs::remove_file(image_path).unwrap();
+        std::fs::remove_file(oversized).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn panicking_icon_loader_releases_waiters_and_allows_retry() {
+        use std::{sync::mpsc, time::Duration};
+        let service = IconService::new();
+        let worker_service = service.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            worker_service.resolve_cached("panic".into(), || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                panic!("simulated decoder failure");
+            });
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let request = Arc::clone(service.in_flight.lock().unwrap().get("panic").unwrap());
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            finished_tx.send(request.wait().is_none()).unwrap();
+        });
+        release_tx.send(()).unwrap();
+        assert!(worker.join().is_err());
+        assert!(finished_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        waiter.join().unwrap();
+        assert!(service.in_flight.lock().unwrap().is_empty());
+        assert!(service
+            .resolve_cached("panic".into(), || named_icon("book", 24))
+            .is_some());
+    }
+
+    #[test]
+    fn byte_cache_evicts_least_recently_used_and_bounds_empty_entries() {
+        let mut cache = ByteCache::<Vec<u8>, 4>::default();
+        cache.insert("a".into(), Arc::new(vec![1; 2]));
+        cache.insert("b".into(), Arc::new(vec![2; 2]));
+        assert!(cache.get("a").is_some());
+        cache.insert("c".into(), Arc::new(vec![3; 2]));
+        assert!(cache.get("b").is_none());
+        cache.insert("large".into(), Arc::new(vec![0; 5]));
+        cache.insert("empty".into(), Arc::new(vec![]));
+        assert_eq!(cache.entries.len(), 2);
+        cache.insert("a".into(), Arc::new(vec![4]));
+        assert_eq!(cache.bytes, 3);
+        assert_eq!(cache.get("a").unwrap().as_slice(), &[4]);
+    }
+
+    #[test]
+    fn resource_and_system_decoders_have_distinct_cache_keys() {
+        let path = PathBuf::from("test.png");
+        assert_ne!(
+            icon_spec_key(&IconSpec::System(path.clone())),
+            icon_spec_key(&IconSpec::Resource(path))
+        );
+    }
 
     #[test]
     fn source_key_is_stable_for_same_result() {

@@ -94,10 +94,10 @@ pub(crate) fn launch_entry_label(entry: &crate::result::LaunchEntry) -> String {
     }
 }
 
-pub(crate) fn visible_launch_entries<'a>(
-    item: &'a SearchResult,
+pub(crate) fn visible_launch_entries(
+    item: &SearchResult,
     show_advanced_launch_entries: bool,
-) -> Vec<(usize, &'a crate::result::LaunchEntry)> {
+) -> Vec<(usize, &crate::result::LaunchEntry)> {
     let Some(default) = preferred_launch_entry(item) else {
         return Vec::new();
     };
@@ -1237,7 +1237,6 @@ mod tests {
             source: "StartMenu".into(),
             preferred_width: None,
             scrollable: false,
-            fullscreen: false,
         });
         start_menu.description = Some("Start Menu description".into());
         start_menu.ranking_bias = 7;
@@ -1259,7 +1258,6 @@ mod tests {
             source: "AppsFolder".into(),
             preferred_width: None,
             scrollable: false,
-            fullscreen: false,
         });
         apps_folder.description = None;
 

@@ -117,16 +117,14 @@ pub enum ResultCategory {
 
 /// A renderer-neutral recommendation for presenting a result's content.
 ///
-/// The launcher owns the final list/grid layout and navigation behavior. This
-/// value is reserved for content hints such as a detail preview, so changing
-/// the global view mode never depends on a provider category.
+/// The launcher owns the final list layout and navigation behavior. This value
+/// is reserved for content hints such as a compact row or a detail preview.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultPresentation {
     List,
     Compact,
     Preview,
-    Grid,
 }
 
 /// Controls whether a custom result is eligible for the current query before
@@ -161,7 +159,6 @@ impl ResultPresentation {
             Self::List => "list",
             Self::Compact => "compact",
             Self::Preview => "preview",
-            Self::Grid => "grid",
         }
     }
 }
@@ -219,7 +216,7 @@ fn default_allow_favorite() -> bool {
 
 impl SearchResult {
     /// Return the provider-independent presentation recommendation consumed by
-    /// the UI. The global list/grid mode is controlled by the launcher.
+    /// the UI. The launcher owns the final list layout.
     pub fn recommended_presentation(&self) -> ResultPresentation {
         ResultPresentation::recommended(self.detail.is_some())
     }
@@ -240,9 +237,6 @@ pub struct DetailView {
     pub source: String,
     pub preferred_width: Option<i32>,
     pub scrollable: bool,
-    /// Render this detail as the focused full-surface panel even from list
-    /// view. Intended for guides, forms, and other primary content.
-    pub fullscreen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -379,6 +373,5 @@ mod tests {
         assert_eq!(ResultPresentation::List.as_str(), "list");
         assert_eq!(ResultPresentation::Compact.as_str(), "compact");
         assert_eq!(ResultPresentation::Preview.as_str(), "preview");
-        assert_eq!(ResultPresentation::Grid.as_str(), "grid");
     }
 }

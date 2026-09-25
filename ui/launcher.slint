@@ -106,7 +106,6 @@ export component Launcher inherits Window {
     in property <bool> root-query-empty: true;
     in-out property <bool> empty-query-results-visible: false;
     in property <length> list-item-height: 50px;
-    in property <length> grid-item-size: 124px;
     in property <bool> dark-mode: true;
     in property <color> accent-color: #0067c0;
     in property <color> accent-background: #280067c0;
@@ -122,21 +121,21 @@ export component Launcher inherits Window {
     in property <string> empty-state-title: "";
     in property <string> empty-state-description: "";
     in property <image> empty-state-icon;
+    in property <int> empty-state-icon-generation: 0;
     in property <string> empty-state-icon-kind: "";
     in property <string> detail-title: "";
     in property <string> detail-subtitle: "";
     in property <string> detail-source: "";
+    in property <int> detail-content-generation: 0;
     in property <[DetailBlock]> detail-blocks;
     in property <[ContextActionRow]> detail-actions;
     in property <int> detail-panel-preferred-width: 0;
     in property <bool> detail-panel-scrollable: false;
-    in property <bool> detail-panel-fullscreen: false;
     in-out property <string> launch-error: "";
     in-out property <string> last-action-id: "";
     in-out property <string> last-action-result: "";
     in-out property <string> last-action-subtitle: "";
     in property <[ResultRow]> results;
-    in property <string> view-mode: "list";
     in-out property <string> query-text: "";
     in-out property <bool> query-results-ready: false;
     in-out property <int> query-history-restore-id: 0;
@@ -204,22 +203,7 @@ export component Launcher inherits Window {
     // edges move together, preserving their existing 8px separation.
     private property <length> detail-panel-alignment-shift: 6px;
     private property <length> detail-panel-bottom-inset: 6px;
-    private property <length> grid-gap: 10px;
-    private property <length> grid-min-cell-size: root.grid-item-size;
-    private property <length> grid-row-height: root.grid-cell-size + root.grid-gap;
-    // Grid cells stay square and fill the available width evenly. The
-    // minimum size controls when another column is introduced.
-    private property <int> grid-columns: max(1, floor((results-list.width + root.grid-gap) / (root.grid-min-cell-size + root.grid-gap)));
-    private property <int> grid-row-count: (root.results.length + root.grid-columns - 1) / root.grid-columns;
-    private property <length> grid-cell-size: max(root.grid-min-cell-size, (results-list.width - (root.grid-columns + 1) * root.grid-gap) / root.grid-columns);
     private property <float> detail-panel-share: root.detail-panel-preferred-width > 0 && root.width > 0px ? root.detail-panel-preferred-width / (root.width / 1px) : 0.5;
-    private property <length> grid-cell-radius: 20px;
-    private property <length> grid-icon-title-gap: 6px;
-    private property <length> grid-title-height: max(24px, min(64px, root.grid-cell-size - root.grid-icon-size - 24px));
-    private property <length> grid-content-height: root.grid-icon-size + root.grid-icon-title-gap + root.grid-title-height;
-    private property <length> grid-icon-top: max(8px, (root.grid-cell-size - root.grid-content-height) / 2);
-    private property <length> grid-title-inset: 10px;
-    private property <length> grid-title-top: root.grid-icon-top + root.grid-icon-size + root.grid-icon-title-gap;
     // Text blocks may wrap into several lines. Keep enough measured content
     // height for the Flickable to expose a real scroll range instead of
     // clipping the tail of a long translation.
@@ -241,13 +225,8 @@ export component Launcher inherits Window {
     private property <length> search-input-scroll-x: 6px;
     private property <duration> session-transition-duration: 150ms;
     private property <duration> session-fade-duration: 100ms;
-    private property <bool> fullscreen-detail-mode: root.view-mode == "grid" || root.detail-panel-fullscreen;
-    private property <bool> grid-detail-active: root.fullscreen-detail-mode && root.detail-visible;
-    private property <float> fullscreen-layout-progress: root.grid-detail-active ? 1.0 : 0.0;
-    private property <length> fullscreen-layout-shift: root.search-row-height * root.fullscreen-layout-progress;
-    private property <length> search-row-layout-height: root.search-row-height - root.fullscreen-layout-shift;
+    private property <length> search-row-layout-height: root.search-row-height;
     private property <length> available-results-height: root.compact-results-hidden ? 0px : max(0px, root.height - 2 * root.window-inset - root.empty-state-padding - root.content-bottom-padding - root.search-row-layout-height - root.content-spacing - root.operation-hint-spacing - root.no-results-spacing);
-    private property <length> visible-results-area-height: max(0px, root.available-results-height - root.fullscreen-layout-shift);
     private property <bool> detail-visible: root.detail-panel-visible && (root.selected-index >= 0 || root.empty-state-detail-active);
     private property <float> detail-progress: root.detail-visible ? 1.0 : 0.0;
     animate detail-progress {
@@ -255,14 +234,11 @@ export component Launcher inherits Window {
         easing: root.detail-visible ? ease-out-back : ease-in;
     }
     private property <length> detail-panel-width: (root.width - 2 * root.window-inset - 2 * root.content-padding) * root.detail-panel-share - root.detail-panel-alignment-shift;
-    private property <bool> detail-panel-active: root.detail-visible || (!root.fullscreen-detail-mode && root.detail-progress > 0.0);
-    private property <length> grid-icon-size: 44px;
+    private property <bool> detail-panel-active: root.detail-visible || root.detail-progress > 0.0;
     private property <length> detail-content-inset: 20px;
     private property <length> detail-header-top: 18px;
     private property <length> detail-subtitle-top: 44px;
     private property <length> detail-content-top: 76px;
-    private property <length> detail-grid-header-x: 64px;
-    private property <length> detail-grid-header-width-inset: 84px;
     private property <length> detail-content-footer-height: 118px;
     private property <length> detail-content-footer-with-actions-height: 168px;
     private property <length> detail-action-step: 104px;
@@ -273,9 +249,9 @@ export component Launcher inherits Window {
     private property <color> detail-surface: root.dark-mode ? #242424 : #fbfcfe;
     private property <color> detail-raised-surface: root.dark-mode ? #2b2b2b : #f1f3f6;
     private property <color> detail-code-surface: root.dark-mode ? #181818 : #f1f3f6;
-    private property <int> first-visible-index: root.view-mode == "grid" ? max(0, round(-grid-results.content-y / root.grid-row-height) * root.grid-columns) : max(0, round(-results-list.content-y / root.result-row-height));
+    private property <int> first-visible-index: max(0, round(-results-list.content-y / root.result-row-height));
     private property <bool> context-click-consumed: false;
-    private property <int> last-visible-index: root.view-mode == "grid" ? min(root.results.length, (round((-grid-results.content-y + grid-results.height) / root.grid-row-height) + 1) * root.grid-columns) : min(root.results.length, round((-results-list.content-y + results-list.visible-height) / root.result-row-height) + 1);
+    private property <int> last-visible-index: min(root.results.length, round((-results-list.content-y + results-list.visible-height) / root.result-row-height) + 1);
     private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
     private property <color> surface-hover: root.dark-mode ? #323232 : #f1f3f6;
     private property <color> surface-selected: root.accent-background;
@@ -287,18 +263,6 @@ export component Launcher inherits Window {
 
     function ensure-selected-visible() {
         if (root.selected-index < 0 || root.selected-index >= root.results.length) { return; }
-        if (root.view-mode == "grid") {
-            let selected-row = root.selected-index / root.grid-columns;
-            let selected-top = selected-row * root.grid-row-height + root.grid-gap + grid-results.content-y;
-            let selected-bottom = selected-top + root.grid-cell-size;
-            if (selected-top < 0px) {
-                grid-results.content-y = min(0px, max(grid-results.height - grid-results.content-height, -selected-row * root.grid-row-height - root.grid-gap));
-            }
-            if (selected-bottom > grid-results.height) {
-                grid-results.content-y = min(0px, max(grid-results.height - grid-results.content-height, grid-results.height - (selected-row + 1) * root.grid-row-height));
-            }
-            return;
-        }
         if (root.selected-index * root.result-row-height + results-list.content-y < 0px) {
             results-list.content-y = min(0px, max(results-list.visible-height - results-list.content-height, -root.selected-index * root.result-row-height));
         }
@@ -307,42 +271,18 @@ export component Launcher inherits Window {
         }
     }
 
-    function move-grid-selection-left() {
-        if (root.results.length == 0) { return; }
-        if (root.selected-index < 0) {
-            root.selected-index = 0;
-            return;
-        }
-        let row-start = floor(root.selected-index / root.grid-columns) * root.grid-columns;
-        root.selected-index = max(root.selected-index - 1, row-start);
-    }
-
-    function move-grid-selection-right() {
-        if (root.results.length == 0) { return; }
-        if (root.selected-index < 0) {
-            root.selected-index = 0;
-            return;
-        }
-        let row-end = min(root.results.length - 1, (floor(root.selected-index / root.grid-columns) + 1) * root.grid-columns - 1);
-        root.selected-index = min(root.selected-index + 1, row-end);
-    }
-
     function move-selection-down() {
         if (root.compact-search && root.root-query-empty && !root.shortcut-session-active && !root.empty-query-results-visible) {
             root.empty-query-results-visible = true;
             root.compact-results-requested();
         }
         if (root.results.length == 0) { return; }
-        root.selected-index = root.view-mode == "grid"
-            ? (root.selected-index < 0 ? 0 : min(root.selected-index + root.grid-columns, root.results.length - 1))
-            : min(root.selected-index + 1, root.results.length - 1);
+        root.selected-index = min(root.selected-index + 1, root.results.length - 1);
     }
 
     function move-selection-up() {
         if (root.results.length == 0) { return; }
-        root.selected-index = root.view-mode == "grid"
-            ? (root.selected-index < 0 ? 0 : max(root.selected-index - root.grid-columns, 0))
-            : max(root.selected-index - 1, 0);
+        root.selected-index = max(root.selected-index - 1, 0);
     }
 
     changed selected-index => {
@@ -351,28 +291,14 @@ export component Launcher inherits Window {
     }
     changed first-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
     changed last-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
-    changed view-mode => {
-        if (root.view-mode == "grid") {
-            root.detail-panel-visible = false;
-        }
-        results-list.content-y = 0px;
-        grid-results.content-y = 0px;
-        root.ensure-selected-visible();
-        if (root.grid-detail-active) {
-            detail-focus-scope.focus();
-        }
-        root.visible-range-changed(root.first-visible-index, root.last-visible-index);
-    }
     changed detail-panel-active => {
-        if (root.grid-detail-active) {
-            detail-focus-scope.focus();
-        } else if (!root.detail-panel-active) {
+        if (!root.detail-panel-active) {
             search-field.focus();
         }
     }
     // The host coalesces range notifications on the next event-loop turn, so
     // layout and selection changes cannot synchronously rebuild the ListView.
-    changed visible-results-area-height => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
+    changed available-results-height => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
 
     Rectangle {
         x: root.window-inset; y: root.window-inset;
@@ -394,7 +320,6 @@ export component Launcher inherits Window {
                 z: 0;
                 height: root.search-row-layout-height;
                 background: transparent;
-                clip: root.grid-detail-active;
 
                 back-button := Rectangle {
                     x: root.shortcut-session-active ? 0px : -root.session-back-width;
@@ -467,14 +392,14 @@ export component Launcher inherits Window {
                             } else if (event.text == Key.UpArrow) {
                                 root.move-selection-up();
                                 EventResult.accept
-                            } else if (root.view-mode == "grid" && event.text == Key.LeftArrow) {
-                                root.move-grid-selection-left();
-                                EventResult.accept
-                            } else if (root.view-mode == "grid" && event.text == Key.RightArrow) {
-                                root.move-grid-selection-right();
-                                EventResult.accept
                             } else if ((event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) || (event.text == "m" && event.modifiers.control)) && root.selected-index >= 0) {
                                 root.context-menu-requested(root.selected-index, true);
+                                EventResult.accept
+                            // A visible row, including a persisted session-history
+                            // row, is the user's explicit choice. Only fall back
+                            // to executing the raw input when no row is selected.
+                            } else if (event.text == Key.Return && root.selected-index >= 0) {
+                                root.launch-requested(root.selected-index);
                                 EventResult.accept
                             } else if (event.text == Key.Return && root.shortcut-session-execute-mode) {
                                 root.session-execute-requested();
@@ -482,11 +407,8 @@ export component Launcher inherits Window {
                             } else if (event.text == Key.Return && root.selected-index < 0 && root.empty-state-title != "") {
                                 root.empty-state-activated();
                                 EventResult.accept
-                            } else if (event.text == Key.Return && root.selected-index >= 0) {
-                                root.launch-requested(root.selected-index);
-                                EventResult.accept
                             } else if (event.text == Key.Escape) {
-                                if (root.grid-detail-active) {
+                                if (root.detail-visible) {
                                     root.detail-back-requested();
                                 } else if (root.shortcut-session-active) {
                                     root.shortcut-back-requested();
@@ -508,30 +430,22 @@ export component Launcher inherits Window {
                 clip: true;
 
                 results-list := ListView {
-                    visible: root.view-mode == "list" && !root.compact-results-hidden;
-                    x: 0px; y: root.fullscreen-layout-shift;
-                    // Grid mode keeps its full width because the detail view
-                    // overlays the grid instead of becoming a side column.
-                    width: root.view-mode == "grid"
-                        ? parent.width
-                        : parent.width - root.detail-progress * (parent.width * root.detail-panel-share + root.result-column-gap - root.detail-panel-alignment-shift);
-                    height: max(0px, parent.height - root.fullscreen-layout-shift);
+                    visible: !root.compact-results-hidden;
+                    x: 0px; y: 0px;
+                    width: parent.width - root.detail-progress * (parent.width * root.detail-panel-share + root.result-column-gap - root.detail-panel-alignment-shift);
+                    height: parent.height;
                 for row[index] in root.results : result-row := Rectangle {
                     x: root.result-row-inset;
                     width: results-list.visible-width - 2 * root.result-row-inset;
                         height: root.result-row-height;
                         private property <length> shortcut-card-width: row.shortcut_prefix_width * 1px;
-                        private property <length> row-icon-size: row.presentation == "compact" ? 20px : row.presentation == "grid" ? 30px : root.result-icon-size;
+                        private property <length> row-icon-size: row.presentation == "compact" ? 20px : root.result-icon-size;
                         private property <length> row-title-height: row.presentation == "compact" ? 16px : 18px;
                         private property <length> row-description-height: row.presentation == "compact" ? 14px : 16px;
                         private property <length> row-text-gap: 0px;
                         private property <length> row-text-height: row-title-height + row-text-gap + row-description-height;
                         private property <length> row-text-top: max(0px, (root.result-row-height - row-text-height) / 2);
                         background: index == root.selected-index ? root.surface-selected : item-area.has-hover ? root.surface-hover : transparent;
-                        // Grid presentation changes density and typography,
-                        // but result rows keep the same borderless surface as
-                        // ordinary results. This avoids framing every Steam
-                        // game result as a separate card.
                         border-color: transparent;
                         border-width: 0px;
                         border-radius: 8px;
@@ -560,7 +474,7 @@ export component Launcher inherits Window {
                     if row.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row.icon; image-fit: contain; }
                     Rectangle {
                         x: 60px; y: 0px; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px - (row.favorite ? 22px : 0px) : parent.width - 60px - parent.shortcut-card-width - (row.favorite ? 40px : 0px); height: parent.height; background: transparent;
-                        Text { x: 0px; y: row-text-top; width: parent.width; height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 0.9286rem : row.presentation == "grid" ? 1.0714rem : 1.0000rem; font-weight: row.presentation == "grid" ? 400 : 500; vertical-alignment: center; overflow: elide; }
+                        Text { x: 0px; y: row-text-top; width: parent.width; height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 0.9286rem : 1.0000rem; font-weight: 500; vertical-alignment: center; overflow: elide; }
                         Text { x: 0px; y: row-text-top + row-title-height + row-text-gap; width: parent.width - 4px; height: row-description-height; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "control-panel" ? @tr("Control Panel") : row.location_kind == "application" && row.location == "" ? @tr("Application") : row.location; color: root.text-secondary; font-size: row.presentation == "compact" ? 0.7143rem : 0.7857rem; vertical-alignment: center; overflow: elide; }
                     }
                     Rectangle {
@@ -578,130 +492,20 @@ export component Launcher inherits Window {
                 }
                 }
 
-                grid-results := Flickable {
-                    visible: root.view-mode == "grid" && !root.compact-results-hidden;
-                    x: 0px; y: root.fullscreen-layout-shift;
-                    width: results-list.width; height: max(0px, parent.height - root.fullscreen-layout-shift);
-                    content-width: self.width;
-                    content-height: max(self.height, root.grid-row-count * root.grid-row-height + root.grid-gap);
-                    interactive: self.content-height > self.height;
-                    if root.view-mode == "grid" : Rectangle {
-                        x: 0px; y: 0px; width: parent.width; height: parent.height;
-                        for row[index] in root.results : Rectangle {
-                            x: root.grid-gap + Math.mod(index, root.grid-columns) * (root.grid-cell-size + root.grid-gap);
-                            y: root.grid-gap + floor(index / root.grid-columns) * root.grid-row-height;
-                            width: root.grid-cell-size;
-                            height: root.grid-cell-size;
-                            background: transparent;
-                            border-color: transparent;
-                            border-width: 0px;
-                            grid-highlight := Rectangle {
-                                x: 0px;
-                                y: 0px;
-                                width: root.grid-cell-size;
-                                height: root.grid-cell-size;
-                                background: index == root.selected-index ? root.surface-selected : grid-item-area.has-hover ? root.surface-hover : transparent;
-                                border-radius: root.grid-cell-radius;
-                            }
-                            grid-item-area := TouchArea {
-                                clicked => {
-                                    if (root.context-click-consumed) {
-                                        root.context-click-consumed = false;
-                                    } else {
-                                        root.launch-requested(index);
-                                    }
-                                }
-                                pointer-event(event) => {
-                                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                                        root.context-menu-requested(index, false);
-                                        EventResult.accept
-                                    } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down && root.context-menu-open) {
-                                        root.context-click-consumed = true;
-                                        root.context-menu-dismissed();
-                                        EventResult.accept
-                                    } else {
-                                        EventResult.reject
-                                    }
-                                }
-                            }
-                            BuiltinIcon { visible: row.icon_kind != ""; x: (parent.width - root.grid-icon-size) / 2; y: root.grid-icon-top; width: root.grid-icon-size; height: root.grid-icon-size; kind: row.icon_kind; }
-                            if row.icon_kind == "" : Image { x: (parent.width - root.grid-icon-size) / 2; y: root.grid-icon-top; width: root.grid-icon-size; height: root.grid-icon-size; source: row.icon; image-fit: contain; }
-                            if row.favorite : Rectangle {
-                                x: parent.width - 24px; y: 7px; width: 18px; height: 18px;
-                                border-radius: 9px;
-                                background: root.dark-mode ? #503b1c : #fff0c4;
-                                BuiltinIcon { x: 3px; y: 3px; width: 12px; height: 12px; kind: "star"; }
-                            }
-                            Text {
-                                x: root.grid-title-inset;
-                                y: root.grid-title-top;
-                                width: parent.width - 2 * root.grid-title-inset;
-                                height: root.grid-title-height;
-                                text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title;
-                                color: root.text-primary;
-                                font-size: 0.8571rem;
-                                font-weight: 400;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                                wrap: char-wrap;
-                                overflow: clip;
-                            }
-                            // Grid cells intentionally show only the result
-                            // name. Descriptions and technical locations stay
-                            // available in list view and the detail panel.
-                        }
-                    }
-                }
-
                 detail-panel := Rectangle {
-                    // Grid mode uses the complete results area as a modal
-                    // detail surface shown without a transition.
-                    private property <length> panel-width: root.grid-detail-active ? parent.width : root.detail-panel-width;
-                    private property <length> panel-height: root.grid-detail-active ? parent.height : max(0px, parent.height - root.detail-panel-bottom-inset);
+                    private property <length> panel-width: root.detail-panel-width;
+                    private property <length> panel-height: max(0px, parent.height - root.detail-panel-bottom-inset);
                     visible: root.detail-panel-active;
-                    x: root.grid-detail-active ? 0px : results-list.width + root.result-column-gap - root.result-row-inset;
-                    y: root.grid-detail-active ? 0px : (1.0 - root.detail-progress) * 24px;
-                    width: root.grid-detail-active ? self.panel-width : self.panel-width * max(0.0, root.detail-progress);
+                    x: results-list.width + root.result-column-gap - root.result-row-inset;
+                    y: (1.0 - root.detail-progress) * 24px;
+                    width: self.panel-width * max(0.0, root.detail-progress);
                     height: self.panel-height;
                     background: root.detail-surface;
                     border-radius: 10px;
                     clip: true;
 
-                    detail-focus-scope := FocusScope {
-                        width: parent.width;
-                        height: parent.height;
-                        visible: root.grid-detail-active;
-                        key-pressed(event) => {
-                            if (event.text == Key.Escape) {
-                                root.detail-back-requested();
-                                accept
-                            }
-                            if (event.text == Key.DownArrow) {
-                                root.move-selection-down();
-                                accept
-                            }
-                            if (event.text == Key.UpArrow) {
-                                root.move-selection-up();
-                                accept
-                            }
-                            if (event.text == Key.LeftArrow) {
-                                root.move-grid-selection-left();
-                                accept
-                            }
-                            if (event.text == Key.RightArrow) {
-                                root.move-grid-selection-right();
-                                accept
-                            }
-                            if (event.text == Key.Return && root.selected-index >= 0) {
-                                root.launch-requested(root.selected-index);
-                                accept
-                            }
-                            reject
-                        }
-                    }
-
                     Flickable {
-                        x: root.grid-detail-active ? 0px : parent.width - detail-panel.panel-width;
+                        x: parent.width - detail-panel.panel-width;
                         width: detail-panel.panel-width;
                         height: detail-panel.panel-height;
                         content-width: self.width;
@@ -713,8 +517,8 @@ export component Launcher inherits Window {
                             height: max(parent.height, root.detail-panel-content-height);
                             background: transparent;
 
-                            Text { x: root.grid-detail-active ? root.detail-grid-header-x : root.detail-content-inset; y: root.detail-header-top; width: parent.width - (root.grid-detail-active ? root.detail-grid-header-width-inset : 2 * root.detail-content-inset); height: 24px; text: root.detail-title; color: root.text-primary; font-size: 1.2143rem; font-weight: 600; overflow: elide; }
-                    Text { x: root.grid-detail-active ? root.detail-grid-header-x : root.detail-content-inset; y: root.detail-subtitle-top; width: parent.width - (root.grid-detail-active ? root.detail-grid-header-width-inset : 2 * root.detail-content-inset); height: 18px; text: root.detail-subtitle; color: root.text-secondary; font-size: 0.7857rem; overflow: elide; }
+                            Text { x: root.detail-content-inset; y: root.detail-header-top; width: parent.width - 2 * root.detail-content-inset; height: 24px; text: root.detail-title; color: root.text-primary; font-size: 1.2143rem; font-weight: 600; overflow: elide; }
+                    Text { x: root.detail-content-inset; y: root.detail-subtitle-top; width: parent.width - 2 * root.detail-content-inset; height: 18px; text: root.detail-subtitle; color: root.text-secondary; font-size: 0.7857rem; overflow: elide; }
                     VerticalBox {
                         x: root.detail-content-inset; y: root.detail-content-top; width: parent.width - 2 * root.detail-content-inset; height: parent.height - (root.detail-actions.length > 0 ? root.detail-content-footer-with-actions-height : root.detail-content-footer-height); spacing: root.detail-block-spacing;
                         for block in root.detail-blocks : Rectangle {
@@ -784,25 +588,10 @@ export component Launcher inherits Window {
                     Text { x: root.detail-content-inset; y: parent.height - root.detail-source-bottom; width: parent.width - 2 * root.detail-content-inset; height: 18px; text: root.detail-source; color: root.text-tertiary; font-size: 0.7143rem; overflow: elide; }
                         }
                     }
-                    if root.grid-detail-active : Rectangle {
-                        x: 16px; y: 14px; width: 36px; height: 32px;
-                        background: detail-back-button.has-hover ? root.surface-hover : transparent;
-                        border-radius: 8px;
-                        detail-back-button := TouchArea {
-                            clicked => { root.detail-back-requested(); }
-                        }
-                        BuiltinIcon {
-                            x: 12px;
-                            y: 10px;
-                            width: 12px;
-                            height: 12px;
-                            kind: root.dark-mode ? "arrow-left-light" : "arrow-left-dark";
-                        }
-                    }
                 }
                 if (root.results.length == 0 && (search-field.text != "" || root.shortcut-session-active) && root.query-results-ready && !root.detail-visible) : Rectangle {
                     x: 0px;
-                    y: max(0px, (parent.height - root.no-results-height) / 2 + root.fullscreen-layout-shift / 2);
+                    y: max(0px, (parent.height - root.no-results-height) / 2);
                     width: parent.width; height: root.no-results-height; background: transparent;
                     TouchArea { clicked => { if (root.empty-state-title != "") { root.empty-state-activated(); } } }
                     if root.empty-state-icon-kind != "" : BuiltinIcon { x: (parent.width - 44px) / 2; y: 0px; width: 44px; height: 44px; kind: root.empty-state-icon-kind; }
@@ -816,7 +605,7 @@ export component Launcher inherits Window {
             if (!root.compact-results-hidden) : Rectangle {
                 height: root.operation-hint-height; background: transparent;
                 Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: root.border; }
-                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.view-mode == "grid" ? (root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓ ← →  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓ ← →  Navigate     Enter  Open     Esc  Hide"))) : (root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Esc  Hide"))); color: root.text-tertiary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; }
+                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Esc  Hide")); color: root.text-tertiary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; }
             }
         }
     }

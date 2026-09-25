@@ -5,7 +5,6 @@ use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
 use std::{
     collections::HashMap,
     ffi::c_void,
-    fs,
     os::windows::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
     sync::{mpsc, Mutex, OnceLock},
@@ -358,55 +357,23 @@ fn watch_custom_directories(
     directories: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
     sender: std::sync::mpsc::Sender<super::AppProviderSource>,
 ) {
-    let mut previous = String::new();
+    let mut previous = None;
     loop {
-        let current = directories
-            .lock()
-            .map(|paths| {
-                paths
-                    .iter()
-                    .map(|path| format!("{}:{}", path.display(), directory_fingerprint(path)))
-                    .collect::<Vec<_>>()
-                    .join("|")
-            })
-            .unwrap_or_default();
-        if current != previous {
-            if !previous.is_empty()
-                && sender
-                    .send(super::AppProviderSource::CustomDirectories)
-                    .is_err()
-            {
-                break;
-            }
-            previous = current;
+        // Release the configuration lock before walking the filesystem.
+        let Ok(paths) = directories.lock().map(|paths| paths.clone()) else {
+            break;
+        };
+        let current = crate::utils::filesystem_fingerprint(&paths);
+        if previous.is_some_and(|value| value != current)
+            && sender
+                .send(super::AppProviderSource::CustomDirectories)
+                .is_err()
+        {
+            break;
         }
+        previous = Some(current);
         thread::sleep(std::time::Duration::from_secs(2));
     }
-}
-
-fn directory_fingerprint(root: &Path) -> u64 {
-    let Ok(entries) = fs::read_dir(root) else {
-        return 0;
-    };
-    let mut fingerprint = 0u64;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if let Ok(metadata) = entry.metadata() {
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|duration| duration.as_secs())
-                .unwrap_or_default();
-            fingerprint = fingerprint
-                .wrapping_add(metadata.len())
-                .wrapping_add(modified);
-        }
-        if path.is_dir() {
-            fingerprint = fingerprint.wrapping_add(directory_fingerprint(&path));
-        }
-    }
-    fingerprint
 }
 
 fn start_menu_watch_roots() -> Vec<PathBuf> {
@@ -1377,6 +1344,10 @@ fn register_hotkey_value(hotkey: &str) -> bool {
             (MOD_ALT, 0x20)
         }
     };
+    register_hotkey_parsed(hotkey, modifiers, key)
+}
+
+fn register_hotkey_parsed(hotkey: &str, modifiers: u32, key: u32) -> bool {
     if unsafe { RegisterHotKey(std::ptr::null_mut(), 1, modifiers | MOD_NOREPEAT, key) } != 0 {
         return true;
     }
@@ -1408,7 +1379,8 @@ impl PlatformIntegration for WindowsPlatform {
         watch_system_theme(sender.clone());
         let hotkey = hotkey.to_owned();
         thread::spawn(move || {
-            let mut registered = register_hotkey_value(&hotkey);
+            let mut active_hotkey = hotkey.clone();
+            let mut registered = register_hotkey_value(&active_hotkey);
             let mut message = MSG {
                 hwnd: std::ptr::null_mut(),
                 message: 0,
@@ -1419,10 +1391,32 @@ impl PlatformIntegration for WindowsPlatform {
             };
             loop {
                 while let Ok(updated) = update_receiver.try_recv() {
-                    if registered {
-                        unsafe { UnregisterHotKey(std::ptr::null_mut(), 1) };
+                    let Some((modifiers, key)) = parse_hotkey(&updated) else {
+                        eprintln!(
+                            "could not update global hotkey to '{updated}': a modifier is required; keeping '{active_hotkey}'"
+                        );
+                        continue;
+                    };
+                    if !registered {
+                        registered = register_hotkey_parsed(&updated, modifiers, key);
+                        if registered {
+                            active_hotkey = updated;
+                        }
+                        continue;
                     }
-                    registered = register_hotkey_value(&updated);
+                    unsafe { UnregisterHotKey(std::ptr::null_mut(), 1) };
+                    if register_hotkey_parsed(&updated, modifiers, key) {
+                        active_hotkey = updated;
+                        registered = true;
+                    } else {
+                        registered = register_hotkey_value(&active_hotkey);
+                        if !registered {
+                            eprintln!(
+                                "could not restore previous global hotkey '{}'; hotkey registration is currently inactive",
+                                active_hotkey
+                            );
+                        }
+                    }
                 }
                 if unsafe { PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) } != 0
                 {
