@@ -92,23 +92,9 @@ wowie.on("empty_state", function(context)
         request_id = context.request_id,
         title = text("Search with Everything", "使用 Everything 搜索"),
         description = text(
-            "Search files with Everything; all Everything syntax is supported. Press Enter to view the usage guide.",
-            "使用 Everything 搜索文件，支持全部 Everything 语法。按 Enter 查看用法说明。"
+            "Search files with Everything; all Everything syntax is supported.",
+            "使用 Everything 搜索文件，支持全部 Everything 语法。"
         ),
-        icon = icon(),
-        detail = {
-            title = text("Everything search guide", "Everything 搜索说明"),
-            subtitle = text("Everything native query syntax", "Everything 原生搜索语法"),
-            scrollable = true,
-            blocks = {{
-                type = "text",
-                color = "primary",
-                copyable = true,
-                text = text(
-                    "Everything accepts its complete native query syntax, including filename filters, paths, operators, and regular expressions.",
-                    "Everything 支持完整的原生搜索语法，包括文件名筛选、路径、运算符和正则表达式。"
-                )
-            }}
-        }
+        icon = icon()
     }
 end)
