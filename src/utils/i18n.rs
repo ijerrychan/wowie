@@ -112,6 +112,18 @@ mod tests {
     }
 
     #[test]
+    fn global_hotkey_description_has_settings_translation() {
+        assert_eq!(
+            tr_in_context(
+                "zh-CN",
+                "Settings",
+                "Click the field and press a modifier plus a key. Press Escape to cancel."
+            ),
+            "点击此字段并按下修饰键和按键。按 Esc 取消。"
+        );
+    }
+
+    #[test]
     fn contextual_translation_can_return_multiple_values() {
         assert_eq!(
             tr_list("zh-CN", "Launcher", "Weather keyword"),

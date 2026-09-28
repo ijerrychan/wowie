@@ -364,6 +364,10 @@ msgid "Keyboard shortcut used to open the launcher."
 msgstr "用于打开启动器的快捷键。"
 
 msgctxt "Settings"
+msgid "Click the field and press a modifier plus a key. Press Escape to cancel."
+msgstr "点击此字段并按下修饰键和按键。按 Esc 取消。"
+
+msgctxt "Settings"
 msgid "Show on startup"
 msgstr "启动时显示"
 

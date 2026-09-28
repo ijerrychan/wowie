@@ -365,6 +365,10 @@ msgid "Keyboard shortcut used to open the launcher."
 msgstr "Keyboard shortcut used to open the launcher."
 
 msgctxt "Settings"
+msgid "Click the field and press a modifier plus a key. Press Escape to cancel."
+msgstr "Click the field and press a modifier plus a key. Press Escape to cancel."
+
+msgctxt "Settings"
 msgid "Show on startup"
 msgstr "Show on startup"
 
