@@ -17,6 +17,7 @@ impl PlatformIntegration for UnsupportedPlatform {
         &self,
         hotkey: &str,
         _watch_system_theme: bool,
+        _shutdown: &super::PlatformShutdown,
     ) -> Result<HotkeyRegistration> {
         eprintln!("global hotkey '{hotkey}' is only available on Windows");
         let (_sender, receiver) = std::sync::mpsc::channel();
@@ -27,7 +28,11 @@ impl PlatformIntegration for UnsupportedPlatform {
         })
     }
 
-    fn start_tray(&self, _labels: TrayMenuLabels) -> TrayRegistration {
+    fn start_tray(
+        &self,
+        _labels: TrayMenuLabels,
+        _shutdown: &super::PlatformShutdown,
+    ) -> TrayRegistration {
         let (_sender, receiver) = std::sync::mpsc::channel();
         let (updates, _update_receiver) = std::sync::mpsc::channel();
         TrayRegistration {

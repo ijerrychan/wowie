@@ -3,6 +3,11 @@ use std::borrow::Cow;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
+use std::thread::JoinHandle;
 
 #[cfg(not(windows))]
 mod unsupported;
@@ -44,6 +49,98 @@ pub struct HotkeyRegistration {
 pub struct TrayRegistration {
     pub events: std::sync::mpsc::Receiver<PlatformEvent>,
     pub updates: std::sync::mpsc::Sender<TrayMenuLabels>,
+}
+
+struct ShutdownState {
+    stopped: AtomicBool,
+    #[cfg(windows)]
+    event: isize,
+}
+
+#[derive(Clone)]
+pub struct ShutdownSignal(Arc<ShutdownState>);
+
+impl ShutdownSignal {
+    pub fn is_stopped(&self) -> bool {
+        self.0.stopped.load(Ordering::Acquire)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn event(&self) -> windows_sys::Win32::Foundation::HANDLE {
+        self.0.event as _
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ShutdownState {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.event as _) };
+    }
+}
+
+pub struct PlatformShutdown {
+    signal: ShutdownSignal,
+    threads: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl PlatformShutdown {
+    pub fn new() -> Self {
+        #[cfg(windows)]
+        let event = unsafe {
+            windows_sys::Win32::System::Threading::CreateEventW(
+                std::ptr::null(),
+                1,
+                0,
+                std::ptr::null(),
+            )
+        };
+        #[cfg(windows)]
+        assert!(!event.is_null(), "could not create platform shutdown event");
+        Self {
+            signal: ShutdownSignal(Arc::new(ShutdownState {
+                stopped: AtomicBool::new(false),
+                #[cfg(windows)]
+                event: event as isize,
+            })),
+            threads: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn spawn(&self, work: impl FnOnce(ShutdownSignal) + Send + 'static) {
+        let signal = self.signal.clone();
+        let thread = std::thread::spawn(move || work(signal));
+        self.threads
+            .lock()
+            .expect("platform thread list poisoned")
+            .push(thread);
+    }
+
+    pub fn stop_and_join(&self) {
+        self.signal.0.stopped.store(true, Ordering::Release);
+        #[cfg(windows)]
+        unsafe {
+            windows_sys::Win32::System::Threading::SetEvent(self.signal.event())
+        };
+        let threads =
+            std::mem::take(&mut *self.threads.lock().expect("platform thread list poisoned"));
+        for thread in threads {
+            if thread.join().is_err() {
+                eprintln!("platform listener panicked during shutdown");
+            }
+        }
+    }
+}
+
+impl Default for PlatformShutdown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for PlatformShutdown {
+    fn drop(&mut self) {
+        self.stop_and_join();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -299,22 +396,43 @@ fn command_shell_label(path: &Path) -> String {
 
 pub fn watch_app_provider_sources(
     custom_directories: std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>>,
+    shutdown: &PlatformShutdown,
 ) -> std::sync::mpsc::Receiver<AppProviderSource> {
     #[cfg(windows)]
     {
-        windows::watch_app_provider_sources(custom_directories)
+        windows::watch_app_provider_sources(custom_directories, shutdown)
     }
     #[cfg(not(windows))]
     {
-        let (_sender, receiver) = std::sync::mpsc::channel();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        shutdown.spawn(move |signal| {
+            let mut previous = None;
+            while !signal.is_stopped() {
+                let Ok(paths) = custom_directories.lock().map(|paths| paths.clone()) else {
+                    break;
+                };
+                let current = crate::utils::filesystem_fingerprint(&paths);
+                if previous.is_some_and(|value| value != current)
+                    && sender.send(AppProviderSource::CustomDirectories).is_err()
+                {
+                    break;
+                }
+                previous = Some(current);
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+        });
         receiver
     }
 }
 
 pub trait PlatformIntegration: Send + Sync {
-    fn register_hotkey(&self, hotkey: &str, watch_system_theme: bool)
-        -> Result<HotkeyRegistration>;
-    fn start_tray(&self, labels: TrayMenuLabels) -> TrayRegistration;
+    fn register_hotkey(
+        &self,
+        hotkey: &str,
+        watch_system_theme: bool,
+        shutdown: &PlatformShutdown,
+    ) -> Result<HotkeyRegistration>;
+    fn start_tray(&self, labels: TrayMenuLabels, shutdown: &PlatformShutdown) -> TrayRegistration;
     fn system_prefers_dark_theme(&self) -> bool;
     fn system_accent_color(&self) -> u32;
     fn position_palette(&self, window: &slint::Window, result_height: f32);
@@ -546,6 +664,45 @@ pub fn current() -> Arc<dyn PlatformIntegration> {
 #[cfg(test)]
 mod geometry_tests {
     use super::logical_point_to_physical;
+
+    #[test]
+    fn platform_shutdown_joins_all_listeners_across_restarts() {
+        use super::PlatformShutdown;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            mpsc, Arc,
+        };
+        let active = Arc::new(AtomicUsize::new(0));
+        for _ in 0..3 {
+            let shutdown = PlatformShutdown::new();
+            let (started, ready) = mpsc::channel();
+            for _ in 0..3 {
+                let active = Arc::clone(&active);
+                let started = started.clone();
+                shutdown.spawn(move |signal| {
+                    active.fetch_add(1, Ordering::SeqCst);
+                    started.send(()).unwrap();
+                    #[cfg(windows)]
+                    unsafe {
+                        windows_sys::Win32::System::Threading::WaitForSingleObject(
+                            signal.event(),
+                            u32::MAX,
+                        )
+                    };
+                    #[cfg(not(windows))]
+                    while !signal.is_stopped() {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    active.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+            for _ in 0..3 {
+                ready.recv().unwrap();
+            }
+            shutdown.stop_and_join();
+            assert_eq!(active.load(Ordering::SeqCst), 0);
+        }
+    }
 
     #[test]
     fn logical_point_conversion_applies_origin_and_scale() {

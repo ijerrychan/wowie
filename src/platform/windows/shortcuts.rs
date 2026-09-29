@@ -20,7 +20,7 @@ pub(crate) fn resolve_shortcut(path: &Path) -> super::super::ShortcutInfo {
         return super::super::ShortcutInfo::default();
     }
     if let Some(shortcut) = resolve_shortcut_native(path) {
-        return shortcut;
+        return discard_icon_file_target(shortcut);
     }
 
     // Keep the binary parser as a fallback for environments where COM cannot
@@ -38,10 +38,27 @@ pub(crate) fn resolve_shortcut(path: &Path) -> super::super::ShortcutInfo {
     let target = u32_at(&data, 0x48)
         .and_then(|offset| (offset != 0).then_some(offset as usize))
         .and_then(|offset| parse_link_info(&data, offset));
-    super::super::ShortcutInfo {
+    discard_icon_file_target(super::super::ShortcutInfo {
         target,
         ..Default::default()
+    })
+}
+
+fn discard_icon_file_target(
+    mut shortcut: super::super::ShortcutInfo,
+) -> super::super::ShortcutInfo {
+    if let Some(target) = shortcut.target.as_deref() {
+        if crate::platform::windows_rules::is_icon_path(target) {
+            if std::env::var_os("WOWIE_PROVIDER_DEBUG").is_some() {
+                eprintln!(
+                    "ignoring shortcut with icon-file target: {}",
+                    target.display()
+                );
+            }
+            shortcut.target = None;
+        }
     }
+    shortcut
 }
 
 fn resolve_shortcut_native(path: &Path) -> Option<super::super::ShortcutInfo> {
@@ -130,13 +147,17 @@ fn parse_link_info(data: &[u8], offset: usize) -> Option<PathBuf> {
         return None;
     }
     let ansi_local_offset = u32_at(link_info, 0x10).unwrap_or_default() as usize;
-    let ansi_local_offset = (ansi_local_offset >= header_size && ansi_local_offset < size)
-        .then_some(ansi_local_offset)
-        .unwrap_or_default();
+    let ansi_local_offset = if ansi_local_offset >= header_size && ansi_local_offset < size {
+        ansi_local_offset
+    } else {
+        0
+    };
     let ansi_suffix_offset = u32_at(link_info, 0x18).unwrap_or_default() as usize;
-    let ansi_suffix_offset = (ansi_suffix_offset >= header_size && ansi_suffix_offset < size)
-        .then_some(ansi_suffix_offset)
-        .unwrap_or_default();
+    let ansi_suffix_offset = if ansi_suffix_offset >= header_size && ansi_suffix_offset < size {
+        ansi_suffix_offset
+    } else {
+        0
+    };
     let unicode_local_offset = (header_size >= 0x24)
         .then(|| u32_at(link_info, 0x1c).unwrap_or_default() as usize)
         .filter(|value| *value >= header_size && *value < size);
@@ -211,6 +232,25 @@ mod tests {
         data[0..4].copy_from_slice(&(0x1c_u32).to_le_bytes());
         data[4..8].copy_from_slice(&(0x24_u32).to_le_bytes());
         assert!(parse_link_info(&data, 0).is_none());
+    }
+
+    #[test]
+    fn truncated_shell_link_fixture_is_rejected() {
+        let path = std::env::temp_dir().join(format!(
+            "wowie-truncated-shortcut-{}-{}.lnk",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(
+            &path,
+            include_bytes!("../../../tests/fixtures/windows/truncated-shell-link.lnk"),
+        )
+        .unwrap();
+        assert!(resolve_shortcut(&path).target.is_none());
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

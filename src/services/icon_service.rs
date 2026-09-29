@@ -35,9 +35,18 @@ type IconCache = ByteCache<IconData, MAX_CACHED_ICON_BYTES>;
 type SourceCache = ByteCache<Vec<u8>, MAX_CACHED_SOURCE_BYTES>;
 
 struct ByteCache<T, const LIMIT: usize> {
-    entries: HashMap<String, (Arc<T>, usize)>,
-    lru: VecDeque<String>,
+    entries: HashMap<Arc<str>, CacheEntry<T>>,
+    // Access stamps make a hit append-only. Stale stamps are skipped during
+    // eviction and compacted periodically to keep metadata bounded.
+    lru: VecDeque<(u64, Arc<str>)>,
     bytes: usize,
+    access_clock: u64,
+}
+
+struct CacheEntry<T> {
+    value: Arc<T>,
+    bytes: usize,
+    access: u64,
 }
 
 impl<T, const LIMIT: usize> Default for ByteCache<T, LIMIT> {
@@ -46,6 +55,7 @@ impl<T, const LIMIT: usize> Default for ByteCache<T, LIMIT> {
             entries: HashMap::new(),
             lru: VecDeque::new(),
             bytes: 0,
+            access_clock: 0,
         }
     }
 }
@@ -193,16 +203,19 @@ impl IconService {
 
 impl<T: CacheSize, const LIMIT: usize> ByteCache<T, LIMIT> {
     fn get(&mut self, key: &str) -> Option<Arc<T>> {
-        let value = Arc::clone(&self.entries.get(key)?.0);
-        self.lru.retain(|existing| existing != key);
-        self.lru.push_back(key.to_owned());
+        let access = self.next_access();
+        let (stored_key, entry) = self.entries.get_key_value(key)?;
+        let stored_key = Arc::clone(stored_key);
+        let value = Arc::clone(&entry.value);
+        self.entries.get_mut(key)?.access = access;
+        self.lru.push_back((access, stored_key));
+        self.compact_if_needed();
         Some(value)
     }
 
     fn insert(&mut self, key: String, value: Arc<T>) {
-        if let Some((_, size)) = self.entries.remove(&key) {
-            self.bytes -= size;
-            self.lru.retain(|existing| existing != &key);
+        if let Some(entry) = self.entries.remove(key.as_str()) {
+            self.bytes -= entry.bytes;
         }
         let size = value.cache_bytes();
         // Do not let oversized or empty entries evict useful data or bypass
@@ -211,16 +224,70 @@ impl<T: CacheSize, const LIMIT: usize> ByteCache<T, LIMIT> {
             return;
         }
         while self.bytes > LIMIT - size {
-            let Some(oldest) = self.lru.pop_front() else {
+            let Some((access, oldest)) = self.lru.pop_front() else {
                 break;
             };
-            if let Some((_, removed)) = self.entries.remove(&oldest) {
-                self.bytes -= removed;
+            if self
+                .entries
+                .get(oldest.as_ref())
+                .is_some_and(|entry| entry.access == access)
+            {
+                if let Some(removed) = self.entries.remove(oldest.as_ref()) {
+                    self.bytes -= removed.bytes;
+                }
             }
         }
+        let access = self.next_access();
+        let key: Arc<str> = Arc::from(key);
         self.bytes += size;
-        self.lru.push_back(key.clone());
-        self.entries.insert(key, (value, size));
+        self.lru.push_back((access, Arc::clone(&key)));
+        self.entries.insert(
+            key,
+            CacheEntry {
+                value,
+                bytes: size,
+                access,
+            },
+        );
+        self.compact_if_needed();
+    }
+
+    fn next_access(&mut self) -> u64 {
+        if self.access_clock == u64::MAX {
+            self.compact_lru();
+            let mut entries = self
+                .entries
+                .iter()
+                .map(|(key, entry)| (entry.access, Arc::clone(key)))
+                .collect::<Vec<_>>();
+            entries.sort_unstable_by_key(|(access, _)| *access);
+            self.lru.clear();
+            for (index, (_, key)) in entries.into_iter().enumerate() {
+                let access = index as u64 + 1;
+                if let Some(entry) = self.entries.get_mut(key.as_ref()) {
+                    entry.access = access;
+                }
+                self.lru.push_back((access, key));
+            }
+            self.access_clock = self.entries.len() as u64;
+        }
+        self.access_clock += 1;
+        self.access_clock
+    }
+
+    fn compact_if_needed(&mut self) {
+        let limit = self.entries.len().saturating_mul(2).saturating_add(64);
+        if self.lru.len() > limit {
+            self.compact_lru();
+        }
+    }
+
+    fn compact_lru(&mut self) {
+        self.lru.retain(|(access, key)| {
+            self.entries
+                .get(key.as_ref())
+                .is_some_and(|entry| entry.access == *access)
+        });
     }
 }
 
@@ -251,6 +318,12 @@ fn resolve_uncached(
         .and_then(|spec| resolve_spec_with_cache(spec, size, sources))
     {
         return Some(icon);
+    }
+
+    if item.category == crate::result::ResultCategory::ControlPanel {
+        // The Control Panel namespace has a stable Shell-owned root icon. Use
+        // it when an individual applet no longer exposes its own icon.
+        return crate::platform::application_icon(Path::new("shell:ControlPanelFolder"));
     }
 
     let icon_target = crate::providers::app::preferred_launch_entry(item)
@@ -583,6 +656,111 @@ mod tests {
     use super::*;
     use crate::result::{ResultCategory, SearchResult};
     use std::path::PathBuf;
+
+    #[test]
+    #[ignore = "repeatable performance benchmark; run with --ignored --nocapture --test-threads=1"]
+    fn icon_cache_hit_miss_and_lru_benchmark() {
+        use std::time::Instant;
+
+        let service = IconService::new();
+        let spec = IconSpec::Named("book".into());
+        let warm = service.resolve_spec_at(&spec, 24).unwrap();
+        let mut lru = ByteCache::<Vec<u8>, MAX_CACHED_ICON_BYTES>::default();
+        let keys = (0..800)
+            .map(|index| format!("icon-{index}"))
+            .collect::<Vec<_>>();
+        for key in &keys {
+            lru.insert(key.clone(), Arc::new(vec![0; 2048]));
+        }
+        let (
+            (mut hit_samples, mut miss_samples, mut lru_samples, evictions, mut failure_samples),
+            peak_threads,
+        ) = crate::perf_support::measure_peak_threads(|| {
+            let mut hit_samples = Vec::with_capacity(500);
+            for _ in 0..500 {
+                let started = Instant::now();
+                let icon = service.resolve_spec_at(&spec, 24).unwrap();
+                assert!(Arc::ptr_eq(&warm, &icon));
+                hit_samples.push(started.elapsed());
+            }
+            let mut miss_samples = Vec::with_capacity(20);
+            for _ in 0..20 {
+                let miss_service = IconService::new();
+                let started = Instant::now();
+                assert!(miss_service.resolve_spec_at(&spec, 24).is_some());
+                miss_samples.push(started.elapsed());
+            }
+            let mut lru_samples = Vec::with_capacity(2_000);
+            for index in 0..2_000 {
+                let started = Instant::now();
+                assert!(lru.get(&keys[index % keys.len()]).is_some());
+                lru_samples.push(started.elapsed());
+            }
+            let entries_before_eviction = lru.entries.len();
+            lru.insert("eviction-probe".into(), Arc::new(vec![0; 512 * 1024]));
+            let evictions = entries_before_eviction + 1 - lru.entries.len();
+
+            let missing = std::env::temp_dir().join(format!(
+                "wowie-missing-icon-{}-{}.png",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let failed = IconService::new();
+            let mut failure_samples = Vec::with_capacity(5);
+            for _ in 0..5 {
+                let started = Instant::now();
+                assert!(failed
+                    .resolve_spec_at(&IconSpec::Resource(missing.clone()), 24)
+                    .is_none());
+                failure_samples.push(started.elapsed());
+            }
+            (
+                hit_samples,
+                miss_samples,
+                lru_samples,
+                evictions,
+                failure_samples,
+            )
+        });
+        let (hit_p50, hit_p95) = crate::perf_support::percentiles(&mut hit_samples);
+        let (miss_p50, miss_p95) = crate::perf_support::percentiles(&mut miss_samples);
+        let (lru_p50, lru_p95) = crate::perf_support::percentiles(&mut lru_samples);
+        let (failure_p50, failure_p95) = crate::perf_support::percentiles(&mut failure_samples);
+        let icon_cache_bytes = service
+            .cache
+            .lock()
+            .map(|cache| cache.bytes)
+            .unwrap_or_default();
+        let source_cache_bytes = service
+            .sources
+            .lock()
+            .map(|cache| cache.bytes)
+            .unwrap_or_default();
+        let stats = crate::utils::background::stats();
+        eprintln!(
+            "[perf] icon_cache cache_hits=500 cache_misses=20 hit_rate_percent={:.1} hit_p50_us={} hit_p95_us={} miss_p50_us={} miss_p95_us={} lru_entries={} lru_bytes={} lru_hit_p50_us={} lru_hit_p95_us={} eviction_count={} failure_attempts=5 failure_retries=4 failure_p50_us={} failure_p95_us={} failure_cache_entries=0 decoded_cache_bytes={} source_cache_bytes={} process_peak_threads={} pending_tasks={} pending_peak={}",
+            500.0_f64 / 520.0 * 100.0,
+            hit_p50.as_micros(),
+            hit_p95.as_micros(),
+            miss_p50.as_micros(),
+            miss_p95.as_micros(),
+            lru.entries.len(),
+            lru.bytes,
+            lru_p50.as_micros(),
+            lru_p95.as_micros(),
+            evictions,
+            failure_p50.as_micros(),
+            failure_p95.as_micros(),
+            icon_cache_bytes,
+            source_cache_bytes,
+            peak_threads,
+            stats.pending,
+            stats.peak_pending,
+        );
+    }
 
     #[test]
     fn detail_images_are_decoded_once_and_oversized_files_are_rejected() {

@@ -2,7 +2,6 @@ use super::super::{PlatformEvent, TrayMenuLabels, TrayRegistration};
 use std::{
     mem,
     sync::{Arc, Mutex},
-    thread,
 };
 
 const WM_TRAY: u32 = 0x8001;
@@ -205,12 +204,15 @@ fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-pub(crate) fn start(labels: TrayMenuLabels) -> TrayRegistration {
+pub(crate) fn start(
+    labels: TrayMenuLabels,
+    shutdown: &super::super::PlatformShutdown,
+) -> TrayRegistration {
     let (sender, receiver) = std::sync::mpsc::channel();
     let (updates, update_receiver) = std::sync::mpsc::channel::<TrayMenuLabels>();
     let labels = Arc::new(Mutex::new(labels));
     let labels_for_thread = Arc::clone(&labels);
-    thread::spawn(move || unsafe {
+    shutdown.spawn(move |signal| unsafe {
         let class_name = wide("WowieTrayWindow");
         let instance = GetModuleHandleW(std::ptr::null());
         let state = Box::into_raw(Box::new(CallbackState {
@@ -285,20 +287,29 @@ pub(crate) fn start(labels: TrayMenuLabels) -> TrayRegistration {
             point: Point { x: 0, y: 0 },
             private: 0,
         };
-        loop {
+        'message_loop: while !signal.is_stopped() {
             while let Ok(updated) = update_receiver.try_recv() {
                 if let Ok(mut current) = (*state).labels.lock() {
                     *current = updated;
                 }
             }
-            if PeekMessageW(&mut message, 0, 0, 0, 1) != 0 {
+            while PeekMessageW(&mut message, 0, 0, 0, 1) != 0 {
                 if message.message == WM_QUIT {
-                    break;
+                    break 'message_loop;
                 }
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
-            } else {
-                thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let stop = signal.event();
+            let wait = windows_sys::Win32::UI::WindowsAndMessaging::MsgWaitForMultipleObjectsEx(
+                1,
+                &stop,
+                250,
+                windows_sys::Win32::UI::WindowsAndMessaging::QS_ALLINPUT,
+                windows_sys::Win32::UI::WindowsAndMessaging::MWMO_INPUTAVAILABLE,
+            );
+            if wait == 0 || wait == u32::MAX {
+                break;
             }
         }
         Shell_NotifyIconW(NIM_DELETE, &data);

@@ -217,6 +217,7 @@ pub(super) fn collect_store_apps(
                     .unwrap_or_else(|| app.launch_target.clone()),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             }],
             actions: Vec::new(),
             detail: None,
@@ -326,6 +327,7 @@ pub(super) fn collect_tree(
                     target: path.clone(),
                     arguments: String::new(),
                     working_directory: None,
+                    icon: None,
                 }],
                 actions: Vec::new(),
                 detail: None,
@@ -361,6 +363,7 @@ pub(super) fn collect_tree(
             let Some(normalized_url) = normalize_url(&url) else {
                 continue;
             };
+            let icon = Some(IconSpec::DefaultOpen(PathBuf::from(&url)));
             output.push(SearchResult {
                 id: format!("url:{normalized_url}"),
                 identity: format!("url:{normalized_url}"),
@@ -379,6 +382,7 @@ pub(super) fn collect_tree(
                     target: PathBuf::from(&url),
                     arguments: String::new(),
                     working_directory: None,
+                    icon: icon.clone(),
                 }],
                 actions: Vec::new(),
                 detail: None,
@@ -386,7 +390,7 @@ pub(super) fn collect_tree(
                 app_user_model_id: None,
                 package_family_name: None,
                 package_metadata: None,
-                icon: Some(IconSpec::DefaultOpen(PathBuf::from(&url))),
+                icon,
                 ranking_bias: 0,
                 allow_favorite: true,
                 visibility: crate::result::ResultVisibility::Always,
@@ -420,6 +424,22 @@ pub(super) fn collect_tree(
         };
         let aliases = target_stem_alias(title, &resolved_target);
         let (app_user_model_id, package_family_name) = packaged_identity_fields(&identity);
+        let icon = website_url
+            .as_ref()
+            .map(|url| IconSpec::DefaultOpen(PathBuf::from(url)))
+            .or_else(|| {
+                Some(match (shortcut.icon_path.as_deref(), shortcut.icon_index) {
+                    (Some(icon_path), Some(index)) => IconSpec::SystemIndexed {
+                        path: shortcut_icon_target(&path, Some(icon_path), &resolved_target),
+                        index,
+                    },
+                    _ => IconSpec::System(shortcut_icon_target(
+                        &path,
+                        shortcut.icon_path.as_deref(),
+                        &resolved_target,
+                    )),
+                })
+            });
         output.push(SearchResult {
             id: identity.clone(),
             identity,
@@ -439,6 +459,7 @@ pub(super) fn collect_tree(
                 target: resolved_target.clone(),
                 arguments: shortcut.arguments.clone().unwrap_or_default(),
                 working_directory: shortcut.working_directory.clone(),
+                icon: icon.clone(),
             }],
             actions: Vec::new(),
             detail: None,
@@ -446,22 +467,7 @@ pub(super) fn collect_tree(
             app_user_model_id,
             package_family_name,
             package_metadata: None,
-            icon: website_url
-                .map(PathBuf::from)
-                .map(IconSpec::DefaultOpen)
-                .or_else(|| {
-                    Some(match (shortcut.icon_path.as_deref(), shortcut.icon_index) {
-                        (Some(icon_path), Some(index)) => IconSpec::SystemIndexed {
-                            path: shortcut_icon_target(&path, Some(icon_path), &resolved_target),
-                            index,
-                        },
-                        _ => IconSpec::System(shortcut_icon_target(
-                            &path,
-                            shortcut.icon_path.as_deref(),
-                            &resolved_target,
-                        )),
-                    })
-                }),
+            icon,
             ranking_bias: 0,
             allow_favorite: true,
             visibility: crate::result::ResultVisibility::Always,
@@ -488,9 +494,10 @@ pub(super) fn generic_file_result(path: &Path, title: &str, source: &str) -> Sea
         launch_entries: vec![LaunchEntry {
             source: source_id,
             path: target.clone(),
-            target,
+            target: target.clone(),
             arguments: String::new(),
             working_directory: None,
+            icon: Some(IconSpec::DefaultOpen(target.clone())),
         }],
         actions: Vec::new(),
         detail: None,
@@ -498,7 +505,7 @@ pub(super) fn generic_file_result(path: &Path, title: &str, source: &str) -> Sea
         app_user_model_id: None,
         package_family_name: None,
         package_metadata: None,
-        icon: Some(IconSpec::DefaultOpen(path.to_owned())),
+        icon: Some(IconSpec::DefaultOpen(target)),
         ranking_bias: 0,
         allow_favorite: true,
         visibility: crate::result::ResultVisibility::Always,

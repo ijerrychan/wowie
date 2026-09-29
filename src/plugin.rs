@@ -68,6 +68,35 @@ const QUERY_HOOK_INSTRUCTION_INTERVAL: u32 = 10_000;
 const QUERY_CANCELLED: &str = "plugin query cancelled";
 const QUERY_TIMED_OUT: &str = "plugin query timed out";
 const MAX_EVERYTHING_IPC_RESULTS: usize = 256;
+const MAX_PLUGIN_FUZZY_CANDIDATES: usize = 20_000;
+const MAX_PLUGIN_FUZZY_FIELDS: usize = 8;
+const MAX_PLUGIN_FUZZY_TEXT_BYTES: usize = 4096;
+const MAX_PLUGIN_FUZZY_QUERY_BYTES: usize = 4096;
+
+struct PluginFuzzyScratch {
+    matcher: Matcher,
+    text_buffer: Vec<char>,
+    query_buffer: Vec<char>,
+}
+
+impl PluginFuzzyScratch {
+    fn new() -> Self {
+        Self {
+            matcher: Matcher::new(MatcherConfig::DEFAULT),
+            text_buffer: Vec::new(),
+            query_buffer: Vec::new(),
+        }
+    }
+
+    fn matches(&mut self, text: &str, query: &str) -> bool {
+        if query.trim().is_empty() {
+            return true;
+        }
+        let haystack = Utf32Str::new(text, &mut self.text_buffer);
+        let needle = Utf32Str::new(query, &mut self.query_buffer);
+        self.matcher.fuzzy_match(haystack, needle).is_some()
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PluginManifest {
@@ -451,21 +480,78 @@ impl EmbeddedPlugin {
                 Ok(())
             })?,
         )?;
+        let fuzzy_scratch = Arc::new(Mutex::new(PluginFuzzyScratch::new()));
+        let single_fuzzy_scratch = Arc::clone(&fuzzy_scratch);
         wowie.set(
             "fuzzy_match",
-            lua.create_function(|_, (text, query): (String, String)| {
-                if query.trim().is_empty() {
-                    return Ok(true);
+            lua.create_function(move |_, (text, query): (String, String)| {
+                let mut scratch = single_fuzzy_scratch
+                    .lock()
+                    .map_err(|_| mlua::Error::runtime("fuzzy matcher is unavailable"))?;
+                Ok(scratch.matches(&text, &query))
+            })?,
+        )?;
+        wowie.set(
+            "fuzzy_filter",
+            lua.create_function(move |lua, (candidates, query): (mlua::Table, String)| {
+                if query.len() > MAX_PLUGIN_FUZZY_QUERY_BYTES {
+                    return Err(mlua::Error::runtime("fuzzy query is too long"));
                 }
-                let mut matcher = Matcher::new(MatcherConfig::DEFAULT);
-                let mut text_buffer = Vec::new();
-                let mut query_buffer = Vec::new();
-                Ok(matcher
-                    .fuzzy_match(
-                        Utf32Str::new(&text, &mut text_buffer),
-                        Utf32Str::new(&query, &mut query_buffer),
-                    )
-                    .is_some())
+                if candidates.raw_len() > MAX_PLUGIN_FUZZY_CANDIDATES {
+                    return Err(mlua::Error::runtime("too many fuzzy candidates"));
+                }
+                let results = lua.create_table()?;
+                let mut scratch = fuzzy_scratch
+                    .lock()
+                    .map_err(|_| mlua::Error::runtime("fuzzy matcher is unavailable"))?;
+                let PluginFuzzyScratch {
+                    matcher,
+                    text_buffer,
+                    query_buffer,
+                } = &mut *scratch;
+                let needle = Utf32Str::new(&query, query_buffer);
+                let match_all = query.trim().is_empty();
+                let mut result_count = 0;
+                for (index, candidate) in candidates.sequence_values::<Value>().enumerate() {
+                    let candidate = candidate?;
+                    let mut matches = match_all;
+                    if !matches {
+                        let mut check_text = |text: mlua::String| -> mlua::Result<bool> {
+                            let text = text.to_str()?;
+                            if text.len() > MAX_PLUGIN_FUZZY_TEXT_BYTES {
+                                return Err(mlua::Error::runtime(
+                                    "fuzzy candidate text is too long",
+                                ));
+                            }
+                            let haystack = Utf32Str::new(&text, text_buffer);
+                            Ok(matcher.fuzzy_match(haystack, needle).is_some())
+                        };
+                        matches = match candidate {
+                            Value::String(text) => check_text(text)?,
+                            Value::Table(fields) => {
+                                if fields.raw_len() > MAX_PLUGIN_FUZZY_FIELDS {
+                                    return Err(mlua::Error::runtime(
+                                        "too many fuzzy candidate fields",
+                                    ));
+                                }
+                                let mut found = false;
+                                for field in fields.sequence_values::<mlua::String>() {
+                                    if check_text(field?)? {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                found
+                            }
+                            _ => return Err(mlua::Error::runtime("invalid fuzzy candidate")),
+                        };
+                    }
+                    if matches {
+                        result_count += 1;
+                        results.raw_set(result_count, index + 1)?;
+                    }
+                }
+                Ok(results)
             })?,
         )?;
         // File-system access is deliberately generic: plugins can implement
@@ -898,300 +984,12 @@ fn download_plugin_file(url: &str, filename: &str) -> Result<String> {
     anyhow::bail!("could not choose a free download filename")
 }
 
-#[derive(Debug, Deserialize)]
-struct QueryResponse {
-    #[serde(default)]
-    request_id: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_plugin_items")]
-    items: Vec<PluginItem>,
-    #[serde(default)]
-    error: Option<PluginError>,
-}
+mod protocol;
+use protocol::*;
+#[allow(unused_imports)]
+pub use protocol::{ExecuteResponse, PluginError};
 
-#[derive(Debug, Deserialize)]
-struct DetailResponse {
-    #[serde(default)]
-    request_id: Option<String>,
-    #[serde(default)]
-    detail: Option<PluginDetailView>,
-    #[serde(default)]
-    error: Option<PluginError>,
-}
-
-#[derive(Debug, Deserialize)]
-struct EmptyStateResponse {
-    #[serde(default)]
-    request_id: Option<String>,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    icon: Option<IconRef>,
-    #[serde(default)]
-    detail: Option<PluginDetailView>,
-    #[serde(default)]
-    error: Option<PluginError>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SearchEngineIconResponse {
-    #[serde(default)]
-    request_id: Option<String>,
-    #[serde(default)]
-    icon: Option<IconRef>,
-    #[serde(default)]
-    error: Option<PluginError>,
-}
-
-fn deserialize_plugin_items<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Vec<PluginItem>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = serde_json::Value::deserialize(deserializer)?;
-    match value {
-        serde_json::Value::Array(items) => {
-            if items.len() > MAX_PLUGIN_ITEMS {
-                return Err(de::Error::custom(format!(
-                    "plugin returned too many items ({}; limit {})",
-                    items.len(),
-                    MAX_PLUGIN_ITEMS
-                )));
-            }
-            items
-                .into_iter()
-                .map(serde_json::from_value)
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(de::Error::custom)
-        }
-        // Lua has no distinct empty-array type. An empty table is encoded as
-        // an object by mlua, so accept it as the protocol's empty item list.
-        serde_json::Value::Object(items) if items.is_empty() => Ok(Vec::new()),
-        other => Err(de::Error::custom(format!(
-            "expected plugin items array, got {}",
-            json_type_name(&other)
-        ))),
-    }
-}
-
-fn json_type_name(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ExecuteResponse {
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub subtitle: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub error: Option<PluginError>,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-pub struct PluginError {
-    pub code: String,
-    pub message: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(default)]
-struct PluginItem {
-    id: String,
-    title: String,
-    #[serde(default)]
-    category: Option<String>,
-    #[serde(default)]
-    subtitle: String,
-    #[serde(default)]
-    aliases: Vec<String>,
-    #[serde(default = "default_optional_string")]
-    target: Option<String>,
-    #[serde(default)]
-    actions: Vec<PluginAction>,
-    #[serde(default)]
-    context_actions: Vec<PluginContextAction>,
-    #[serde(default)]
-    icon: Option<IconRef>,
-    #[serde(default)]
-    detail: Option<PluginDetailView>,
-    #[serde(default)]
-    command_id: Option<String>,
-    /// Enter the command's search-engine session instead of executing a
-    /// plugin callback. This lets a plugin expose a normal custom result in
-    /// the default search surface.
-    #[serde(default)]
-    session_entry: bool,
-    #[serde(default)]
-    session_updates: BTreeMap<String, String>,
-    /// Optional favorite policy. Session menu rows default to non-favoritable.
-    #[serde(default)]
-    allow_favorite: Option<bool>,
-    #[serde(default)]
-    ranking_bias: i32,
-    /// Declarative visibility for session menus and introductory rows.
-    #[serde(default)]
-    visible_when: PluginItemVisibility,
-}
-
-#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum PluginItemVisibility {
-    #[default]
-    Always,
-    EmptyQuery,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct PluginDetailView {
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    subtitle: String,
-    #[serde(default)]
-    source: String,
-    #[serde(default)]
-    blocks: Vec<PluginDetailBlock>,
-    #[serde(default)]
-    actions: Vec<PluginDetailAction>,
-    #[serde(default)]
-    width: Option<PluginDetailWidth>,
-    #[serde(default)]
-    scrollable: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct PluginDetailWidth {
-    preferred: i32,
-    #[serde(default = "default_detail_min_width")]
-    min: i32,
-    #[serde(default = "default_detail_max_width")]
-    max: i32,
-}
-
-fn default_detail_min_width() -> i32 {
-    320
-}
-
-fn default_detail_max_width() -> i32 {
-    640
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct PluginDetailAction {
-    id: String,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    icon: Option<IconRef>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum PluginDetailBlock {
-    Text {
-        text: String,
-        #[serde(default = "default_detail_color")]
-        color: String,
-        #[serde(default)]
-        copyable: bool,
-    },
-    Metric {
-        label: String,
-        value: String,
-        #[serde(default = "default_detail_color")]
-        color: String,
-    },
-    Icon {
-        glyph: String,
-        #[serde(default = "default_detail_color")]
-        color: String,
-        #[serde(default)]
-        icon: Option<IconRef>,
-    },
-    Weather {
-        value: String,
-    },
-    Markdown {
-        markdown: String,
-        #[serde(default = "default_detail_color")]
-        color: String,
-        #[serde(default)]
-        copyable: bool,
-    },
-    Image {
-        source: String,
-        #[serde(default)]
-        alt: String,
-    },
-    Code {
-        language: String,
-        code: String,
-    },
-    Table {
-        columns: Vec<String>,
-        rows: Vec<Vec<String>>,
-    },
-    Link {
-        label: String,
-        url: String,
-    },
-    Loading {
-        #[serde(default = "default_loading_message")]
-        message: String,
-    },
-    Error {
-        message: String,
-        #[serde(default)]
-        retry_action: Option<String>,
-    },
-    Separator,
-}
-
-fn default_loading_message() -> String {
-    "Loading preview".into()
-}
-
-fn default_detail_color() -> String {
-    "secondary".into()
-}
-
-fn default_optional_string() -> Option<String> {
-    None
-}
-
-#[derive(Debug, Deserialize)]
-struct PluginAction {
-    id: String,
-    #[serde(default)]
-    icon: Option<IconRef>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PluginContextAction {
-    id: String,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    subtitle: String,
-    #[serde(default)]
-    icon: Option<IconRef>,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PluginManager {
     plugins: Vec<InstalledPlugin>,
     locale: Arc<Mutex<String>>,
@@ -2322,547 +2120,251 @@ fn plugin_preferences(
         .unwrap_or_default()
 }
 
-fn validate_query_response(response: &QueryResponse, request_id: &str) -> Result<()> {
-    validate_response_id(response.request_id.as_deref(), request_id)?;
-    if let Some(error) = &response.error {
-        anyhow::bail!("plugin error [{}]: {}", error.code, error.message);
-    }
-    Ok(())
-}
-
-fn validate_protocol_response(output: &str, request_id: &str) -> Result<()> {
-    if output.len() > MAX_PLUGIN_SMALL_RESPONSE_BYTES {
-        anyhow::bail!(
-            "plugin response exceeds {} bytes",
-            MAX_PLUGIN_SMALL_RESPONSE_BYTES
-        );
-    }
-    let value: serde_json::Value =
-        serde_json::from_str(output).context("decode plugin response envelope")?;
-    validate_json_shape(&value)?;
-    if let Some(response_id) = value.get("request_id").and_then(|value| value.as_str()) {
-        validate_response_id(Some(response_id), request_id)?;
-    }
-    if let Some(error) = value.get("error") {
-        let error: PluginError =
-            serde_json::from_value(error.clone()).context("decode plugin error")?;
-        anyhow::bail!("plugin error [{}]: {}", error.code, error.message);
-    }
-    Ok(())
-}
-
-fn bound_execute_response(output: &str) -> Result<String> {
-    let mut value: serde_json::Value =
-        serde_json::from_str(output).context("decode plugin execute response")?;
-    if let serde_json::Value::Object(fields) = &mut value {
-        for key in ["title", "subtitle"] {
-            if let Some(serde_json::Value::String(text)) = fields.get_mut(key) {
-                *text = limit_context_text(text, MAX_PLUGIN_ITEM_SUBTITLE_CHARS);
-            }
-        }
-    }
-    serde_json::to_string(&value).context("encode bounded plugin execute response")
-}
-
-fn validate_json_shape(value: &serde_json::Value) -> Result<()> {
-    fn visit(
-        value: &serde_json::Value,
-        depth: usize,
-        nodes: &mut usize,
-        string_bytes: &mut usize,
-    ) -> Result<()> {
-        if depth > MAX_PLUGIN_JSON_DEPTH {
-            anyhow::bail!("plugin response nesting exceeds {MAX_PLUGIN_JSON_DEPTH} levels");
-        }
-        *nodes = nodes.saturating_add(1);
-        if *nodes > MAX_PLUGIN_JSON_NODES {
-            anyhow::bail!("plugin response contains too many JSON values");
-        }
-        match value {
-            serde_json::Value::String(text) => {
-                *string_bytes = string_bytes.saturating_add(text.len());
-                if *string_bytes > MAX_PLUGIN_JSON_STRING_BYTES {
-                    anyhow::bail!("plugin response contains too much string data");
-                }
-            }
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    visit(value, depth + 1, nodes, string_bytes)?;
-                }
-            }
-            serde_json::Value::Object(values) => {
-                for (key, value) in values {
-                    *string_bytes = string_bytes.saturating_add(key.len());
-                    visit(value, depth + 1, nodes, string_bytes)?;
-                }
-            }
-            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
-            }
-        }
-        Ok(())
-    }
-
-    let mut nodes = 0;
-    let mut string_bytes = 0;
-    visit(value, 0, &mut nodes, &mut string_bytes)
-}
-
-fn validate_lua_value(value: &Value) -> Result<()> {
-    fn visit(
-        value: &Value,
-        depth: usize,
-        nodes: &mut usize,
-        string_bytes: &mut usize,
-    ) -> Result<()> {
-        if depth > MAX_PLUGIN_JSON_DEPTH {
-            anyhow::bail!("plugin callback nesting exceeds {MAX_PLUGIN_JSON_DEPTH} levels");
-        }
-        *nodes = nodes.saturating_add(1);
-        if *nodes > MAX_PLUGIN_JSON_NODES {
-            anyhow::bail!("plugin callback contains too many Lua values");
-        }
-        match value {
-            Value::String(text) => {
-                *string_bytes = string_bytes.saturating_add(text.as_bytes().len());
-                if *string_bytes > MAX_PLUGIN_JSON_STRING_BYTES {
-                    anyhow::bail!("plugin callback contains too much string data");
-                }
-            }
-            Value::Table(table) => {
-                for pair in table.clone().pairs::<Value, Value>() {
-                    let (key, value) = pair?;
-                    visit(&key, depth + 1, nodes, string_bytes)?;
-                    visit(&value, depth + 1, nodes, string_bytes)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    let mut nodes = 0;
-    let mut string_bytes = 0;
-    visit(value, 0, &mut nodes, &mut string_bytes)
-}
-
-fn parse_plugin_response<T: DeserializeOwned>(output: &str, max_bytes: usize) -> Result<T> {
-    if output.len() > max_bytes {
-        anyhow::bail!("plugin response exceeds {max_bytes} bytes");
-    }
-    let value: serde_json::Value =
-        serde_json::from_str(output).context("decode plugin response")?;
-    validate_json_shape(&value)?;
-    serde_json::from_value(value).context("decode plugin response payload")
-}
-
-fn validate_response_id(response_id: Option<&str>, request_id: &str) -> Result<()> {
-    if let Some(response_id) = response_id {
-        if response_id != request_id {
-            anyhow::bail!(
-                "plugin response request_id mismatch: expected {request_id}, got {response_id}"
-            );
-        }
-    }
-    Ok(())
-}
-
-fn to_result(
-    plugin: &InstalledPlugin,
-    item: PluginItem,
-    requested_command_id: Option<&str>,
-    requested_query: &str,
-    language: &str,
-) -> SearchResult {
-    let item = sanitize_plugin_item(item);
-    let item_command_id = item.command_id.as_deref().or(requested_command_id);
-    let command = item_command_id.and_then(|command_id| {
-        plugin
-            .manifest
-            .commands
-            .iter()
-            .find(|command| command.id == *command_id)
-    });
-    let command_keywords = command
-        .map(|command| command.keywords.clone())
-        .unwrap_or_default();
-    let command_action_words = command
-        .map(|command| command_action_words(plugin, command))
-        .unwrap_or_default();
-    // A default-search session entry is a discoverable fallback, not an
-    // exact alias for every query. Treat it like configured custom commands
-    // so ordinary applications and actions remain ahead of it.
-    let command_query_alias =
-        (!item.session_entry && command.is_some()).then(|| requested_query.to_owned());
-    let icon = item
-        .icon
-        .or_else(|| command.and_then(|command| command.icon.clone()));
-    let target = item.target.map(PathBuf::from).unwrap_or_default();
-    let mut seen_context_action_ids = HashSet::new();
-    let context_actions = item
-        .context_actions
-        .into_iter()
-        .take(MAX_PLUGIN_CONTEXT_ACTIONS)
-        .filter(|action| {
-            !action.id.trim().is_empty()
-                && action.id.len() <= MAX_PLUGIN_CONTEXT_ACTION_ID_BYTES
-                && seen_context_action_ids.insert(action.id.clone())
-        })
-        .map(|action| {
-            let action_id = action.id;
-            let icon = action
-                .icon
-                .and_then(|icon| resolve_plugin_icon(&plugin.root, icon));
-            Action::ContextMenu(ContextMenuAction {
-                id: action_id.clone(),
-                title: if action.title.trim().is_empty() {
-                    limit_context_text(&action_id, MAX_PLUGIN_CONTEXT_TITLE_CHARS)
-                } else {
-                    limit_context_text(&detail_text(action.title), MAX_PLUGIN_CONTEXT_TITLE_CHARS)
-                },
-                subtitle: limit_context_text(
-                    &detail_text(action.subtitle),
-                    MAX_PLUGIN_CONTEXT_SUBTITLE_CHARS,
-                ),
-                icon: icon.clone(),
-                behavior: ContextMenuBehavior::Plugin {
-                    plugin_id: plugin.manifest.id.clone(),
-                    action_id,
-                },
-            })
-        })
-        .collect::<Vec<_>>();
-    let actions = item
-        .actions
-        .into_iter()
-        .map(|action| {
-            if action.id == "open_detail" {
-                Action::open_detail()
-            } else {
-                Action::Plugin {
-                    plugin_id: plugin.manifest.id.clone(),
-                    action_id: action.id,
-                    icon: action
-                        .icon
-                        .and_then(|icon| resolve_plugin_icon(&plugin.root, icon)),
-                }
-            }
-        })
-        .collect();
-    let allow_favorite = item
-        .allow_favorite
-        .unwrap_or(item.session_updates.is_empty());
-    let mut actions = if !item.session_updates.is_empty() {
-        vec![Action::UpdateSession {
-            updates: item.session_updates,
-        }]
-    } else if item.session_entry {
-        command_action_words
-            .first()
-            .map(|word| Action::EnterSearchEngine {
-                prefix: format!("{} ", word.trim()),
-            })
-            .into_iter()
-            .collect()
-    } else {
-        actions
-    };
-    actions.extend(context_actions);
-    SearchResult {
-        id: format!("plugin:{}:{}", plugin.manifest.id, item.id),
-        identity: format!("plugin:{}:{}", plugin.manifest.id, item.id),
-        title: item.title,
-        // Command ownership routes the query to a plugin search engine; it
-        // does not change what the plugin item is.
-        category: item
-            .category
-            .as_deref()
-            .map(parse_plugin_category)
-            .unwrap_or(ResultCategory::Application),
-        aliases: item
-            .aliases
-            .into_iter()
-            .chain(plugin.manifest.keywords.clone())
-            .chain(command_keywords)
-            .chain(command_action_words)
-            .chain(command_query_alias)
-            .collect(),
-        location: item.subtitle,
-        launch_target: target,
-        launch_arguments: String::new(),
-        launch_working_directory: None,
-        source: format!("plugin:{}", plugin.manifest.id).into(),
-        sources: vec![format!("plugin:{}", plugin.manifest.id).into()],
-        launch_entries: Vec::<LaunchEntry>::new(),
-        actions,
-        detail: item
-            .detail
-            .map(|view| to_detail_view(&plugin.root, view, language)),
-        description: None,
-        app_user_model_id: None,
-        package_family_name: None,
-        package_metadata: None,
-        icon: icon.and_then(|icon| resolve_plugin_icon(&plugin.root, icon)),
-        ranking_bias: plugin
-            .weight
-            .load(Ordering::Acquire)
-            // Plugin-authored item bias is a small tie-breaker, never a way
-            // to bypass root-search relevance or the user's explicit order.
-            .saturating_add(item.ranking_bias.clamp(-100, 100)),
-        allow_favorite,
-        visibility: match item.visible_when {
-            PluginItemVisibility::Always => crate::result::ResultVisibility::Always,
-            PluginItemVisibility::EmptyQuery => crate::result::ResultVisibility::EmptyQueryOnly,
-        },
-    }
-}
-
-fn sanitize_plugin_item(mut item: PluginItem) -> PluginItem {
-    item.id = limit_context_text(&item.id, MAX_PLUGIN_ITEM_ID_CHARS);
-    item.title = limit_context_text(&item.title, MAX_PLUGIN_ITEM_TITLE_CHARS);
-    item.subtitle = limit_context_text(&item.subtitle, MAX_PLUGIN_ITEM_SUBTITLE_CHARS);
-    item.aliases = item
-        .aliases
-        .into_iter()
-        .take(MAX_PLUGIN_ITEM_ALIASES)
-        .map(|alias| limit_context_text(&alias, MAX_PLUGIN_ALIAS_CHARS))
-        .collect();
-    item.target = item
-        .target
-        .map(|target| limit_context_text(&target, MAX_PLUGIN_ITEM_SUBTITLE_CHARS));
-    item.actions.truncate(MAX_PLUGIN_ACTIONS);
-    for action in &mut item.actions {
-        action.id = limit_context_text(&action.id, MAX_PLUGIN_CONTEXT_ACTION_ID_BYTES);
-    }
-    item.context_actions.truncate(MAX_PLUGIN_CONTEXT_ACTIONS);
-    for action in &mut item.context_actions {
-        action.id = limit_context_text(&action.id, MAX_PLUGIN_CONTEXT_ACTION_ID_BYTES);
-        action.title = limit_context_text(&action.title, MAX_PLUGIN_CONTEXT_TITLE_CHARS);
-        action.subtitle = limit_context_text(&action.subtitle, MAX_PLUGIN_CONTEXT_SUBTITLE_CHARS);
-    }
-    item.command_id = item
-        .command_id
-        .map(|command_id| limit_context_text(&command_id, MAX_PLUGIN_ITEM_ID_CHARS));
-    item.session_updates = item
-        .session_updates
-        .into_iter()
-        .take(MAX_PLUGIN_ITEMS)
-        .map(|(key, value)| {
-            (
-                limit_context_text(&key, MAX_PLUGIN_ITEM_ID_CHARS),
-                limit_context_text(&value, MAX_PLUGIN_ITEM_SUBTITLE_CHARS),
-            )
-        })
-        .collect();
-    item
-}
-
-fn parse_plugin_category(value: &str) -> ResultCategory {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "game" => ResultCategory::Game,
-        "website" => ResultCategory::Website,
-        "calculator" => ResultCategory::Calculator,
-        "control_panel" | "control-panel" => ResultCategory::ControlPanel,
-        "document" => ResultCategory::Document,
-        "other" => ResultCategory::Other,
-        _ => ResultCategory::Application,
-    }
-}
-
-fn resolve_plugin_icon(root: &Path, icon: IconRef) -> Option<IconSpec> {
-    match icon {
-        IconRef::Resource { path } => plugin_resource_path(root, &path).map(IconSpec::Resource),
-        IconRef::File { path } => {
-            let path = PathBuf::from(path);
-            path.is_absolute().then_some(IconSpec::Resource(path))
-        }
-        IconRef::System { target } => Some(IconSpec::System(target.into())),
-        IconRef::Named { id } => Some(IconSpec::Named(id)),
-        IconRef::Remote { url } => validate_plugin_http_url(&url)
-            .is_ok()
-            .then_some(IconSpec::Remote(url)),
-    }
-}
-
-fn plugin_resource_path(root: &Path, relative: &str) -> Option<PathBuf> {
-    let relative_path = Path::new(relative);
-    if relative_path.is_absolute()
-        || relative_path
-            .components()
-            .any(|component| component == Component::ParentDir)
-    {
-        return None;
-    }
-    Some(root.join(relative_path))
-}
-
-fn to_detail_view(
-    root: &Path,
-    view: PluginDetailView,
-    language: &str,
-) -> crate::result::DetailView {
-    crate::result::DetailView {
-        title: detail_text(view.title),
-        subtitle: detail_text(view.subtitle),
-        source: detail_text(view.source),
-        actions: view
-            .actions
-            .into_iter()
-            .take(MAX_PLUGIN_DETAIL_ACTIONS)
-            .map(|action| crate::result::DetailAction {
-                title: if action.title.is_empty() {
-                    detail_text(action.id.as_str().into())
-                } else {
-                    detail_text(action.title)
-                },
-                id: detail_text(action.id),
-                icon: action.icon.and_then(|icon| resolve_plugin_icon(root, icon)),
-            })
-            .collect(),
-        blocks: view
-            .blocks
-            .into_iter()
-            .take(MAX_PLUGIN_DETAIL_BLOCKS)
-            .map(|block| match block {
-                PluginDetailBlock::Text {
-                    text,
-                    color,
-                    copyable,
-                } => crate::result::DetailBlock::Text {
-                    text: detail_text(text),
-                    color: detail_color(&color),
-                    copyable,
-                },
-                PluginDetailBlock::Metric {
-                    label,
-                    value,
-                    color,
-                } => crate::result::DetailBlock::Metric {
-                    label: detail_text(label),
-                    value: detail_text(value),
-                    color: detail_color(&color),
-                },
-                PluginDetailBlock::Icon { glyph, color, icon } => {
-                    crate::result::DetailBlock::Icon {
-                        glyph: detail_text(glyph),
-                        color: detail_color(&color),
-                        icon: icon.and_then(|icon| resolve_plugin_icon(root, icon)),
-                    }
-                }
-                PluginDetailBlock::Weather { value } => crate::result::DetailBlock::Weather {
-                    value: match value.as_str() {
-                        "clear" | "cloud" | "rain" | "snow" | "storm" => value,
-                        _ => "cloud".into(),
-                    },
-                },
-                PluginDetailBlock::Markdown {
-                    markdown,
-                    color,
-                    copyable,
-                } => crate::result::DetailBlock::Markdown {
-                    markdown: detail_text(markdown),
-                    color: detail_color(&color),
-                    copyable,
-                },
-                PluginDetailBlock::Image { source, alt } => {
-                    let Some(path) = plugin_resource_path(root, &source) else {
-                        return crate::result::DetailBlock::Error {
-                            message: crate::utils::i18n::tr(language, "Preview image unavailable")
-                                .into(),
-                            retry_action: None,
-                        };
-                    };
-                    crate::result::DetailBlock::Image {
-                        source: path.to_string_lossy().into_owned(),
-                        alt: detail_text(alt),
-                    }
-                }
-                PluginDetailBlock::Code { language, code } => crate::result::DetailBlock::Code {
-                    language: detail_text(language),
-                    code,
-                },
-                PluginDetailBlock::Table { columns, rows } => crate::result::DetailBlock::Table {
-                    columns: columns
-                        .into_iter()
-                        .take(MAX_PLUGIN_DETAIL_CELLS)
-                        .map(detail_text)
-                        .collect(),
-                    rows: rows
-                        .into_iter()
-                        .take(MAX_PLUGIN_DETAIL_ROWS)
-                        .map(|row| {
-                            row.into_iter()
-                                .take(MAX_PLUGIN_DETAIL_CELLS)
-                                .map(detail_text)
-                                .collect()
-                        })
-                        .collect(),
-                },
-                PluginDetailBlock::Link { label, url } => {
-                    if is_supported_detail_url(&url) {
-                        crate::result::DetailBlock::Link {
-                            label: detail_text(label),
-                            url: detail_text(url),
-                        }
-                    } else {
-                        crate::result::DetailBlock::Error {
-                            message: crate::utils::i18n::tr(language, "Preview link unsupported")
-                                .into(),
-                            retry_action: None,
-                        }
-                    }
-                }
-                PluginDetailBlock::Loading { message } => crate::result::DetailBlock::Loading {
-                    message: if message == "Loading preview" {
-                        crate::utils::i18n::tr(language, "Loading preview").into()
-                    } else {
-                        detail_text(message)
-                    },
-                },
-                PluginDetailBlock::Error {
-                    message,
-                    retry_action,
-                } => crate::result::DetailBlock::Error {
-                    message: detail_text(message),
-                    retry_action: retry_action.map(detail_text),
-                },
-                PluginDetailBlock::Separator => crate::result::DetailBlock::Separator,
-            })
-            .collect(),
-        preferred_width: view.width.map(|width| {
-            width
-                .preferred
-                .clamp(width.min.min(width.max), width.max.max(width.min))
-        }),
-        scrollable: view.scrollable,
-    }
-}
-
-fn detail_text(value: String) -> String {
-    limit_context_text(&value, MAX_PLUGIN_DETAIL_TEXT_CHARS)
-}
-
-fn limit_context_text(value: &str, max_chars: usize) -> String {
-    value.chars().take(max_chars).collect()
-}
-
-fn detail_color(value: &str) -> String {
-    match value {
-        "primary" | "secondary" | "tertiary" | "accent" => value.into(),
-        _ => "secondary".into(),
-    }
-}
-
-fn is_supported_detail_url(value: &str) -> bool {
-    let value = value.trim();
-    value
-        .strip_prefix("https://")
-        .or_else(|| value.strip_prefix("http://"))
-        .is_some_and(|rest| !rest.is_empty() && !rest.chars().any(char::is_whitespace))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        cell::Cell,
+    };
+
+    thread_local! {
+        static COUNT_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
+        static ALLOCATION_COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    struct CountingAllocator;
+
+    #[global_allocator]
+    static TEST_ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let _ = COUNT_ALLOCATIONS.try_with(|enabled| {
+                if enabled.get() {
+                    let _ = ALLOCATION_COUNT.try_with(|count| count.set(count.get() + 1));
+                }
+            });
+            System.alloc(layout)
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            System.dealloc(ptr, layout);
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let _ = COUNT_ALLOCATIONS.try_with(|enabled| {
+                if enabled.get() {
+                    let _ = ALLOCATION_COUNT.try_with(|count| count.set(count.get() + 1));
+                }
+            });
+            System.realloc(ptr, layout, new_size)
+        }
+    }
+
+    fn measured_call(function: &Function, query: &str) -> (usize, usize, Duration) {
+        ALLOCATION_COUNT.with(|count| count.set(0));
+        COUNT_ALLOCATIONS.with(|enabled| enabled.set(true));
+        let start = Instant::now();
+        let result = function.call::<usize>(query).unwrap();
+        let elapsed = start.elapsed();
+        COUNT_ALLOCATIONS.with(|enabled| enabled.set(false));
+        let allocations = ALLOCATION_COUNT.with(Cell::get);
+        (result, allocations, elapsed)
+    }
+
+    #[test]
+    #[ignore = "manual performance benchmark; run with --ignored --nocapture"]
+    fn fuzzy_filter_benchmark() {
+        let plugin =
+            EmbeddedPlugin::from_source("", "bench.lua", "en", "en", &BTreeMap::new(), &[], None)
+                .unwrap();
+        plugin
+            .lua
+            .load(
+                r#"
+            local candidates = {}
+            for index = 1, 1000 do
+              candidates[index] = {"Example Game " .. index, tostring(index)}
+            end
+            function fuzzy_old(query)
+              local count = 0
+              for _, fields in ipairs(candidates) do
+                if wowie.fuzzy_match(fields[1], query)
+                    or wowie.fuzzy_match(fields[2], query) then count = count + 1 end
+              end
+              return count
+            end
+            function fuzzy_batch(query)
+              return #wowie.fuzzy_filter(candidates, query)
+            end
+        "#,
+            )
+            .exec()
+            .unwrap();
+        let old: Function = plugin.lua.globals().get("fuzzy_old").unwrap();
+        let batch: Function = plugin.lua.globals().get("fuzzy_batch").unwrap();
+        let queries: Vec<_> = (0..100).map(|index| format!("gm {index}")).collect();
+        measured_call(&old, "game");
+        measured_call(&batch, "game");
+        let ((old_allocations, batch_allocations, mut old_times, mut batch_times), peak_threads) =
+            crate::perf_support::measure_peak_threads(|| {
+                let mut old_allocations = 0;
+                let mut batch_allocations = 0;
+                let mut old_times = Vec::with_capacity(queries.len());
+                let mut batch_times = Vec::with_capacity(queries.len());
+                for query in &queries {
+                    let (old_count, allocations, elapsed) = measured_call(&old, query);
+                    old_allocations += allocations;
+                    old_times.push(elapsed);
+                    let (batch_count, allocations, elapsed) = measured_call(&batch, query);
+                    batch_allocations += allocations;
+                    batch_times.push(elapsed);
+                    assert_eq!(old_count, batch_count);
+                }
+                (old_allocations, batch_allocations, old_times, batch_times)
+            });
+        let (old_p50, old_p95) = crate::perf_support::percentiles(&mut old_times);
+        let (batch_p50, batch_p95) = crate::perf_support::percentiles(&mut batch_times);
+        let stats = crate::utils::background::stats();
+        println!(
+            "[perf] plugin_batch candidates=1000 queries=100 single_allocations_per_query={} single_p50_us={} single_p95_us={} batch_allocations_per_query={} batch_p50_us={} batch_p95_us={} process_peak_threads={} pending_tasks={} pending_peak={}",
+            old_allocations / queries.len(),
+            old_p50.as_micros(),
+            old_p95.as_micros(),
+            batch_allocations / queries.len(),
+            batch_p50.as_micros(),
+            batch_p95.as_micros(),
+            peak_threads,
+            stats.pending,
+            stats.peak_pending,
+        );
+    }
+
+    #[test]
+    fn fuzzy_filter_matches_single_api_and_returns_candidate_indices() {
+        let plugin =
+            EmbeddedPlugin::from_source("", "test.lua", "en", "en", &BTreeMap::new(), &[], None)
+                .unwrap();
+        plugin
+            .lua
+            .load(
+                r#"
+            local candidates = {
+              {"Calculator", "calc"},
+              {"Calendar", "schedule"},
+              {"翻译", "translate"},
+              "Call center"
+            }
+            local function verify(query)
+              local expected = {}
+              for index, candidate in ipairs(candidates) do
+                local fields = type(candidate) == "table" and candidate or {candidate}
+                for _, text in ipairs(fields) do
+                  if wowie.fuzzy_match(text, query) then
+                    expected[#expected + 1] = index
+                    break
+                  end
+                end
+              end
+              local actual = wowie.fuzzy_filter(candidates, query)
+              assert(#actual == #expected)
+              for index, value in ipairs(actual) do assert(value == expected[index]) end
+            end
+            verify("calc")
+            verify("clc")
+            verify("翻")
+            verify("  ")
+            assert(not pcall(wowie.fuzzy_filter, {{string.rep("x", 4097)}}, "x"))
+        "#,
+            )
+            .exec()
+            .unwrap();
+    }
+
+    #[test]
+    fn steam_cache_indexes_icons_refreshes_and_keeps_last_good_snapshot() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            callbacks, directories, files, scans = {}, {}, {}, {}
+            now, fail_scan, stored = 100000, false, nil
+            local root = [=[S:\Steam]=]
+            local apps = root .. [=[\steamapps]=]
+            local icons = root .. [=[\appcache\librarycache]=]
+            directories[apps] = {
+              {name="appmanifest_1.acf", path=apps .. [=[\appmanifest_1.acf]=]},
+              {name="appmanifest_2.acf", path=apps .. [=[\appmanifest_2.acf]=]}
+            }
+            files[apps .. [=[\appmanifest_1.acf]=]] = '"name" "First Game" "installdir" "First"'
+            files[apps .. [=[\appmanifest_2.acf]=]] = '"name" "Second Game" "installdir" "Second"'
+            directories[icons] = {
+              {name="1_icon.jpg", path=icons .. [=[\1_icon.jpg]=], is_dir=false},
+              {name="2", path=icons .. [=[\2]=], is_dir=true}
+            }
+            directories[icons .. [=[\2]=]] = {
+              {name="abc123.jpg", path=icons .. [=[\2\abc123.jpg]=], is_dir=false}
+            }
+            wowie = {
+              on = function(name, callback) callbacks[name] = callback end,
+              env = function(name) if name == "PROGRAMFILES(X86)" then return [=[S:]=] end end,
+              fs_list = function(path)
+                if fail_scan then error("offline") end
+                scans[path] = (scans[path] or 0) + 1
+                return directories[path] or {}
+              end,
+              fs_read_text = function(path) return files[path] end,
+              storage_read = function(_) return stored end,
+              storage_write = function(_, value) stored = value end,
+              fuzzy_match = function(text, query) return string.find(string.lower(text), query, 1, true) ~= nil end,
+              fuzzy_filter = function(candidates, query)
+                local matches = {}
+                for index, fields in ipairs(candidates) do
+                  for _, text in ipairs(fields) do
+                    if string.find(string.lower(text), query, 1, true) then
+                      matches[#matches + 1] = index
+                      break
+                    end
+                  end
+                end
+                return matches
+              end,
+              result = function(item) return item end
+            }
+            os.time = function() return now end
+            "#,
+        )
+        .exec()
+        .unwrap();
+        lua.load(include_str!("../plugins/steam-games/main.lua"))
+            .exec()
+            .unwrap();
+        lua.load(
+            r#"
+            callbacks.initialize({preferences={refresh_minutes="1"}})
+            local icons = [=[S:\Steam\appcache\librarycache]=]
+            assert(scans[icons] == 1)
+            local first = callbacks.query("game", {request_id=1})
+            assert(#first.items == 2 and first.items[1].icon.type == "file")
+            assert(first.items[2].icon.path == icons .. [=[\2\abc123.jpg]=])
+            assert(scans[icons] == 1)
+            now = now + 61
+            local apps = [=[S:\Steam\steamapps]=]
+            directories[apps] = {{name="appmanifest_1.acf", path=apps .. [=[\appmanifest_1.acf]=]}}
+            directories[icons][1] = {name="1_icon.png", path=icons .. [=[\1_icon.png]=], is_dir=false}
+            local second = callbacks.query("game", {request_id=2})
+            assert(#second.items == 1 and scans[icons] == 2)
+            assert(second.items[1].icon.path == icons .. [=[\1_icon.png]=])
+            now = now + 61
+            fail_scan = true
+            local fallback = callbacks.query("game", {request_id=3})
+            assert(#fallback.items == 1 and fallback.items[1].title == "First Game")
+            "#,
+        )
+        .exec()
+        .unwrap();
+    }
+
     #[test]
     fn plugin_file_apis_preserve_missing_utf8_and_storage_behavior() {
         let root = std::env::temp_dir().join(format!(
@@ -3259,11 +2761,11 @@ mod tests {
             "",
         )
         .expect("Everything should provide its custom empty page");
-        assert!(empty_state.detail.is_some());
+        assert!(empty_state.detail.is_none());
         assert!(empty_state
             .description
             .unwrap_or_default()
-            .contains("Press Enter"));
+            .contains("Everything syntax"));
 
         assert!(manager.search_engine("eng").is_none());
         let translation_session = manager.search_engine("tmt ").unwrap();

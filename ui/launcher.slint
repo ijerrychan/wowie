@@ -1,6 +1,7 @@
 import { VerticalBox, ListView } from "std-widgets.slint";
 
 export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, icon_kind: string, favorite: bool, shortcut_prefix: string, shortcut_prefix_width: int, presentation: string }
+export struct CategoryFilter { key: string, count: int }
 export struct ContextActionRow { id: string, title: string, subtitle: string, kind: string, icon: image, icon_kind: string, shortcut: string }
 export struct DetailBlock { kind: string, label: string, value: string, color: string, secondary: string, icon: image, height: int }
 
@@ -136,6 +137,9 @@ export component Launcher inherits Window {
     in-out property <string> last-action-result: "";
     in-out property <string> last-action-subtitle: "";
     in property <[ResultRow]> results;
+    in property <[CategoryFilter]> category-filters;
+    in property <string> selected-category-filter: "all";
+    in property <int> selected-category-index: 0;
     in-out property <string> query-text: "";
     in-out property <bool> query-results-ready: false;
     in-out property <int> query-history-restore-id: 0;
@@ -157,6 +161,7 @@ export component Launcher inherits Window {
     out property <length> context-menu-anchor-x: root.width - root.context-menu-anchor-right-inset;
     out property <length> context-menu-anchor-y: root.height - root.context-menu-anchor-bottom-inset;
     callback query-changed(string);
+    callback category-filter-selected(string);
     callback compact-results-requested;
     callback normalize-query(string) -> string;
     callback query-history-up-requested;
@@ -184,7 +189,7 @@ export component Launcher inherits Window {
     private property <length> result-icon-size: 24px;
     private property <length> empty-state-padding: 8px;
     private property <length> content-bottom-padding: 4px;
-    private property <length> minimum-results-window-height: 100px + 5 * root.result-row-height;
+    private property <length> minimum-results-window-height: 100px + 5 * root.result-row-height + (root.category-filters.length > 0 ? root.category-filter-height + 3 * root.category-layout-spacing - 2 * root.content-spacing : 0px);
     in-out property <length> result-window-height: root.minimum-results-window-height;
     out property <length> effective-window-height: root.compact-results-hidden ? root.compact-window-height : root.result-window-height;
     private property <length> compact-window-height: 2 * root.window-inset + 2 * root.empty-state-padding + root.search-row-height;
@@ -195,6 +200,11 @@ export component Launcher inherits Window {
     private property <length> window-inset: 4px;
     private property <length> content-padding: 10px;
     private property <length> content-spacing: 8px;
+    private property <length> category-filter-height: 28px;
+    private property <length> category-button-height: 22px;
+    private property <length> category-button-width: 98px;
+    private property <length> category-filter-step: 102px;
+    private property <length> category-layout-spacing: root.category-filters.length > 0 ? 6px : root.content-spacing;
     private property <length> result-row-inset: 2px;
     private property <length> result-column-gap: root.window-inset + root.result-row-inset + root.detail-panel-inset;
     private property <length> detail-panel-inset: 2px;
@@ -211,7 +221,7 @@ export component Launcher inherits Window {
     private property <length> detail-block-spacing: 6px;
     private property <length> detail-action-footer-extra: 50px;
     private property <length> detail-panel-content-height: root.detail-content-footer-height + root.detail-content-height + (root.detail-actions.length > 0 ? root.detail-action-footer-extra : 0px);
-    private property <length> operation-hint-spacing: root.content-spacing + root.operation-hint-height;
+    private property <length> operation-hint-spacing: root.category-layout-spacing + root.operation-hint-height;
     private property <length> no-results-spacing: 0px;
     // Keep the session transition geometry together so the search field and
     // both icons always move as one unit.
@@ -226,7 +236,7 @@ export component Launcher inherits Window {
     private property <duration> session-transition-duration: 150ms;
     private property <duration> session-fade-duration: 100ms;
     private property <length> search-row-layout-height: root.search-row-height;
-    private property <length> available-results-height: root.compact-results-hidden ? 0px : max(0px, root.height - 2 * root.window-inset - root.empty-state-padding - root.content-bottom-padding - root.search-row-layout-height - root.content-spacing - root.operation-hint-spacing - root.no-results-spacing);
+    private property <length> available-results-height: root.compact-results-hidden ? 0px : max(0px, root.height - 2 * root.window-inset - root.empty-state-padding - root.content-bottom-padding - root.search-row-layout-height - root.category-layout-spacing - (root.category-filters.length > 0 ? root.category-filter-height + root.category-layout-spacing : 0px) - root.operation-hint-spacing - root.no-results-spacing);
     private property <bool> detail-visible: root.detail-panel-visible && (root.selected-index >= 0 || root.empty-state-detail-active);
     private property <float> detail-progress: root.detail-visible ? 1.0 : 0.0;
     animate detail-progress {
@@ -314,12 +324,13 @@ export component Launcher inherits Window {
             padding: root.content-padding;
             padding-top: root.empty-state-padding;
             padding-bottom: root.compact-results-hidden ? root.empty-state-padding : root.content-bottom-padding;
-            spacing: root.content-spacing;
+            spacing: root.category-layout-spacing;
 
             Rectangle {
                 z: 0;
                 height: root.search-row-layout-height;
-                background: transparent;
+                background: root.canvas;
+                border-radius: 8px;
 
                 back-button := Rectangle {
                     x: root.shortcut-session-active ? 0px : -root.session-back-width;
@@ -424,6 +435,69 @@ export component Launcher inherits Window {
                 }
             }
 
+            if (root.category-filters.length > 0 && !root.compact-results-hidden) : Rectangle {
+                height: root.category-filter-height;
+                background: transparent;
+                category-flickable := Flickable {
+                    width: parent.width;
+                    height: parent.height;
+                    content-width: max(self.width, root.category-filters.length * root.category-filter-step);
+                    content-height: self.height;
+                    Rectangle {
+                        x: root.selected-category-index * root.category-filter-step;
+                        y: (parent.height - root.category-button-height) / 2;
+                        width: root.category-button-width;
+                        height: root.category-button-height;
+                        border-radius: 7px;
+                        background: root.dark-mode ? #424242 : #e2e5eb;
+                        animate x { duration: 180ms; easing: ease-in-out; }
+                    }
+                    for filter[index] in root.category-filters : Rectangle {
+                        x: index * root.category-filter-step;
+                        y: 0px;
+                        width: root.category-button-width;
+                        height: parent.height;
+                        border-radius: 7px;
+                        background: transparent;
+                        Rectangle {
+                            x: 0px;
+                            y: (parent.height - root.category-button-height) / 2;
+                            width: parent.width;
+                            height: root.category-button-height;
+                            border-radius: 7px;
+                            border-color: root.selected-category-filter == filter.key ? transparent : (root.dark-mode ? #393939 : #e2e5eb);
+                            border-width: root.selected-category-filter == filter.key ? 0px : 1px;
+                            background: root.selected-category-filter != filter.key && filter-touch.has-hover ? root.surface-hover : transparent;
+                        }
+                        filter-touch := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            mouse-cursor: pointer;
+                            clicked => { root.category-filter-selected(filter.key); search-field.focus(); }
+                            scroll-event(event) => {
+                                let delta = event.delta-x != 0px ? event.delta-x : event.delta-y;
+                                let previous = category-flickable.content-x;
+                                let next = min(0px, max(category-flickable.width - category-flickable.content-width, previous - delta));
+                                if (next != previous) {
+                                    category-flickable.content-x = next;
+                                    EventResult.accept
+                                } else {
+                                    EventResult.reject
+                                }
+                            }
+                        }
+                        Text {
+                            x: 6px; width: parent.width - 12px; height: parent.height;
+                            text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "document" ? @tr("Document") : @tr("Other")) + "  " + filter.count;
+                            color: root.selected-category-filter == filter.key ? root.text-primary : root.text-secondary;
+                            font-size: 0.7857rem;
+                            font-weight: root.selected-category-filter == filter.key ? 600 : 400;
+                            horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+                        }
+                    }
+                }
+            }
+
             results-area := Rectangle {
                 height: root.available-results-height;
                 background: transparent;
@@ -504,7 +578,7 @@ export component Launcher inherits Window {
                     border-radius: 10px;
                     clip: true;
 
-                    Flickable {
+                Flickable {
                         x: parent.width - detail-panel.panel-width;
                         width: detail-panel.panel-width;
                         height: detail-panel.panel-height;
@@ -607,6 +681,13 @@ export component Launcher inherits Window {
                 Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: root.border; }
                 Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Esc  Hide")); color: root.text-tertiary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; }
             }
+        }
+        if (!root.compact-results-hidden) : Rectangle {
+            x: root.content-padding;
+            y: root.empty-state-padding + root.search-row-layout-height + (root.category-filters.length > 0 ? root.category-layout-spacing / 2 : root.content-spacing / 2) - 0.5px;
+            width: parent.width - 2 * root.content-padding;
+            height: 1px;
+            background: root.dark-mode ? #343434 : #e5e7eb;
         }
     }
     if (root.launch-error != "") : Rectangle {

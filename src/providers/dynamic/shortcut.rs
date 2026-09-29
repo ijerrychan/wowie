@@ -117,6 +117,7 @@ pub(super) fn build_result(query: ShortcutQuery<'_>, spec: ShortcutSpec) -> Sear
             target: spec.target.clone(),
             arguments: spec.launch_arguments.clone(),
             working_directory: None,
+            icon: None,
         })]
     };
 

@@ -170,6 +170,10 @@ pub struct LaunchEntry {
     pub target: std::path::PathBuf,
     pub arguments: String,
     pub working_directory: Option<std::path::PathBuf>,
+    /// Icon metadata belongs to this launch entry because shortcuts for the
+    /// same application can intentionally point at different icon resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<IconSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

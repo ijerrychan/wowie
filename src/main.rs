@@ -10,6 +10,9 @@ mod services;
 mod ui;
 mod utils;
 
+#[cfg(test)]
+mod perf_support;
+
 pub(crate) use core::{classifier, page, provider, ranking, result, search};
 pub(crate) use services::{icon_service, launcher};
 

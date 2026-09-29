@@ -1,4 +1,4 @@
-use super::{Launcher, ResultRow};
+use super::{CategoryFilter, Launcher, ResultRow};
 use crate::{
     icon_service::{IconService, DISPLAY_ICON_SIZE},
     result::{IconSpec, ResultCategory, ResultPresentation, SearchResult},
@@ -12,6 +12,7 @@ use std::{
     },
 };
 
+#[derive(Clone)]
 pub(super) struct ResultRowPayload {
     id: String,
     title: String,
@@ -23,6 +24,111 @@ pub(super) struct ResultRowPayload {
     shortcut_prefix: String,
     shortcut_prefix_width: i32,
     presentation: String,
+}
+
+#[derive(Default)]
+pub(super) struct ResultFilterState {
+    pub(super) query_id: u64,
+    pub(super) all_items: Arc<Vec<SearchResult>>,
+    pub(super) all_rows: Vec<ResultRowPayload>,
+    pub(super) selected: String,
+}
+
+impl ResultFilterState {
+    pub(super) fn replace(
+        &mut self,
+        query_id: u64,
+        items: Arc<Vec<SearchResult>>,
+        rows: Vec<ResultRowPayload>,
+    ) {
+        self.query_id = query_id;
+        self.all_items = items;
+        self.all_rows = rows;
+        if self.selected != "all"
+            && !self
+                .categories()
+                .iter()
+                .any(|(key, _)| *key == self.selected)
+        {
+            self.selected = "all".into();
+        }
+    }
+
+    pub(super) fn categories(&self) -> Vec<(&'static str, usize)> {
+        const ORDER: [&str; 7] = [
+            "application",
+            "game",
+            "website",
+            "calculator",
+            "control_panel",
+            "document",
+            "other",
+        ];
+        let mut counts = [0_usize; 7];
+        for item in self.all_items.iter() {
+            let key = category_key(item.category);
+            if let Some(index) = ORDER.iter().position(|candidate| *candidate == key) {
+                counts[index] += 1;
+            }
+        }
+        ORDER
+            .into_iter()
+            .zip(counts)
+            .filter(|(_, count)| *count > 0)
+            .collect()
+    }
+
+    pub(super) fn filters(&self) -> Vec<CategoryFilter> {
+        let categories = self.categories();
+        if categories.len() < 2 {
+            return Vec::new();
+        }
+        std::iter::once(CategoryFilter {
+            key: "all".into(),
+            count: self.all_items.len() as i32,
+        })
+        .chain(categories.into_iter().map(|(key, count)| CategoryFilter {
+            key: key.into(),
+            count: count as i32,
+        }))
+        .collect()
+    }
+
+    pub(super) fn visible(&self) -> (Arc<Vec<SearchResult>>, Vec<ResultRowPayload>) {
+        if self.selected == "all" || self.selected.is_empty() {
+            return (Arc::clone(&self.all_items), self.all_rows.clone());
+        }
+        let mut items = Vec::new();
+        let mut rows = Vec::new();
+        for (item, row) in self.all_items.iter().zip(&self.all_rows) {
+            if category_key(item.category) == self.selected {
+                items.push(item.clone());
+                rows.push(row.clone());
+            }
+        }
+        (Arc::new(items), rows)
+    }
+
+    pub(super) fn first_visible_item(&self) -> Option<&SearchResult> {
+        self.all_items.iter().find(|item| {
+            self.selected == "all"
+                || self.selected.is_empty()
+                || category_key(item.category) == self.selected
+        })
+    }
+}
+
+fn category_key(category: ResultCategory) -> &'static str {
+    match category {
+        ResultCategory::Application => "application",
+        ResultCategory::Game => "game",
+        ResultCategory::Website => "website",
+        ResultCategory::Calculator => "calculator",
+        ResultCategory::ControlPanel => "control_panel",
+        ResultCategory::Document => "document",
+        ResultCategory::Other => "other",
+        ResultCategory::Unclassified => "other",
+    }
 }
 
 impl ResultRowPayload {
@@ -120,7 +226,11 @@ fn display_location(item: &SearchResult, show_advanced_details: bool) -> String 
     };
     if !show_advanced_details && item.category == ResultCategory::Application {
         return item.description.clone().unwrap_or_else(|| {
-            crate::platform::application_description(&entry.target).unwrap_or_default()
+            if crate::platform::windows_rules::is_shell_namespace(&entry.target) {
+                String::new()
+            } else {
+                crate::platform::application_description(&entry.target).unwrap_or_default()
+            }
         });
     }
     let target = entry.target.to_string_lossy();
@@ -194,7 +304,7 @@ pub(super) fn request_icons(
             let Some(icon) = icon_service.resolve_at(&item, DISPLAY_ICON_SIZE) else {
                 continue;
             };
-            resolved.push((index, icon));
+            resolved.push((index, item.id, icon));
         }
         if resolved.is_empty() {
             return;
@@ -207,10 +317,13 @@ pub(super) fn request_icons(
                 return;
             };
             let model = window.get_results();
-            for (index, icon) in resolved {
+            for (index, item_id, icon) in resolved {
                 let Some(mut row) = model.row_data(index) else {
                     continue;
                 };
+                if row.id != item_id {
+                    continue;
+                }
                 row.icon = icon_to_image(icon.as_ref());
                 model.set_row_data(index, row);
             }
@@ -244,5 +357,104 @@ impl From<ResultRowPayload> for ResultRow {
             shortcut_prefix_width: payload.shortcut_prefix_width,
             presentation: payload.presentation.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{platform::SourceId, result::ResultVisibility};
+
+    fn item(id: &str, category: ResultCategory) -> SearchResult {
+        SearchResult {
+            id: id.into(),
+            identity: id.into(),
+            title: id.into(),
+            category,
+            aliases: Vec::new(),
+            location: String::new(),
+            launch_target: Default::default(),
+            launch_arguments: String::new(),
+            launch_working_directory: None,
+            source: SourceId::Shortcut,
+            sources: Vec::new(),
+            launch_entries: Vec::new(),
+            actions: Vec::new(),
+            detail: None,
+            description: None,
+            app_user_model_id: None,
+            package_family_name: None,
+            package_metadata: None,
+            icon: None,
+            ranking_bias: 0,
+            allow_favorite: true,
+            visibility: ResultVisibility::Always,
+        }
+    }
+
+    #[test]
+    fn category_filter_only_appears_for_mixed_results_and_preserves_order() {
+        let items = Arc::new(vec![
+            item("app-1", ResultCategory::Application),
+            item("web", ResultCategory::Website),
+            item("app-2", ResultCategory::Application),
+        ]);
+        let rows = items
+            .iter()
+            .map(|item| ResultRowPayload::from(item, false, None, false))
+            .collect();
+        let mut filter = ResultFilterState::default();
+        filter.replace(1, items, rows);
+        assert_eq!(
+            filter
+                .filters()
+                .iter()
+                .map(|option| option.key.as_str())
+                .collect::<Vec<_>>(),
+            ["all", "application", "website"]
+        );
+        filter.selected = "application".into();
+        let (visible, rows) = filter.visible();
+        assert_eq!(
+            visible
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["app-1", "app-2"]
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["app-1", "app-2"]
+        );
+
+        let only_web = Arc::new(vec![item("web-2", ResultCategory::Website)]);
+        filter.replace(
+            2,
+            Arc::clone(&only_web),
+            only_web
+                .iter()
+                .map(|item| ResultRowPayload::from(item, false, None, false))
+                .collect(),
+        );
+        assert!(filter.filters().is_empty());
+        assert_eq!(filter.selected, "all");
+    }
+
+    #[test]
+    fn unclassified_results_share_the_other_filter() {
+        let items = Arc::new(vec![
+            item("unknown", ResultCategory::Unclassified),
+            item("other", ResultCategory::Other),
+            item("app", ResultCategory::Application),
+        ]);
+        let rows = items
+            .iter()
+            .map(|item| ResultRowPayload::from(item, false, None, false))
+            .collect();
+        let mut filter = ResultFilterState::default();
+        filter.replace(1, items, rows);
+        assert_eq!(filter.categories(), [("application", 1), ("other", 2)]);
+        filter.selected = "other".into();
+        assert_eq!(filter.visible().0.len(), 2);
     }
 }

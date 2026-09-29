@@ -491,9 +491,10 @@ mod tests {
             DEFAULT_HOTKEY
         );
         std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(&path, b"{invalid").unwrap();
+        let invalid_fixture = include_bytes!("../tests/fixtures/windows/invalid-config.json");
+        std::fs::write(&path, invalid_fixture).unwrap();
         assert!(Config::load_from_path(&path).is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), b"{invalid");
+        assert_eq!(std::fs::read(&path).unwrap(), invalid_fixture);
 
         let config = Config {
             hotkey: "Ctrl+Space".into(),

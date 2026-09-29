@@ -3,6 +3,18 @@
 -- discovery and matching stay entirely in this plugin.
 
 local games = {}
+local match_candidates = {}
+local last_refresh = 0
+local last_attempt = 0
+local refresh_seconds = 10 * 60
+local CACHE_KEY = "steam-games-v2"
+
+local function index_games()
+  match_candidates = {}
+  for index, game in ipairs(games) do
+    match_candidates[index] = {game.title, game.aliases[1]}
+  end
+end
 
 local function lower(value)
   return string.lower(value or "")
@@ -80,39 +92,44 @@ local function executable(path, depth, best)
   return best
 end
 
-local function cached_icon(path, appid, depth)
-  if depth > 2 then return nil end
-  for _, entry in ipairs(wowie.fs_list(path)) do
-    local name = lower(entry.name)
-    if not entry.is_dir then
-      if name == string.lower(appid .. "_icon.jpg")
-          or name == string.lower(appid .. "_icon.png") then
-        return entry.path
-      end
-    end
-  end
-  -- Steam's newer cache stores hashed images under librarycache/<appid>/.
-  if depth == 0 then
-    local nested_root = join(path, appid)
-    for _, entry in ipairs(wowie.fs_list(nested_root)) do
+local function icon_index(roots, installed)
+  local icons = {}
+  local nested = {}
+  for _, root in ipairs(roots) do
+    for _, entry in ipairs(wowie.fs_list(root)) do
       local name = lower(entry.name)
-      if not entry.is_dir and (string.match(name, "^%x+%.jpg$")
-          or string.match(name, "^%x+%.png$")) then
-        return entry.path
+      if entry.is_dir and installed[name] then
+        nested[#nested + 1] = {appid = name, path = entry.path}
+      elseif not entry.is_dir then
+        local appid = string.match(name, "^(%d+)_icon%.png$")
+            or string.match(name, "^(%d+)_icon%.jpg$")
+        if appid and installed[appid] and not icons[appid] then
+          icons[appid] = entry.path
+        end
       end
     end
   end
-  return nil
+  -- Prefer the stable *_icon file. Newer Steam caches keep hashed images in
+  -- librarycache/<appid>; inspect only directories for installed games.
+  for _, entry in ipairs(nested) do
+    if not icons[entry.appid] then
+      for _, image in ipairs(wowie.fs_list(entry.path)) do
+        local name = lower(image.name)
+        if not image.is_dir and (string.match(name, "^%x+%.jpg$")
+            or string.match(name, "^%x+%.png$")) then
+          icons[entry.appid] = image.path
+          break
+        end
+      end
+    end
+  end
+  return icons
 end
 
 local function discover()
-  local found, seen = {}, {}
-  local icon_roots = {}
-  for _, env_name in ipairs({"PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"}) do
-    local base = wowie.env(env_name)
-    if base then icon_roots[#icon_roots + 1] = join(base, "Steam") end
-  end
-  for _, library in ipairs(library_roots()) do
+  local found, seen, installed = {}, {}, {}
+  local libraries = library_roots()
+  for _, library in ipairs(libraries) do
     local steamapps = join(library, "steamapps")
     for _, entry in ipairs(wowie.fs_list(steamapps)) do
       local appid = string.match(entry.name, "^appmanifest_(%d+)%.acf$")
@@ -126,16 +143,7 @@ local function discover()
             local install = join(join(steamapps, "common"), installdir)
             if not seen[appid] then
               seen[appid] = true
-              local cache = join(join(library, "appcache"), "librarycache")
-              local icon_path = cached_icon(cache, appid, 0)
-              if not icon_path then
-                for _, root in ipairs(icon_roots) do
-                  icon_path = cached_icon(
-                    join(join(root, "appcache"), "librarycache"), appid, 0
-                  )
-                  if icon_path then break end
-                end
-              end
+              installed[appid] = true
               local exe = executable(install, 0, nil)
               found[#found + 1] = {
                 id = "steam-" .. appid,
@@ -144,8 +152,7 @@ local function discover()
                 subtitle = "Steam",
                 aliases = {appid},
                 target = "steam://rungameid/" .. appid,
-                icon = icon_path and {type = "file", path = icon_path}
-                    or (exe and {type = "system", target = exe.path} or nil),
+                icon = exe and {type = "system", target = exe.path} or nil,
                 -- Category and user history are sufficient root tie-breakers;
                 -- do not hard-code a penalty for every game.
                 ranking_bias = 0
@@ -156,22 +163,63 @@ local function discover()
       end
     end
   end
+  local icon_roots, root_seen = {}, {}
+  for _, library in ipairs(libraries) do
+    unique_append(icon_roots, root_seen, join(join(library, "appcache"), "librarycache"))
+  end
+  local icons = icon_index(icon_roots, installed)
+  for _, game in ipairs(found) do
+    local appid = game.aliases[1]
+    if icons[appid] then
+      game.icon = {type = "file", path = icons[appid]}
+    end
+  end
   return found
 end
 
-wowie.on("initialize", function(_context)
+local function configure_refresh(context)
+  local preferences = type(context) == "table" and context.preferences or nil
+  local value = preferences and tonumber(preferences.refresh_minutes) or nil
+  if value and value == value then
+    refresh_seconds = math.floor(math.max(1, math.min(1440, value))) * 60
+  end
+end
+
+local function refresh(now)
+  last_attempt = now
+  local ok, found = pcall(discover)
+  if not ok then return false end
+  -- An empty result is valid when Steam has been uninstalled.
+  games = found
+  index_games()
+  last_refresh = now
+  pcall(wowie.storage_write, CACHE_KEY, {saved_at = now, games = games})
+  return true
+end
+
+wowie.on("initialize", function(context)
+  configure_refresh(context)
   local now = os.time()
-  local cached = wowie.storage_read("steam-games-v1")
-  if cached and type(cached.games) == "table" and type(cached.saved_at) == "number"
-      and now - cached.saved_at < 6 * 60 * 60 then
+  local ok, cached = pcall(wowie.storage_read, CACHE_KEY)
+  if ok and cached and type(cached.games) == "table"
+      and type(cached.saved_at) == "number" then
     games = cached.games
-  else
-    games = discover()
-    wowie.storage_write("steam-games-v1", {saved_at = now, games = games})
+    index_games()
+    last_refresh = cached.saved_at
+  end
+  if (now - last_refresh >= refresh_seconds or last_refresh > now)
+      and (now - last_attempt >= 60 or last_attempt > now) then
+    refresh(now)
   end
 end)
 
 wowie.on("query", function(query, context)
+  configure_refresh(context)
+  local now = os.time()
+  if (now - last_refresh >= refresh_seconds or last_refresh > now)
+      and (now - last_attempt >= 60 or last_attempt > now) then
+    refresh(now)
+  end
   local needle = lower(query)
   -- Discovery is cached, but rendering every installed game on an empty root
   -- query still drowns out useful favorites and recents from other engines.
@@ -179,10 +227,8 @@ wowie.on("query", function(query, context)
     return {request_id = context.request_id, items = {}}
   end
   local items = {}
-  for _, game in ipairs(games) do
-    if wowie.fuzzy_match(game.title, needle) or wowie.fuzzy_match(game.aliases[1], needle) then
-      items[#items + 1] = wowie.result(game)
-    end
+  for _, index in ipairs(wowie.fuzzy_filter(match_candidates, needle)) do
+    items[#items + 1] = wowie.result(games[index])
   end
   return {request_id = context.request_id, items = items}
 end)

@@ -36,6 +36,10 @@ msgid "No results"
 msgstr "无结果"
 
 msgctxt "Launcher"
+msgid "All"
+msgstr "全部"
+
+msgctxt "Launcher"
 msgid "Could not open application"
 msgstr "无法打开应用"
 

@@ -188,6 +188,10 @@ impl SearchCore {
         self.ranker.record_action_success(item_id, query, engine);
     }
 
+    pub fn flush_history(&self) {
+        self.ranker.flush();
+    }
+
     /// Publish only the result snapshot accepted by the UI after its generation
     /// check. Background searches and rejected pages must never change actions
     /// associated with rows that are currently visible.
@@ -330,6 +334,7 @@ impl SearchCore {
                     item.launch_target = entry.target.clone();
                     item.launch_arguments = entry.arguments.clone();
                     item.launch_working_directory = entry.working_directory.clone();
+                    item.icon = entry.icon.clone();
                     item.launch_entries = vec![entry.clone()];
                     item.actions
                         .retain(|action| !matches!(action, crate::result::Action::Launch(_)));
@@ -357,6 +362,9 @@ impl SearchCore {
                         dynamic[index].item = favorite.item.clone();
                     }
                 } else {
+                    if favorite_requires_current_app_index(&favorite.item) {
+                        continue;
+                    }
                     candidate_ids.insert(favorite.item.id.clone(), dynamic.len());
                     dynamic.push(EngineSearchResult {
                         item: favorite.item.clone(),
@@ -559,6 +567,23 @@ fn category_priority_key(category: crate::result::ResultCategory) -> &'static st
     }
 }
 
+fn favorite_requires_current_app_index(item: &SearchResult) -> bool {
+    fn is_indexed_application_source(source: &crate::platform::SourceId) -> bool {
+        matches!(
+            source,
+            crate::platform::SourceId::AppsFolder
+                | crate::platform::SourceId::Package
+                | crate::platform::SourceId::StartMenu
+                | crate::platform::SourceId::Desktop
+                | crate::platform::SourceId::ControlPanel
+                | crate::platform::SourceId::CustomDirectories
+        )
+    }
+
+    is_indexed_application_source(&item.source)
+        || item.sources.iter().any(is_indexed_application_source)
+}
+
 fn stable_launch_entry_hash(entry: &crate::result::LaunchEntry) -> u64 {
     let fields = [
         entry.source.as_str().into_owned(),
@@ -574,6 +599,12 @@ fn stable_launch_entry_hash(entry: &crate::result::LaunchEntry) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for field in fields {
         for byte in field.bytes().chain(std::iter::once(0xff)) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    if let Some(icon) = &entry.icon {
+        for byte in format!("{icon:?}").bytes().chain(std::iter::once(0xff)) {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x100000001b3);
         }
@@ -702,6 +733,49 @@ mod tests {
             allow_favorite: true,
             visibility: ResultVisibility::Always,
         }
+    }
+
+    #[test]
+    #[ignore = "repeatable performance benchmark; run with --ignored --nocapture --test-threads=1"]
+    fn first_and_rapid_query_benchmark() {
+        use std::time::Instant;
+
+        let core = SearchCore::new(
+            (0..10_000)
+                .map(|index| {
+                    result(
+                        &format!("app:{index}"),
+                        &format!("Application {index} Calculator"),
+                        ResultCategory::Application,
+                    )
+                })
+                .collect(),
+        );
+        let ((first, first_result_count, mut rapid_samples), peak_threads) =
+            crate::perf_support::measure_peak_threads(|| {
+                let started = Instant::now();
+                let first = core.search("application 3214");
+                let first_elapsed = started.elapsed();
+                let mut rapid_samples = Vec::with_capacity(100);
+                for index in 0..100 {
+                    let started = Instant::now();
+                    let _ = core.search(&format!("app {index}"));
+                    rapid_samples.push(started.elapsed());
+                }
+                (first_elapsed, first.len(), rapid_samples)
+            });
+        let (rapid_p50, rapid_p95) = crate::perf_support::percentiles(&mut rapid_samples);
+        let stats = crate::utils::background::stats();
+        eprintln!(
+            "[perf] search index_records=10000 first_query_us={} first_results={} rapid_queries=100 rapid_p50_us={} rapid_p95_us={} process_peak_threads={} pending_tasks={} pending_peak={}",
+            first.as_micros(),
+            first_result_count,
+            rapid_p50.as_micros(),
+            rapid_p95.as_micros(),
+            peak_threads,
+            stats.pending,
+            stats.peak_pending,
+        );
     }
 
     #[test]
@@ -967,6 +1041,7 @@ mod tests {
                 target: "ipconfig".into(),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             }));
         let session = crate::page::SearchEngineSession {
             id: "legacy-shortcut".into(),

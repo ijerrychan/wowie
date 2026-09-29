@@ -5,6 +5,13 @@
   "api_version": 1,
   "entry_point": "main.lua",
   "permissions": ["filesystem"],
+  "preferences": [{
+    "key": "refresh_minutes",
+    "title": "Steam library refresh interval (minutes)",
+    "description": "Check installed games and artwork again after this many minutes (1–1440).",
+    "type": "text",
+    "default": "10"
+  }],
   "engine": {
     "participates_in_root": true,
     "respect_global_fuzzy_search": true,

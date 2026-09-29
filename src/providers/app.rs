@@ -33,7 +33,7 @@ use association::{
     associate_file_entries, dedup_launch_entries_by_behavior, merge_launch_entries,
     refresh_application_location, AssociationStats,
 };
-pub(crate) use association::{preferred_launch_entry, same_launch_behavior};
+pub(crate) use association::{preferred_launch_entry, same_launch_behavior, same_launch_icon};
 use discovery::{
     debug_enabled, debug_record_matches, debug_records, discover_apps_folder_source,
     discover_custom_directories, discover_desktop_source, discover_packaged_source,
@@ -69,8 +69,9 @@ struct PersistedAppIndex {
     sources: Vec<(crate::platform::AppProviderSource, Vec<SearchResult>)>,
 }
 
-const APP_INDEX_CACHE_VERSION: u32 = 4;
-const APP_INDEX_CACHE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+const APP_INDEX_CACHE_VERSION: u32 = 7;
+const SHELL_SOURCE_RECONCILE_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(15 * 60);
 
 pub(crate) fn launch_entry_label(entry: &crate::result::LaunchEntry) -> String {
     if crate::platform::windows_rules::is_shortcut_path(&entry.path) {
@@ -108,7 +109,7 @@ pub(crate) fn visible_launch_entries(
             // Installer shortcuts that only identify an icon are not launch
             // actions, even when advanced entries are enabled.
             if crate::platform::windows_rules::is_icon_path(&entry.target)
-                || same_launch_behavior(default, entry)
+                || (same_launch_behavior(default, entry) && same_launch_icon(default, entry))
             {
                 return None;
             }
@@ -275,7 +276,7 @@ impl AppProvider {
         dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("Wowie")
-            .join("app-index-v4.json")
+            .join("app-index-v7.json")
     }
 
     fn restore_persisted_index(&mut self) -> bool {
@@ -298,6 +299,12 @@ impl AppProvider {
         self.source_fingerprints = cache.source_fingerprints.into_iter().collect();
         self.source_indexed_at = cache.source_indexed_at.into_iter().collect();
         self.sources = cache.sources.into_iter().collect();
+        if let Some(items) = self
+            .sources
+            .get_mut(&crate::platform::AppProviderSource::ControlPanel)
+        {
+            crate::providers::control_panel::normalize_cached_destinations(items);
+        }
         self.rebuild_source_lookup();
         self.items = Arc::new(merge_sources(&self.sources));
         eprintln!(
@@ -341,12 +348,35 @@ impl AppProvider {
         if let Some(current) = filesystem_source_fingerprint(source, &self.config) {
             return self.source_fingerprints.get(&source) != Some(&current);
         }
+        // Shell-backed sources have no cheap, stable fingerprint. Treat their
+        // persisted rows as provisional and verify them on every startup.
+        true
+    }
+
+    pub(crate) fn shell_sources_due_for_reconciliation(
+        &self,
+    ) -> Vec<crate::platform::AppProviderSource> {
         let now = unix_timestamp();
-        self.source_indexed_at
-            .get(&source)
-            .is_none_or(|last_indexed| {
-                now.saturating_sub(*last_indexed) > APP_INDEX_CACHE_MAX_AGE.as_secs()
+        PROVIDER_DEFINITIONS
+            .iter()
+            .filter(|provider| (provider.enabled)(&self.config))
+            .filter(|provider| {
+                matches!(
+                    provider.source,
+                    crate::platform::AppProviderSource::AppsFolder
+                        | crate::platform::AppProviderSource::ControlPanel
+                )
             })
+            .filter(|provider| {
+                self.source_indexed_at
+                    .get(&provider.source)
+                    .is_none_or(|last_indexed| {
+                        now.saturating_sub(*last_indexed)
+                            >= SHELL_SOURCE_RECONCILE_INTERVAL.as_secs()
+                    })
+            })
+            .map(|provider| provider.source)
+            .collect()
     }
 
     fn refresh_source_fingerprints(&mut self) {
@@ -512,8 +542,9 @@ impl AppProvider {
 
     pub fn watch_sources(
         custom_directories: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
+        shutdown: &crate::platform::PlatformShutdown,
     ) -> std::sync::mpsc::Receiver<crate::platform::AppProviderSource> {
-        crate::platform::watch_app_provider_sources(custom_directories)
+        crate::platform::watch_app_provider_sources(custom_directories, shutdown)
     }
 }
 
@@ -804,6 +835,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\Editor.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
 
         let source = crate::platform::AppProviderSource::AppsFolder;
@@ -824,6 +856,79 @@ mod tests {
             lookup.by_filesystem_target["c:\\apps\\editor.exe"],
             vec![(source, 0)]
         );
+    }
+
+    #[test]
+    #[ignore = "repeatable performance benchmark; run with --ignored --nocapture --test-threads=1"]
+    fn provider_index_and_directory_refresh_benchmark() {
+        use std::time::Instant;
+
+        let root = std::env::temp_dir().join(format!(
+            "wowie-index-bench-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        for index in 0..500 {
+            std::fs::write(
+                root.join(format!("entry-{index}.url")),
+                format!("[InternetShortcut]\nURL=https://example.com/{index}\n"),
+            )
+            .unwrap();
+        }
+        let config = crate::config::ProviderConfig {
+            store_apps: false,
+            start_menu: false,
+            desktop: false,
+            control_panel: false,
+            indexed_directories: vec![root.clone()],
+            indexed_extensions: vec!["url".into()],
+        };
+        let ((initial_count, mut startup_samples, mut refresh_samples), peak_threads) =
+            crate::perf_support::measure_peak_threads(|| {
+                let started = Instant::now();
+                let initial = discover_sources(&config);
+                let startup_first = started.elapsed();
+                let initial_count = initial
+                    .get(&crate::platform::AppProviderSource::CustomDirectories)
+                    .map_or(0, Vec::len);
+                let mut startup_samples = vec![startup_first];
+                for _ in 0..7 {
+                    let started = Instant::now();
+                    let _ = discover_sources(&config);
+                    startup_samples.push(started.elapsed());
+                }
+                let mut refresh_samples = Vec::with_capacity(7);
+                for index in 0..7 {
+                    std::fs::write(
+                        root.join(format!("changed-{index}.url")),
+                        format!("[InternetShortcut]\nURL=https://example.com/changed-{index}\n"),
+                    )
+                    .unwrap();
+                    let started = Instant::now();
+                    let refreshed = discover_custom_directories(&config);
+                    assert!(refreshed.len() >= initial_count);
+                    refresh_samples.push(started.elapsed());
+                }
+                (initial_count, startup_samples, refresh_samples)
+            });
+        let (startup_p50, startup_p95) = crate::perf_support::percentiles(&mut startup_samples);
+        let (refresh_p50, refresh_p95) = crate::perf_support::percentiles(&mut refresh_samples);
+        let stats = crate::utils::background::stats();
+        eprintln!(
+            "[perf] app_index records={initial_count} startup_p50_us={} startup_p95_us={} changed_source_p50_us={} changed_source_p95_us={} process_peak_threads={} pending_tasks={} pending_peak={}",
+            startup_p50.as_micros(),
+            startup_p95.as_micros(),
+            refresh_p50.as_micros(),
+            refresh_p95.as_micros(),
+            peak_threads,
+            stats.pending,
+            stats.peak_pending,
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -853,6 +958,7 @@ mod tests {
             target: PathBuf::from(r"bin\editor.exe"),
             arguments: String::new(),
             working_directory: Some(PathBuf::from(r"C:\Apps")),
+            icon: None,
         };
         let right = LaunchEntry {
             source: source_ids::APPS_FOLDER.into(),
@@ -860,6 +966,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\bin\editor.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         };
 
         assert!(same_filesystem_entry_target(&left, &right));
@@ -910,6 +1017,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\Editor.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
 
         let mut refreshed = previous.clone();
@@ -941,6 +1049,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\Editor.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut refreshed = previous.clone();
         refreshed.launch_entries[0].arguments = "--new-profile".into();
@@ -984,6 +1093,7 @@ mod tests {
                 target: PathBuf::from(target),
                 arguments: arguments.into(),
                 working_directory: working_directory.map(PathBuf::from),
+                icon: None,
             }
         }
 
@@ -1114,6 +1224,7 @@ mod tests {
                 target: PathBuf::from(target),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             }
         }
 
@@ -1327,6 +1438,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\demo.exe"),
             arguments: "--profile one".into(),
             working_directory: Some(PathBuf::from(r"C:\Apps")),
+            icon: None,
         }];
         let mut second = item(&identity, "Demo (work)", "Desktop");
         second.launch_entries = vec![LaunchEntry {
@@ -1335,6 +1447,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\demo.exe"),
             arguments: "--profile two".into(),
             working_directory: Some(PathBuf::from(r"C:\Apps")),
+            icon: None,
         }];
         let mut items = vec![first, second];
         merge_by_identity(&mut items);
@@ -1353,6 +1466,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\vendor.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut shortcut = item("exe:vendor-shortcut", "Vendor App", "StartMenu");
         shortcut.launch_entries = vec![LaunchEntry {
@@ -1361,6 +1475,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\vendor.exe"),
             arguments: "--profile default".into(),
             working_directory: None,
+            icon: None,
         }];
         let mut items = vec![app, shortcut];
         associate_file_entries(&mut items);
@@ -1385,6 +1500,7 @@ mod tests {
             target: PathBuf::from(r"C:\Program Files\WSL\WslSettings\wslsettings.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut shortcut = item(
             "target:c:\\windows\\installer\\wsl.ico",
@@ -1397,6 +1513,7 @@ mod tests {
             target: PathBuf::from(r"C:\Windows\Installer\{guid}\wsl.ico"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut items = vec![app, shortcut];
         associate_file_entries(&mut items);
@@ -1417,6 +1534,7 @@ mod tests {
             target: PathBuf::from(r"shell:AppsFolder\Docker.DockerForWindows.Settings"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut shortcut = item(
             "exe:c:\\users\\user\\appdata\\local\\programs\\dockerdesktop\\docker desktop.exe",
@@ -1433,6 +1551,7 @@ mod tests {
             working_directory: Some(PathBuf::from(
                 r"C:\Users\User\AppData\Local\Programs\DockerDesktop\frontend",
             )),
+            icon: None,
         }];
         let mut items = vec![app, shortcut];
         associate_file_entries(&mut items);
@@ -1454,6 +1573,7 @@ mod tests {
             target: target.clone(),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut shortcut = item(
             "url:http://support.steampowered.com/",
@@ -1466,6 +1586,7 @@ mod tests {
             target,
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut items = vec![app, shortcut];
         associate_file_entries(&mut items);
@@ -1490,6 +1611,7 @@ mod tests {
             target: PathBuf::from(r"shell:AppsFolder\com.squirrel.Discord.Discord"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut update = item("exe:update", "Discord", "StartMenu");
         update.launch_entries = vec![LaunchEntry {
@@ -1498,6 +1620,7 @@ mod tests {
             target: PathBuf::from(r"C:\Users\User\AppData\Local\Discord\Update.exe"),
             arguments: "--processStart Discord.exe".into(),
             working_directory: None,
+            icon: None,
         }];
         let mut versioned = item("exe:discord", "Discord", "StartMenu");
         versioned.launch_entries = vec![LaunchEntry {
@@ -1506,6 +1629,7 @@ mod tests {
             target: PathBuf::from(r"C:\Users\User\AppData\Local\Discord\app-1.0.9258\Discord.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut items = vec![app, update, versioned];
         associate_file_entries(&mut items);
@@ -1531,6 +1655,7 @@ mod tests {
             ),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut shortcut = item(
             "exe:c:\\program files\\git\\git-bash.exe",
@@ -1543,6 +1668,7 @@ mod tests {
             target: PathBuf::from(r"C:\Program Files\Git\git-bash.exe"),
             arguments: "--cd-to-home".into(),
             working_directory: None,
+            icon: None,
         }];
 
         let mut items = vec![app, shortcut];
@@ -1565,6 +1691,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Apps\other.exe"),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
             LaunchEntry {
                 source: "AppsFolder".into(),
@@ -1572,6 +1699,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Apps\vendor.exe"),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
         ];
         let mut shortcut = item("exe:vendor-shortcut", "Vendor App", "StartMenu");
@@ -1581,6 +1709,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\vendor.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
 
         let mut items = vec![app, shortcut];
@@ -1601,6 +1730,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\vendor.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
 
         let mut shortcut = item("exe:other-shortcut", "Vendor App", "StartMenu");
@@ -1612,6 +1742,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\vendor.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
 
         let mut items = vec![app, shortcut];
@@ -1637,6 +1768,7 @@ mod tests {
             ),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut shortcut = item(
             r"target:c:\program files\git\releasenotes.html",
@@ -1649,6 +1781,7 @@ mod tests {
             target: PathBuf::from(r"C:\Program Files\Git\ReleaseNotes.html"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
 
         let mut items = vec![app, shortcut];
@@ -1677,6 +1810,7 @@ mod tests {
                 target: PathBuf::from(r"shell:AppsFolder\Git.ReleaseNotes"),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
             LaunchEntry {
                 source: "StartMenu".into(),
@@ -1684,6 +1818,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Program Files\Git\ReleaseNotes.html"),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
         ];
         classify_unclassified_items(std::slice::from_mut(&mut result));
@@ -1701,6 +1836,7 @@ mod tests {
                 target: application.launch_target.clone(),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
             LaunchEntry {
                 source: "StartMenu".into(),
@@ -1708,6 +1844,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Users\User\AppData\Local\Discord\Update.exe"),
                 arguments: "--processStart Discord.exe".into(),
                 working_directory: None,
+                icon: None,
             },
             LaunchEntry {
                 source: "StartMenu".into(),
@@ -1717,6 +1854,7 @@ mod tests {
                 ),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
         ];
         refresh_application_location(&mut application);
@@ -1740,6 +1878,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Program Files\WSL\WslSettings\wslsettings.exe"),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
             LaunchEntry {
                 source: "StartMenu".into(),
@@ -1747,6 +1886,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Windows\Installer\{guid}\wsl.ico"),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
         ];
 
@@ -1769,6 +1909,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Start Menu\Demo.lnk"),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
             LaunchEntry {
                 source: "AppsFolder".into(),
@@ -1776,6 +1917,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Apps\Demo.exe"),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
         ];
         refresh_application_location(&mut application);
@@ -1806,6 +1948,7 @@ mod tests {
             target: PathBuf::from(r"shell:AppsFolder\legacy.taskmanager"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut shortcut = item("exe:taskmgr", "Task Manager", "StartMenu");
         shortcut.icon = Some(IconSpec::System(PathBuf::from(
@@ -1819,6 +1962,7 @@ mod tests {
             target: PathBuf::from(r"C:\Windows\System32\Taskmgr.exe"),
             arguments: "/7".into(),
             working_directory: None,
+            icon: None,
         }];
 
         let mut items = vec![application, shortcut];
@@ -1857,6 +2001,7 @@ mod tests {
             target: PathBuf::from(r"shell:AppsFolder\Vendor.One.Discord"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut second = item("shell:vendor.two.discord", "Discord", "AppsFolder");
         second.launch_entries = vec![LaunchEntry {
@@ -1865,6 +2010,7 @@ mod tests {
             target: PathBuf::from(r"shell:AppsFolder\Vendor.Two.Discord"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut shortcut = item("exe:discord", "Discord", "StartMenu");
         shortcut.launch_entries = vec![LaunchEntry {
@@ -1873,6 +2019,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\Discord.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut items = vec![first, second, shortcut];
         associate_file_entries(&mut items);
@@ -1890,6 +2037,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\demo.exe"),
             arguments: "--desktop".into(),
             working_directory: None,
+            icon: None,
         }];
         let mut start_menu = item(identity, "Demo Start", "StartMenu");
         start_menu.aliases.push("start alias".into());
@@ -1899,6 +2047,7 @@ mod tests {
             target: PathBuf::from(r"C:\Apps\demo.exe"),
             arguments: String::new(),
             working_directory: None,
+            icon: None,
         }];
         let mut items = vec![desktop, start_menu];
         merge_by_identity(&mut items);
@@ -1930,6 +2079,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Apps\demo.exe"),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
             LaunchEntry {
                 source: "StartMenu".into(),
@@ -1937,6 +2087,7 @@ mod tests {
                 target: PathBuf::from(r"c:/apps/DEMO.exe"),
                 arguments: String::new(),
                 working_directory: None,
+                icon: None,
             },
             LaunchEntry {
                 source: "Desktop".into(),
@@ -1944,6 +2095,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Apps\demo.exe"),
                 arguments: "--profile work".into(),
                 working_directory: None,
+                icon: None,
             },
             LaunchEntry {
                 source: "CustomDirectories".into(),
@@ -1951,6 +2103,7 @@ mod tests {
                 target: PathBuf::from(r"C:\Apps\demo.exe"),
                 arguments: String::new(),
                 working_directory: Some(PathBuf::from(r"C:\Other")),
+                icon: None,
             },
         ];
 

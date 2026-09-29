@@ -35,7 +35,7 @@ pub(crate) fn indexed_application_icon(
         if unsafe { GetIconInfo(large_icon as _, &mut icon_info) } == 0 {
             return None;
         }
-        bitmap_pixels(icon_info.hbmColor, 32, 32)
+        bitmap_pixels(icon_info.hbmColor, icon_info.hbmMask, 32, 32)
     })();
     destroy_icon_resources(large_icon as _, &icon_info);
     result
@@ -43,13 +43,53 @@ pub(crate) fn indexed_application_icon(
 
 fn bitmap_pixels(
     bitmap: *mut std::ffi::c_void,
+    mask: *mut std::ffi::c_void,
     width: u32,
     height: u32,
 ) -> Option<super::super::IconData> {
+    let mut pixels = read_bitmap_pixels(bitmap, width, height)?;
+    if pixels.chunks_exact(4).all(|pixel| pixel[3] == 0) {
+        // Some legacy Win32 icons store RGB in the color bitmap and put all
+        // transparency in the monochrome AND mask. Treating the unused alpha
+        // channel as authoritative makes those icons fully invisible.
+        if !mask.is_null() {
+            if let Some(mask_pixels) = read_bitmap_pixels(mask, width, height) {
+                for (pixel, mask_pixel) in
+                    pixels.chunks_exact_mut(4).zip(mask_pixels.chunks_exact(4))
+                {
+                    let transparent =
+                        mask_pixel[0] > 127 || mask_pixel[1] > 127 || mask_pixel[2] > 127;
+                    pixel[3] = if transparent { 0 } else { 255 };
+                }
+            } else {
+                for pixel in pixels.chunks_exact_mut(4) {
+                    pixel[3] = 255;
+                }
+            }
+        } else {
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+        }
+    }
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    Some(super::super::IconData {
+        width,
+        height,
+        rgba: pixels,
+    })
+}
+
+fn read_bitmap_pixels(bitmap: *mut std::ffi::c_void, width: u32, height: u32) -> Option<Vec<u8>> {
     use std::mem;
     use windows_sys::Win32::Graphics::Gdi::{
         GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
     };
+    if bitmap.is_null() {
+        return None;
+    }
     let mut pixels = vec![0_u8; (width * height * 4) as usize];
     let mut bitmap_info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
@@ -82,14 +122,7 @@ fn bitmap_pixels(
     if !copied {
         return None;
     }
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
-    Some(super::super::IconData {
-        width,
-        height,
-        rgba: pixels,
-    })
+    Some(pixels)
 }
 
 fn delete_icon_bitmaps(icon_info: &windows_sys::Win32::UI::WindowsAndMessaging::ICONINFO) {
@@ -160,55 +193,61 @@ fn application_icon_with_flags(
     };
     let wide: Vec<u16> = _target.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut file_info: SHFILEINFOW = unsafe { mem::zeroed() };
-    let shell_flags = SHGFI_ICON
-        | SHGFI_LARGEICON
-        | if use_file_attributes {
-            windows_sys::Win32::UI::Shell::SHGFI_USEFILEATTRIBUTES
-        } else {
-            0
-        };
-    let mut ok = unsafe {
-        SHGetFileInfoW(
-            wide.as_ptr(),
-            if use_file_attributes { 0x80 } else { 0 },
-            &mut file_info,
-            mem::size_of::<SHFILEINFOW>() as u32,
-            shell_flags,
-        )
-    };
-    if !use_file_attributes
-        && (ok == 0 || file_info.hIcon.is_null())
-        && super::super::windows_rules::is_shell_namespace(_target)
-    {
+    if !use_file_attributes && super::super::windows_rules::is_shell_namespace(_target) {
+        // Shell namespace paths such as Control Panel items are virtual PIDLs,
+        // not filesystem paths. Resolve them on an initialized COM apartment
+        // before asking Shell32 for their icon.
+        let _com = super::ComScope::initialize()?;
         use windows::{
             core::PCWSTR,
             Win32::{System::Com::CoTaskMemFree, UI::Shell::SHParseDisplayName},
         };
         let mut pidl = std::ptr::null_mut();
-        if unsafe { SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut pidl, 0, None).is_ok() }
-            && !pidl.is_null()
+        if unsafe { SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut pidl, 0, None).is_err() }
+            || pidl.is_null()
         {
-            ok = unsafe {
-                SHGetFileInfoW(
-                    pidl.cast(),
-                    0,
-                    &mut file_info,
-                    mem::size_of::<SHFILEINFOW>() as u32,
-                    SHGFI_ICON | SHGFI_LARGEICON | windows_sys::Win32::UI::Shell::SHGFI_PIDL,
-                )
-            };
-            unsafe { CoTaskMemFree(Some(pidl.cast())) };
+            return None;
         }
-    }
-    if ok == 0 || file_info.hIcon.is_null() {
-        return None;
+        let ok = unsafe {
+            SHGetFileInfoW(
+                pidl.cast(),
+                0,
+                &mut file_info,
+                mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_ICON | SHGFI_LARGEICON | windows_sys::Win32::UI::Shell::SHGFI_PIDL,
+            )
+        };
+        unsafe { CoTaskMemFree(Some(pidl.cast())) };
+        if ok == 0 || file_info.hIcon.is_null() {
+            return None;
+        }
+    } else {
+        let shell_flags = SHGFI_ICON
+            | SHGFI_LARGEICON
+            | if use_file_attributes {
+                windows_sys::Win32::UI::Shell::SHGFI_USEFILEATTRIBUTES
+            } else {
+                0
+            };
+        let ok = unsafe {
+            SHGetFileInfoW(
+                wide.as_ptr(),
+                if use_file_attributes { 0x80 } else { 0 },
+                &mut file_info,
+                mem::size_of::<SHFILEINFOW>() as u32,
+                shell_flags,
+            )
+        };
+        if ok == 0 || file_info.hIcon.is_null() {
+            return None;
+        }
     }
     let mut icon_info: ICONINFO = unsafe { mem::zeroed() };
     let result = (|| {
         if unsafe { GetIconInfo(file_info.hIcon, &mut icon_info) } == 0 {
             return None;
         }
-        bitmap_pixels(icon_info.hbmColor, 32, 32)
+        bitmap_pixels(icon_info.hbmColor, icon_info.hbmMask, 32, 32)
     })();
     destroy_icon_resources(file_info.hIcon as _, &icon_info);
     result

@@ -1,4 +1,4 @@
-use crate::result::{LaunchEntry, ResultCategory, SearchResult};
+use crate::result::{IconSpec, LaunchEntry, ResultCategory, SearchResult};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -246,10 +246,10 @@ fn shortcut_match_strength(
             .then_some(MatchStrength::FilesystemTarget);
     }
     // Some Windows AppsFolder entries expose a virtual shell identity while
-    // their Start Menu shortcut points at a real executable. WSL is a notable
-    // exception: both WSL shortcuts can point at an installer-generated .ico
-    // placeholder. Associate these only when the title matches exactly and
-    // the target has a known executable/placeholder extension.
+    // their Start Menu shortcut points at a real executable. Exact-title
+    // fallbacks stay constrained to known executable or icon-placeholder
+    // targets. Normal .lnk resolution drops .ico targets before indexing,
+    // since they describe artwork rather than a launchable application.
     if (application.identity.starts_with("shell:") || application.identity.starts_with("exe:"))
         && !application.title.is_empty()
         && shortcut.title.eq_ignore_ascii_case(&application.title)
@@ -355,19 +355,20 @@ pub(super) fn merge_launch_entries(existing: &mut SearchResult, incoming: Vec<La
     existing.launch_entries.extend(incoming);
 }
 
-/// Keep one entry for each actual launch behavior. The discovered source and
-/// shortcut path are provenance metadata; they do not change what Windows
-/// launches. Arguments and working directory do change the behavior and must
-/// therefore remain part of the deduplication key.
+/// Keep one entry for each launch behavior and icon resource. The discovered
+/// source and shortcut path are provenance metadata, but separate shortcuts
+/// with different icons must remain available for entry-specific display.
 pub(super) fn dedup_launch_entries_by_behavior(entries: &mut Vec<LaunchEntry>) {
     let mut keyed = entries
         .drain(..)
         .map(|entry| {
             let behavior = launch_behavior_key(&entry);
+            let icon = launch_entry_icon_key(&entry);
             let source_name = entry.source.as_str().into_owned();
             let path = entry.path.clone();
             (
                 behavior,
+                icon,
                 source_priority(&entry.source),
                 source_name,
                 path,
@@ -382,9 +383,32 @@ pub(super) fn dedup_launch_entries_by_behavior(entries: &mut Vec<LaunchEntry>) {
             .then_with(|| left.1.cmp(&right.1))
             .then_with(|| left.2.cmp(&right.2))
             .then_with(|| left.3.cmp(&right.3))
+            .then_with(|| left.4.cmp(&right.4))
     });
-    keyed.dedup_by(|left, right| left.0 == right.0);
-    entries.extend(keyed.into_iter().map(|(_, _, _, _, entry)| entry));
+    keyed.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+    entries.extend(keyed.into_iter().map(|(_, _, _, _, _, entry)| entry));
+}
+
+fn launch_entry_icon_key(entry: &LaunchEntry) -> String {
+    match entry.icon.as_ref() {
+        None => format!("target:{}", normalize_path(&entry.target)),
+        Some(IconSpec::System(path)) if normalize_path(path) == normalize_path(&entry.target) => {
+            format!("target:{}", normalize_path(&entry.target))
+        }
+        Some(icon) => format!("{icon:?}"),
+    }
+}
+
+pub(crate) fn same_launch_icon(left: &LaunchEntry, right: &LaunchEntry) -> bool {
+    launch_entry_icon_key(left) == launch_entry_icon_key(right)
+}
+
+fn launch_entry_icon_priority(entry: &LaunchEntry) -> u8 {
+    match entry.icon.as_ref() {
+        None => 0,
+        Some(IconSpec::System(path)) if normalize_path(path) == normalize_path(&entry.target) => 0,
+        Some(_) => 1,
+    }
 }
 
 fn launch_behavior_key(entry: &LaunchEntry) -> (String, String, String) {
@@ -430,18 +454,20 @@ pub(super) fn refresh_application_location(item: &mut SearchResult) {
     if item.category == ResultCategory::ControlPanel {
         return;
     }
-    let Some((target, arguments, working_directory, path)) =
-        preferred_launch_entry(item).map(|entry| {
+    let Some((target, arguments, working_directory, path, icon)) = preferred_launch_entry(item)
+        .map(|entry| {
             (
                 entry.target.clone(),
                 entry.arguments.clone(),
                 entry.working_directory.clone(),
                 entry.path.clone(),
+                entry.icon.clone(),
             )
         })
     else {
         return;
     };
+    item.icon = icon;
     item.location = target.display().to_string();
 
     // Keep the default launch tied to the selected entry. For a shortcut,
@@ -486,6 +512,8 @@ pub(crate) fn preferred_launch_entry(item: &SearchResult) -> Option<&LaunchEntry
                 entry.target.to_string_lossy().to_lowercase(),
                 entry.arguments.clone(),
                 entry.working_directory.clone(),
+                launch_entry_icon_priority(entry),
+                entry.path.to_string_lossy().to_lowercase(),
             )
         })
         .or_else(|| {
@@ -498,6 +526,8 @@ pub(crate) fn preferred_launch_entry(item: &SearchResult) -> Option<&LaunchEntry
                         entry.target.to_string_lossy().to_lowercase(),
                         entry.arguments.clone(),
                         entry.working_directory.clone(),
+                        launch_entry_icon_priority(entry),
+                        entry.path.to_string_lossy().to_lowercase(),
                     )
                 })
         })
