@@ -449,9 +449,12 @@ fn launch_behavior_working_directory_key(
 }
 
 pub(super) fn refresh_application_location(item: &mut SearchResult) {
-    // Control Panel deliberately keeps its user-facing location hidden; its
-    // Shell parsing name is an implementation detail used only for launch.
-    if item.category == ResultCategory::ControlPanel {
+    // Control Panel and Windows Settings own their localized presentation;
+    // their Shell names and URI targets are implementation details.
+    if matches!(
+        item.category,
+        ResultCategory::ControlPanel | ResultCategory::Settings
+    ) {
         return;
     }
     let Some((target, arguments, working_directory, path, icon)) = preferred_launch_entry(item)

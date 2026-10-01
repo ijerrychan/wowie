@@ -147,8 +147,8 @@ fn definitions() -> Vec<Definition> {
         field(
             "providers.control_panel",
             "providers",
-            "Control Panel",
-            "Include Control Panel destinations.",
+            "Control Panel and Windows Settings",
+            "Include Control Panel items and Windows Settings pages.",
             "toggle",
         ),
         field(
@@ -476,6 +476,7 @@ pub(super) fn entries(
             ("website", "Websites"),
             ("calculator", "Calculator"),
             ("control_panel", "Control Panel results"),
+            ("settings", "Settings results"),
             ("document", "Documents"),
             ("other", "Other results"),
             ("unclassified", "Unclassified results"),

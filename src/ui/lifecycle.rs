@@ -11,6 +11,11 @@ pub fn run() -> Result<()> {
     let window = create_window(&config)?;
     let settings_window = SettingsWindow::new()?;
     let context_window = ContextMenu::new()?;
+    // Native Windows frames own the outer contour; keep the Slint surface opaque
+    // and flush with it. Other platforms retain the existing transparent shell.
+    window.set_native_window_frame(cfg!(windows));
+    settings_window.set_native_window_frame(cfg!(windows));
+    context_window.set_native_window_frame(cfg!(windows));
     if config.language != "system" {
         slint::select_bundled_translation(&config.language)
             .map_err(|error| anyhow::anyhow!("could not select language: {error}"))?;
@@ -1749,9 +1754,18 @@ pub fn run() -> Result<()> {
                 if hide_on_focus_loss.load(Ordering::Acquire)
                     && visible.swap(false, Ordering::AcqRel)
                 {
-                    if let Some(window) = weak.upgrade() {
-                        let _ = window.hide();
-                    }
+                    let weak = weak.clone();
+                    let visible = Arc::clone(&visible);
+                    // Window focus events arrive from inside Slint's winit
+                    // event dispatch. Defer hiding until that dispatch has
+                    // returned so hiding cannot re-enter tree instantiation.
+                    Timer::single_shot(Duration::ZERO, move || {
+                        if !visible.load(Ordering::Acquire) {
+                            if let Some(window) = weak.upgrade() {
+                                let _ = window.hide();
+                            }
+                        }
+                    });
                 }
             }),
         );

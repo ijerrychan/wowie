@@ -562,6 +562,7 @@ fn category_priority_key(category: crate::result::ResultCategory) -> &'static st
         ResultCategory::Website => "website",
         ResultCategory::Calculator => "calculator",
         ResultCategory::ControlPanel => "control_panel",
+        ResultCategory::Settings => "settings",
         ResultCategory::Document => "document",
         ResultCategory::Other => "other",
     }

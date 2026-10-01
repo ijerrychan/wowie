@@ -55,16 +55,17 @@ impl ResultFilterState {
     }
 
     pub(super) fn categories(&self) -> Vec<(&'static str, usize)> {
-        const ORDER: [&str; 7] = [
+        const ORDER: [&str; 8] = [
             "application",
             "game",
             "website",
             "calculator",
             "control_panel",
+            "settings",
             "document",
             "other",
         ];
-        let mut counts = [0_usize; 7];
+        let mut counts = [0_usize; 8];
         for item in self.all_items.iter() {
             let key = category_key(item.category);
             if let Some(index) = ORDER.iter().position(|candidate| *candidate == key) {
@@ -125,6 +126,7 @@ fn category_key(category: ResultCategory) -> &'static str {
         ResultCategory::Website => "website",
         ResultCategory::Calculator => "calculator",
         ResultCategory::ControlPanel => "control_panel",
+        ResultCategory::Settings => "settings",
         ResultCategory::Document => "document",
         ResultCategory::Other => "other",
         ResultCategory::Unclassified => "other",
@@ -218,6 +220,13 @@ pub(super) fn static_icon_kind(icon: Option<&IconSpec>) -> &'static str {
 }
 
 fn display_location(item: &SearchResult, show_advanced_details: bool) -> String {
+    if item.category == ResultCategory::Settings {
+        return if show_advanced_details {
+            item.launch_target.to_string_lossy().into_owned()
+        } else {
+            item.location.clone()
+        };
+    }
     if !show_advanced_details && item.category == ResultCategory::ControlPanel {
         return String::new();
     }

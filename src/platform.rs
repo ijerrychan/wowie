@@ -14,6 +14,16 @@ mod unsupported;
 #[cfg(windows)]
 mod windows;
 
+#[cfg(windows)]
+pub(crate) fn windows_build_number() -> Option<u32> {
+    windows::windows_build_number()
+}
+
+#[cfg(windows)]
+pub(crate) fn windows_setting_capability_available(capability: &str) -> Option<bool> {
+    windows::windows_setting_capability_available(capability)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformEvent {
     TogglePalette,

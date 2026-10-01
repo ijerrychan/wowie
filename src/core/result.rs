@@ -111,6 +111,7 @@ pub enum ResultCategory {
     Website,
     Calculator,
     ControlPanel,
+    Settings,
     Document,
     Other,
 }

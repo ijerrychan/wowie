@@ -3,13 +3,8 @@
 use crate::platform::source_ids;
 use crate::result::{IconSpec, LaunchEntry, ResultCategory, SearchResult};
 
-// Control Panel's parsing names can become stale when Windows moves a page to
-// the Settings app. Use the language-independent Shell canonical name instead
-// of matching a localized title.
-const MODERN_SETTINGS_DESTINATIONS: &[(&str, &str)] = &[("Microsoft.Fonts", "ms-settings:fonts")];
-
 pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
-    crate::platform::discover_control_panel_items()
+    let mut results = crate::platform::discover_control_panel_items()
         .into_iter()
         .map(|item| {
             let shell_target = item.launch_target;
@@ -53,6 +48,60 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
             apply_compatible_destination(&mut result);
             result
         })
+        .collect::<Vec<_>>();
+
+    #[cfg(windows)]
+    {
+        let existing_settings_targets = results
+            .iter()
+            .filter(|item| item.category == crate::result::ResultCategory::Settings)
+            .map(|item| item.launch_target.to_string_lossy().to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>();
+        let mut known_names = results
+            .iter()
+            .flat_map(|item| {
+                std::iter::once(item.title.as_str()).chain(
+                    item.aliases
+                        .iter()
+                        .filter(|alias| {
+                            alias
+                                .get(..10)
+                                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Microsoft."))
+                        })
+                        .map(String::as_str),
+                )
+            })
+            .map(normalize_setting_name)
+            .collect::<std::collections::HashSet<_>>();
+        let mut powertoys_titles = std::collections::HashSet::new();
+        for item in crate::providers::windows_settings::powertoys_results() {
+            let canonical_names = crate::providers::windows_settings::powertoys_name_aliases(&item)
+                .into_iter()
+                .map(|name| normalize_setting_name(&name))
+                .collect::<Vec<_>>();
+            if existing_settings_targets
+                .contains(&item.launch_target.to_string_lossy().to_ascii_lowercase())
+                || canonical_names
+                    .iter()
+                    .any(|name| known_names.contains(name))
+                || !powertoys_titles.insert(normalize_setting_name(&item.title))
+            {
+                continue;
+            }
+            known_names.extend(canonical_names);
+            known_names.insert(normalize_setting_name(&item.title));
+            results.push(item);
+        }
+    }
+
+    results
+}
+
+fn normalize_setting_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
         .collect()
 }
 
@@ -63,28 +112,15 @@ fn apply_compatible_destination(item: &mut SearchResult) {
         return;
     }
 
-    let Some(target) = item.aliases.iter().find_map(|alias| {
-        MODERN_SETTINGS_DESTINATIONS
-            .iter()
-            .find(|(canonical_name, _)| alias.eq_ignore_ascii_case(canonical_name))
-            .map(|(_, uri)| std::path::PathBuf::from(*uri))
-    }) else {
+    let is_compatible = item.aliases.iter().any(|alias| {
+        crate::providers::windows_settings::compatible_settings_uri_for_canonical_name(alias)
+            .is_some()
+    });
+    if !is_compatible {
         return;
-    };
-
-    item.launch_target = target.clone();
-    item.launch_arguments.clear();
-    item.launch_working_directory = None;
-    for entry in item
-        .launch_entries
-        .iter_mut()
-        .filter(|entry| entry.source.as_str() == source_ids::CONTROL_PANEL)
-    {
-        entry.path = target.clone();
-        entry.target = target.clone();
-        entry.arguments.clear();
-        entry.working_directory = None;
     }
+    // The legacy Control Panel entry now launches the supported Settings URI.
+    crate::providers::windows_settings::apply_compatible_destination(item);
 }
 
 pub(crate) fn normalize_cached_destinations(items: &mut [SearchResult]) {

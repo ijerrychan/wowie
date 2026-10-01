@@ -70,6 +70,33 @@ pub fn tr_aliases(
     aliases
 }
 
+/// Returns translated aliases for a message loaded at runtime, followed by
+/// the English fallback. PowerToys' Windows Settings catalog stores resource
+/// keys in JSON, so its message IDs are not Rust string literals.
+pub fn tr_aliases_all_languages_owned(context: &'static str, message_id: &str) -> Vec<String> {
+    let mut aliases = Vec::new();
+    for language in SUPPORTED_LANGUAGES
+        .iter()
+        .copied()
+        .chain(std::iter::once("en"))
+    {
+        let value = tr_owned_in_context(language, context, message_id);
+        for alias in value
+            .split('|')
+            .map(str::trim)
+            .filter(|alias| !alias.is_empty())
+        {
+            if !aliases
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(alias))
+            {
+                aliases.push(alias.to_owned());
+            }
+        }
+    }
+    aliases
+}
+
 pub(crate) fn effective_language(language: &str) -> String {
     if language != "system" {
         return language.to_owned();

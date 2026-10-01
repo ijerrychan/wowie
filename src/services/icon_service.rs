@@ -320,9 +320,14 @@ fn resolve_uncached(
         return Some(icon);
     }
 
+    if item.category == crate::result::ResultCategory::Settings {
+        return crate::platform::application_icon(Path::new(
+            crate::providers::windows_settings::SETTINGS_ICON_TARGET,
+        ));
+    }
+
     if item.category == crate::result::ResultCategory::ControlPanel {
-        // The Control Panel namespace has a stable Shell-owned root icon. Use
-        // it when an individual applet no longer exposes its own icon.
+        // Control Panel items use their root namespace icon as a fallback.
         return crate::platform::application_icon(Path::new("shell:ControlPanelFolder"));
     }
 

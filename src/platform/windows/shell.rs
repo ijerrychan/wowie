@@ -90,12 +90,9 @@ pub(crate) fn discover_control_panel_items() -> Vec<super::super::ControlPanelIt
             }
             let title = shell_display_name(&folder, child, SHGDN_NORMAL);
             let parsing = shell_display_name(&folder, child, SHGDN_FORPARSING);
-            let canonical_name = control_panel_application_name(&folder, root_pidl, child, &parsing)
-                .or_else(|| {
-                    parsing
-                        .as_deref()
-                        .and_then(control_panel_canonical_name)
-                });
+            let canonical_name =
+                control_panel_application_name(&folder, root_pidl, child, &parsing)
+                    .or_else(|| parsing.as_deref().and_then(control_panel_canonical_name));
             unsafe { CoTaskMemFree(Some(child.cast())) };
             let (Some(title), Some(parsing)) = (title, parsing) else {
                 continue;
@@ -135,7 +132,7 @@ fn control_panel_application_name(
     parsing_name: &Option<String>,
 ) -> Option<String> {
     use windows::{
-        core::{GUID, Interface},
+        core::{Interface, GUID},
         Win32::{
             Foundation::PROPERTYKEY,
             System::Com::CoTaskMemFree,
@@ -175,11 +172,7 @@ fn control_panel_application_name(
             let parsing_name = parsing_name.as_deref()?;
             let parsing_name = wide_path(Path::new(parsing_name));
             unsafe {
-                SHCreateItemFromParsingName(
-                    windows::core::PCWSTR(parsing_name.as_ptr()),
-                    None,
-                )
-                .ok()
+                SHCreateItemFromParsingName(windows::core::PCWSTR(parsing_name.as_ptr()), None).ok()
             }
             .and_then(read_application_name)
         })
@@ -190,6 +183,254 @@ fn open_registry_key(hive: HKEY, subkey: &str) -> Option<HKEY> {
     let mut key = std::ptr::null_mut();
     let result = unsafe { RegOpenKeyExW(hive, wide.as_ptr(), 0, KEY_READ, &mut key) };
     (result == 0).then_some(key)
+}
+
+pub(crate) fn windows_build_number() -> Option<u32> {
+    let key = open_registry_key(
+        HKEY_LOCAL_MACHINE,
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+    )?;
+    let build = read_registry_string(key, "CurrentBuild")
+        .and_then(|value| value.parse::<u32>().ok())
+        .or_else(|| {
+            read_registry_string(key, "CurrentBuildNumber")
+                .and_then(|value| value.parse::<u32>().ok())
+        });
+    unsafe { RegCloseKey(key) };
+    build
+}
+
+pub(crate) fn windows_setting_capability_available(capability: &str) -> Option<bool> {
+    match capability {
+        "battery" => system_has_battery(),
+        "touchpad" => system_has_precision_touchpad(),
+        "wifi_adapter" => system_has_wifi_adapter(),
+        "mixed_reality_portal" => package_is_installed("Microsoft.MixedReality.Portal"),
+        _ => None,
+    }
+}
+
+#[repr(C)]
+struct SystemPowerStatus {
+    ac_line_status: u8,
+    battery_flag: u8,
+    battery_life_percent: u8,
+    reserved1: u8,
+    battery_life_time: u32,
+    battery_full_life_time: u32,
+}
+
+#[link(name = "Kernel32")]
+unsafe extern "system" {
+    fn GetSystemPowerStatus(status: *mut SystemPowerStatus) -> i32;
+}
+
+fn system_has_battery() -> Option<bool> {
+    let mut status = SystemPowerStatus {
+        ac_line_status: 0,
+        battery_flag: 0,
+        battery_life_percent: 0,
+        reserved1: 0,
+        battery_life_time: 0,
+        battery_full_life_time: 0,
+    };
+    let success = unsafe { GetSystemPowerStatus(&mut status) };
+    if success == 0 || status.battery_flag == u8::MAX {
+        return None;
+    }
+    Some(status.battery_flag != 128)
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RawInputDeviceList {
+    device: *mut std::ffi::c_void,
+    device_type: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RawInputHidInfo {
+    vendor_id: u32,
+    product_id: u32,
+    version_number: u32,
+    usage_page: u16,
+    usage: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+union RawInputDeviceInfoData {
+    hid: RawInputHidInfo,
+    padding: [u32; 5],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RawInputDeviceInfo {
+    size: u32,
+    device_type: u32,
+    data: RawInputDeviceInfoData,
+}
+
+#[link(name = "User32")]
+unsafe extern "system" {
+    fn GetRawInputDeviceList(
+        devices: *mut RawInputDeviceList,
+        device_count: *mut u32,
+        device_size: u32,
+    ) -> u32;
+    fn GetRawInputDeviceInfoW(
+        device: *mut std::ffi::c_void,
+        command: u32,
+        data: *mut std::ffi::c_void,
+        data_size: *mut u32,
+    ) -> u32;
+}
+
+fn system_has_precision_touchpad() -> Option<bool> {
+    const RIM_TYPEHID: u32 = 2;
+    const RIDI_DEVICEINFO: u32 = 0x2000_000b;
+    let device_size = std::mem::size_of::<RawInputDeviceList>() as u32;
+    let mut device_count = 0;
+    let count_result =
+        unsafe { GetRawInputDeviceList(std::ptr::null_mut(), &mut device_count, device_size) };
+    if count_result == u32::MAX {
+        return None;
+    }
+    if device_count == 0 {
+        return Some(false);
+    }
+
+    let mut devices =
+        vec![unsafe { std::mem::zeroed::<RawInputDeviceList>() }; device_count as usize];
+    let listed =
+        unsafe { GetRawInputDeviceList(devices.as_mut_ptr(), &mut device_count, device_size) };
+    if listed == u32::MAX {
+        return None;
+    }
+
+    let mut read_any_hid_info = false;
+    for device in devices.iter().take(listed as usize) {
+        if device.device_type != RIM_TYPEHID {
+            continue;
+        }
+        let mut info = RawInputDeviceInfo {
+            size: std::mem::size_of::<RawInputDeviceInfo>() as u32,
+            device_type: 0,
+            data: RawInputDeviceInfoData { padding: [0; 5] },
+        };
+        let mut info_size = info.size;
+        let result = unsafe {
+            GetRawInputDeviceInfoW(
+                device.device,
+                RIDI_DEVICEINFO,
+                (&mut info as *mut RawInputDeviceInfo).cast(),
+                &mut info_size,
+            )
+        };
+        if result == u32::MAX {
+            continue;
+        }
+        read_any_hid_info = true;
+        if info.device_type != RIM_TYPEHID {
+            continue;
+        }
+        let hid = unsafe { info.data.hid };
+        if hid.usage_page == 0x000d && hid.usage == 0x0005 {
+            return Some(true);
+        }
+    }
+    read_any_hid_info.then_some(false)
+}
+
+#[repr(C)]
+struct NativeGuid {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
+
+#[repr(C)]
+struct WlanInterfaceInfo {
+    interface_guid: NativeGuid,
+    description: [u16; 256],
+    state: u32,
+}
+
+#[repr(C)]
+struct WlanInterfaceInfoList {
+    number_of_items: u32,
+    index: u32,
+    interfaces: [WlanInterfaceInfo; 1],
+}
+
+#[link(name = "Wlanapi")]
+unsafe extern "system" {
+    fn WlanOpenHandle(
+        client_version: u32,
+        reserved: *const std::ffi::c_void,
+        negotiated_version: *mut u32,
+        client_handle: *mut *mut std::ffi::c_void,
+    ) -> u32;
+    fn WlanCloseHandle(
+        client_handle: *mut std::ffi::c_void,
+        reserved: *const std::ffi::c_void,
+    ) -> u32;
+    fn WlanEnumInterfaces(
+        client_handle: *mut std::ffi::c_void,
+        reserved: *const std::ffi::c_void,
+        interface_list: *mut *mut WlanInterfaceInfoList,
+    ) -> u32;
+    fn WlanFreeMemory(memory: *const std::ffi::c_void);
+}
+
+fn system_has_wifi_adapter() -> Option<bool> {
+    let mut negotiated_version = 0;
+    let mut client_handle = std::ptr::null_mut();
+    let opened = unsafe {
+        WlanOpenHandle(
+            2,
+            std::ptr::null(),
+            &mut negotiated_version,
+            &mut client_handle,
+        )
+    };
+    if opened != 0 || client_handle.is_null() {
+        return None;
+    }
+
+    let mut interface_list = std::ptr::null_mut();
+    let enumerated =
+        unsafe { WlanEnumInterfaces(client_handle, std::ptr::null(), &mut interface_list) };
+    let available = if enumerated != 0 || interface_list.is_null() {
+        None
+    } else {
+        Some(unsafe { (*interface_list).number_of_items > 0 })
+    };
+    if !interface_list.is_null() {
+        unsafe { WlanFreeMemory(interface_list.cast()) };
+    }
+    unsafe { WlanCloseHandle(client_handle, std::ptr::null()) };
+    available
+}
+
+fn package_is_installed(identity_name: &str) -> Option<bool> {
+    use windows::Management::Deployment::{PackageManager, PackageTypes};
+
+    let _winrt = WinRtScope::initialize()?;
+    let manager = PackageManager::new().ok()?;
+    let packages = manager
+        .FindPackagesWithPackageTypes(PackageTypes::Main | PackageTypes::Optional)
+        .ok()?;
+    Some(packages.into_iter().any(|package| {
+        package
+            .Id()
+            .ok()
+            .and_then(|id| id.Name().ok())
+            .is_some_and(|name| name.to_string().eq_ignore_ascii_case(identity_name))
+    }))
 }
 
 fn read_registry_string(key: HKEY, name: &str) -> Option<String> {

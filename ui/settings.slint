@@ -435,8 +435,9 @@ export component SettingsWindow inherits Window {
     default-font-size: root.ui-font-size;
     min-width: 760px;
     min-height: 520px;
-    background: transparent;
+    background: root.native-window-frame ? root.canvas : transparent;
 
+    in property <bool> native-window-frame: false;
     in property <string> ui-font-family: "";
     in property <length> ui-font-size: 14px;
     in property <[SettingsCategory]> categories;
@@ -467,10 +468,13 @@ export component SettingsWindow inherits Window {
     animate page-transition-opacity { duration: 120ms; easing: ease-in-out; }
     init => { Palette.color-scheme = root.dark-mode ? dark : light; }
     changed dark-mode => { Palette.color-scheme = root.dark-mode ? dark : light; }
+    private property <length> window-inset: root.native-window-frame ? 0px : 5px;
+    private property <length> window-radius: root.native-window-frame ? 0px : 13px;
 
     Rectangle {
-        x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
-        background: root.canvas; border-radius: 13px;
+        x: root.window-inset; y: root.window-inset;
+        width: parent.width - 2 * root.window-inset; height: parent.height - 2 * root.window-inset;
+        background: root.canvas; border-radius: root.window-radius;
 
         Rectangle {
             x: 1px; y: 1px; width: parent.width - 2px; height: 58px;
@@ -557,7 +561,8 @@ export component SettingsWindow inherits Window {
 
     Rectangle {
         z: 100;
-        x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
-        background: transparent; border-color: root.border; border-width: 1px; border-radius: 13px;
+        x: root.window-inset; y: root.window-inset;
+        width: parent.width - 2 * root.window-inset; height: parent.height - 2 * root.window-inset;
+        background: transparent; border-color: root.border; border-width: 1px; border-radius: root.window-radius;
     }
 }

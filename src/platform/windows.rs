@@ -19,7 +19,8 @@ use windows_sys::Win32::{
     },
     System::Registry::{
         RegCloseKey, RegNotifyChangeKeyValue, RegOpenKeyExW, RegQueryValueExW, HKEY,
-        HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_READ, REG_NOTIFY_CHANGE_LAST_SET,
+        HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ,
+        REG_NOTIFY_CHANGE_LAST_SET,
     },
     System::Threading::{WaitForMultipleObjects, WaitForSingleObject, INFINITE},
     UI::{
@@ -50,6 +51,7 @@ use shell::{
     resolve_known_folder_path, store_application_with_metadata,
 };
 use shell::{collect_apps_folder, collect_packaged_apps};
+pub(crate) use shell::{windows_build_number, windows_setting_capability_available};
 pub(crate) use shortcuts::resolve_shortcut;
 #[cfg(test)]
 use watchers::DirectoryChangeWatch;

@@ -46,10 +46,23 @@ pub(super) fn save_window_size(window: &Launcher) {
 fn select_renderer(renderer: &str) -> Result<()> {
     slint::BackendSelector::new()
         .with_winit_window_attributes_hook(|attributes| {
-            attributes
+            let attributes = attributes
                 .with_visible(false)
                 .with_resizable(true)
-                .with_window_icon(launcher_window_icon())
+                .with_window_icon(launcher_window_icon());
+            #[cfg(windows)]
+            let attributes = {
+                use slint::winit_030::winit::platform::windows::{
+                    CornerPreference, WindowAttributesExtWindows,
+                };
+                // Apply to every frameless window, including settings and menus.
+                // Winit manages the native DWM shadow across window changes.
+                attributes
+                    .with_transparent(false)
+                    .with_undecorated_shadow(true)
+                    .with_corner_preference(CornerPreference::Round)
+            };
+            attributes
         })
         .renderer_name(renderer.into())
         .select()?;
@@ -89,10 +102,6 @@ pub(super) fn toggle_palette(
         }
         let _ = window.show();
         platform.activate_palette(window.window());
-        // Showing a Slint window does not change `query-text`, so its
-        // property-change handler will not run. Refresh explicitly to
-        // replace any result model that was invalidated while hidden.
-        window.invoke_query_changed(window.get_query_text());
         let weak = window.as_weak();
         Timer::single_shot(PALETTE_POSITION_DELAY, move || {
             if let Some(window) = weak.upgrade() {

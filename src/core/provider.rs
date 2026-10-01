@@ -509,6 +509,7 @@ impl ProviderRegistry {
 struct IndexedSearchEngine {
     indexed: Arc<Mutex<Arc<Vec<SearchResult>>>>,
     control_panel: bool,
+    language: String,
 }
 
 impl IndexedSearchEngine {
@@ -516,6 +517,7 @@ impl IndexedSearchEngine {
         Self {
             indexed,
             control_panel: false,
+            language: "en".into(),
         }
     }
 
@@ -523,6 +525,7 @@ impl IndexedSearchEngine {
         Self {
             indexed,
             control_panel: true,
+            language: "en".into(),
         }
     }
 }
@@ -541,20 +544,68 @@ impl SearchEngineProvider for IndexedSearchEngine {
         None
     }
 
-    fn query_root(&self, _query: &str) -> Vec<SearchResult> {
+    fn query_root(&self, query: &str) -> Vec<SearchResult> {
         self.indexed
             .lock()
             .map(|items| {
+                let mut powertoys_titles = std::collections::HashSet::new();
                 items
                     .iter()
                     .filter(|item| {
-                        matches!(item.category, crate::result::ResultCategory::ControlPanel)
-                            == self.control_panel
+                        let is_control_panel = matches!(
+                            item.category,
+                            crate::result::ResultCategory::ControlPanel
+                                | crate::result::ResultCategory::Settings
+                        );
+                        is_control_panel == self.control_panel
                     })
                     .cloned()
+                    .map(|item| {
+                        if item.category == crate::result::ResultCategory::Settings
+                            || crate::providers::windows_settings::is_powertoys_result(&item)
+                        {
+                            crate::providers::windows_settings::localized_result(
+                                item,
+                                &self.language,
+                            )
+                        } else {
+                            item
+                        }
+                    })
+                    .filter(|item| {
+                        if query.contains('>')
+                            && matches!(
+                                item.category,
+                                crate::result::ResultCategory::ControlPanel
+                                    | crate::result::ResultCategory::Settings
+                            )
+                        {
+                            if !crate::providers::windows_settings::matches_settings_path(
+                                item, query,
+                            ) {
+                                return false;
+                            }
+                        }
+                        !crate::providers::windows_settings::is_powertoys_result(item)
+                            || powertoys_titles.insert(item.title.to_ascii_lowercase())
+                    })
+                    .map(|mut item| {
+                        if query.contains('>')
+                            && crate::providers::windows_settings::matches_settings_path(
+                                &item, query,
+                            )
+                        {
+                            item.aliases.push(query.trim().to_owned());
+                        }
+                        item
+                    })
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn set_language(&mut self, language: String) {
+        self.language = language;
     }
 }
 

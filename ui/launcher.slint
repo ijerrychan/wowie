@@ -98,8 +98,9 @@ export component Launcher inherits Window {
     // Preserve enough room for five rows while allowing the user to resize larger.
     min-height: root.compact-results-hidden ? root.compact-window-height : root.minimum-results-window-height;
     max-height: 1000000px;
-    background: transparent;
+    background: root.native-window-frame ? root.canvas : transparent;
 
+    in property <bool> native-window-frame: false;
     in-out property <int> window-width: 900;
     in property <string> ui-font-family: "";
     in property <length> ui-font-size: 14px;
@@ -197,7 +198,7 @@ export component Launcher inherits Window {
     private property <length> operation-hint-height: 24px;
     private property <length> context-menu-gap: 6px;
     private property <length> no-results-height: 160px;
-    private property <length> window-inset: 4px;
+    private property <length> window-inset: root.native-window-frame ? 0px : 4px;
     private property <length> content-padding: 10px;
     private property <length> content-spacing: 8px;
     private property <length> category-filter-height: 28px;
@@ -206,7 +207,7 @@ export component Launcher inherits Window {
     private property <length> category-filter-step: 102px;
     private property <length> category-layout-spacing: root.category-filters.length > 0 ? 6px : root.content-spacing;
     private property <length> result-row-inset: 2px;
-    private property <length> result-column-gap: root.window-inset + root.result-row-inset + root.detail-panel-inset;
+    private property <length> result-column-gap: 8px;
     private property <length> detail-panel-inset: 2px;
     // Shift the list/panel split so the selected row's right edge and the
     // panel's left edge are equally far from the window center line. Both
@@ -317,8 +318,8 @@ export component Launcher inherits Window {
         background: root.canvas;
         border-color: root.border;
         border-width: 1px;
-        // Keep the shell flat and avoid a rounded clip layer on every frame.
-        border-radius: 12px;
+        // Windows rounds the native frame, including its shadow.
+        border-radius: root.native-window-frame ? 0px : 12px;
 
         VerticalBox {
             padding: root.content-padding;
@@ -488,7 +489,7 @@ export component Launcher inherits Window {
                         }
                         Text {
                             x: 6px; width: parent.width - 12px; height: parent.height;
-                            text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "document" ? @tr("Document") : @tr("Other")) + "  " + filter.count;
+                            text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "settings" ? @tr("Settings") : filter.key == "document" ? @tr("Document") : @tr("Other")) + "  " + filter.count;
                             color: root.selected-category-filter == filter.key ? root.text-primary : root.text-secondary;
                             font-size: 0.7857rem;
                             font-weight: root.selected-category-filter == filter.key ? 600 : 400;
@@ -709,8 +710,9 @@ export component ContextMenu inherits Window {
     in property <length> ui-font-size: 14px;
     width: root.menu-width;
     height: max(40px, 8px + root.actions.length * root.menu-item-height);
-    background: transparent;
+    background: root.native-window-frame ? root.canvas : transparent;
 
+    in property <bool> native-window-frame: false;
     in property <bool> dark-mode: true;
     in property <color> accent-color: #0067c0;
     in property <[ContextActionRow]> actions;
@@ -771,7 +773,7 @@ export component ContextMenu inherits Window {
             background: root.canvas;
             border-color: root.border;
             border-width: 1px;
-            border-radius: 8px;
+            border-radius: root.native-window-frame ? 0px : 8px;
 
             for action[index] in root.actions : Rectangle {
             x: 1px; y: 4px + index * root.menu-item-height;
