@@ -37,6 +37,7 @@ use windows_sys::Win32::{
 
 mod com;
 mod icons;
+mod settings;
 mod shell;
 mod shortcuts;
 mod tray;
@@ -44,6 +45,7 @@ mod watchers;
 
 use com::{wide_path, ComScope, WinRtMtaScope, WinRtScope};
 pub(crate) use icons::{application_icon, default_open_icon, indexed_application_icon};
+pub(crate) use settings::SettingsAvailability;
 pub(crate) use shell::discover_control_panel_items;
 #[cfg(test)]
 use shell::{

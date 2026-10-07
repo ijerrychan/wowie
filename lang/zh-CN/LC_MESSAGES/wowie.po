@@ -853,324 +853,2087 @@ msgstr "按下一个修饰键和按键，或按 Esc 取消"
 msgid "Settings"
 msgstr "设置"
 
+# Generated from Microsoft Command Palette resources; see windows_settings_data/NOTICE.md.
 msgctxt "Windows Settings"
 msgid "About"
 msgstr "关于"
-msgctxt "Windows Settings"
-msgid "about|system information|device information"
-msgstr "关于|系统信息|设备信息|电脑信息"
-msgctxt "Windows Settings"
-msgid "Display"
-msgstr "显示"
-msgctxt "Windows Settings"
-msgid "display|screen|monitor|resolution|brightness"
-msgstr "显示|显示器|屏幕|分辨率|亮度"
-msgctxt "Windows Settings"
-msgid "Sound"
-msgstr "声音"
-msgctxt "Windows Settings"
-msgid "sound|audio|volume|output device|speaker"
-msgstr "声音|音频|音量|输出设备|扬声器"
-msgctxt "Windows Settings"
-msgid "Notifications"
-msgstr "通知"
-msgctxt "Windows Settings"
-msgid "notifications|notification banners|do not disturb"
-msgstr "通知|通知横幅|免打扰|请勿打扰"
-msgctxt "Windows Settings"
-msgid "Power and battery"
-msgstr "电源和电池"
-msgctxt "Windows Settings"
-msgid "power|battery|sleep|power button"
-msgstr "电源|电池|睡眠|电源按钮"
-msgctxt "Windows Settings"
-msgid "Storage"
-msgstr "存储"
-msgctxt "Windows Settings"
-msgid "storage|disk space|temporary files|cleanup"
-msgstr "存储|磁盘空间|临时文件|清理"
-msgctxt "Windows Settings"
-msgid "Clipboard"
-msgstr "剪贴板"
-msgctxt "Windows Settings"
-msgid "clipboard|clipboard history|copy and paste"
-msgstr "剪贴板|剪贴板历史|复制|粘贴"
-msgctxt "Windows Settings"
-msgid "Multitasking"
-msgstr "多任务处理"
-msgctxt "Windows Settings"
-msgid "multitasking|snap windows|virtual desktops|window layout"
-msgstr "多任务|窗口贴靠|虚拟桌面|窗口布局"
-msgctxt "Windows Settings"
-msgid "Night light"
-msgstr "夜间模式"
-msgctxt "Windows Settings"
-msgid "night light|blue light|eye comfort"
-msgstr "夜间模式|夜间灯|蓝光|护眼"
-msgctxt "Windows Settings"
-msgid "Remote Desktop"
-msgstr "远程桌面"
-msgctxt "Windows Settings"
-msgid "remote desktop|RDP|remote access"
-msgstr "远程桌面|远程访问|RDP"
-msgctxt "Windows Settings"
-msgid "Recovery"
-msgstr "恢复"
-msgctxt "Windows Settings"
-msgid "recovery|reset this PC|advanced startup"
-msgstr "恢复|重置此电脑|高级启动"
-msgctxt "Windows Settings"
-msgid "Troubleshoot"
-msgstr "疑难解答"
-msgctxt "Windows Settings"
-msgid "troubleshoot|troubleshooter|diagnose|fix problems"
-msgstr "疑难解答|故障排除|诊断|修复问题"
-msgctxt "Windows Settings"
-msgid "Windows Update"
-msgstr "Windows 更新"
-msgctxt "Windows Settings"
-msgid "Windows Update|update history|check for updates|optional updates"
-msgstr "Windows 更新|更新历史记录|检查更新|可选更新"
-msgctxt "Windows Settings"
-msgid "Bluetooth"
-msgstr "蓝牙"
-msgctxt "Windows Settings"
-msgid "Bluetooth|pair device|wireless headphones|wireless devices"
-msgstr "蓝牙|配对设备|无线耳机|无线设备"
-msgctxt "Windows Settings"
-msgid "Connected devices"
-msgstr "已连接的设备"
-msgctxt "Windows Settings"
-msgid "connected devices|nearby devices|device pairing"
-msgstr "已连接的设备|附近设备|设备配对"
-msgctxt "Windows Settings"
-msgid "Printers and scanners"
-msgstr "打印机和扫描仪"
-msgctxt "Windows Settings"
-msgid "printer|scanner|print queue|add a printer"
-msgstr "打印机|扫描仪|打印队列|添加打印机"
-msgctxt "Windows Settings"
-msgid "Mouse and touchpad"
-msgstr "鼠标和触摸板"
-msgctxt "Windows Settings"
-msgid "mouse|touchpad|pointer speed|scrolling"
-msgstr "鼠标|触摸板|指针速度|滚动"
-msgctxt "Windows Settings"
-msgid "Typing and keyboard"
-msgstr "键入和键盘"
-msgctxt "Windows Settings"
-msgid "typing|keyboard|text suggestions|input"
-msgstr "键入|键盘|文本建议|输入"
-msgctxt "Windows Settings"
-msgid "Network status"
-msgstr "网络状态"
-msgctxt "Windows Settings"
-msgid "network|internet connection|network status"
-msgstr "网络|网络连接|网络状态|上网"
-msgctxt "Windows Settings"
-msgid "Wi-Fi"
-msgstr "Wi-Fi"
-msgctxt "Windows Settings"
-msgid "Wi-Fi|wireless|WLAN|wireless network"
-msgstr "Wi-Fi|无线|无线网络|WLAN"
-msgctxt "Windows Settings"
-msgid "Ethernet"
-msgstr "以太网"
-msgctxt "Windows Settings"
-msgid "Ethernet|wired network|LAN"
-msgstr "以太网|有线网络|局域网"
-msgctxt "Windows Settings"
-msgid "VPN"
-msgstr "VPN"
-msgctxt "Windows Settings"
-msgid "VPN|virtual private network|VPN connection"
-msgstr "VPN|虚拟专用网络|VPN 连接"
-msgctxt "Windows Settings"
-msgid "Proxy"
-msgstr "代理"
-msgctxt "Windows Settings"
-msgid "proxy|proxy server|proxy settings"
-msgstr "代理|代理服务器|代理设置"
-msgctxt "Windows Settings"
-msgid "Airplane mode"
-msgstr "飞行模式"
-msgctxt "Windows Settings"
-msgid "airplane mode|flight mode|wireless radios"
-msgstr "飞行模式|航班模式|无线通信"
-msgctxt "Windows Settings"
-msgid "Mobile hotspot"
-msgstr "移动热点"
-msgctxt "Windows Settings"
-msgid "mobile hotspot|Wi-Fi hotspot|internet sharing|tethering"
-msgstr "移动热点|Wi-Fi 热点|网络共享|热点"
-msgctxt "Windows Settings"
-msgid "Installed apps"
-msgstr "已安装的应用"
-msgctxt "Windows Settings"
-msgid "installed apps|apps and features|uninstall|app settings"
-msgstr "已安装的应用|应用和功能|卸载|应用设置"
-msgctxt "Windows Settings"
-msgid "Default apps"
-msgstr "默认应用"
-msgctxt "Windows Settings"
-msgid "default apps|default browser|file associations|open with"
-msgstr "默认应用|默认浏览器|文件关联|打开方式"
-msgctxt "Windows Settings"
-msgid "Startup apps"
-msgstr "启动应用"
-msgctxt "Windows Settings"
-msgid "startup apps|startup programs|launch at startup"
-msgstr "启动应用|开机启动|启动程序"
-msgctxt "Windows Settings"
-msgid "Optional features"
-msgstr "可选功能"
-msgctxt "Windows Settings"
-msgid "optional features|Windows features|add a feature"
-msgstr "可选功能|Windows 功能|添加功能"
-msgctxt "Windows Settings"
-msgid "Background"
-msgstr "背景"
-msgctxt "Windows Settings"
-msgid "background|wallpaper|desktop background"
-msgstr "背景|壁纸|桌面背景"
-msgctxt "Windows Settings"
-msgid "Colors"
-msgstr "颜色"
-msgctxt "Windows Settings"
-msgid "colors|accent color|dark mode|light mode"
-msgstr "颜色|强调色|深色模式|浅色模式"
-msgctxt "Windows Settings"
-msgid "Themes"
-msgstr "主题"
-msgctxt "Windows Settings"
-msgid "themes|theme|desktop theme"
-msgstr "主题|桌面主题"
-msgctxt "Windows Settings"
-msgid "Lock screen"
-msgstr "锁屏界面"
-msgctxt "Windows Settings"
-msgid "lock screen|lockscreen|screen timeout"
-msgstr "锁屏|锁屏界面|屏幕超时"
-msgctxt "Windows Settings"
-msgid "Start menu"
-msgstr "开始菜单"
-msgctxt "Windows Settings"
-msgid "Start menu|Start layout|pinned apps"
-msgstr "开始菜单|开始布局|固定应用"
-msgctxt "Windows Settings"
-msgid "Taskbar"
-msgstr "任务栏"
-msgctxt "Windows Settings"
-msgid "taskbar|system tray|taskbar icons"
-msgstr "任务栏|系统托盘|任务栏图标"
-msgctxt "Windows Settings"
-msgid "Fonts"
-msgstr "字体"
-msgctxt "Windows Settings"
-msgid "fonts|font size|install fonts|typeface"
-msgstr "字体|字号|安装字体|字体库"
-msgctxt "Windows Settings"
-msgid "Your info"
-msgstr "你的信息"
-msgctxt "Windows Settings"
-msgid "your info|Microsoft account|account profile|profile photo"
-msgstr "你的信息|Microsoft 帐户|帐户资料|头像"
-msgctxt "Windows Settings"
-msgid "Sign-in options"
-msgstr "登录选项"
-msgctxt "Windows Settings"
-msgid "sign-in options|password|PIN|Windows Hello|fingerprint"
-msgstr "登录选项|密码|PIN|Windows Hello|指纹"
-msgctxt "Windows Settings"
-msgid "Email and accounts"
-msgstr "电子邮件和帐户"
-msgctxt "Windows Settings"
-msgid "email accounts|work or school account|add account"
-msgstr "电子邮件帐户|工作或学校帐户|添加帐户"
-msgctxt "Windows Settings"
-msgid "Other users"
-msgstr "其他用户"
-msgctxt "Windows Settings"
-msgid "other users|family account|add user|local account"
-msgstr "其他用户|家庭帐户|添加用户|本地帐户"
-msgctxt "Windows Settings"
-msgid "Date and time"
-msgstr "日期和时间"
-msgctxt "Windows Settings"
-msgid "date and time|clock|time zone|automatic time"
-msgstr "日期和时间|时钟|时区|自动设置时间"
-msgctxt "Windows Settings"
-msgid "Language and region"
-msgstr "语言和区域"
-msgctxt "Windows Settings"
-msgid "language and region|display language|regional format|keyboard language"
-msgstr "语言和区域|显示语言|区域格式|键盘语言"
-msgctxt "Windows Settings"
-msgid "Privacy"
-msgstr "隐私"
-msgctxt "Windows Settings"
-msgid "privacy|privacy settings|permissions"
-msgstr "隐私|隐私设置|权限"
-msgctxt "Windows Settings"
-msgid "Location"
-msgstr "位置"
-msgctxt "Windows Settings"
-msgid "location|location services|location access|GPS"
-msgstr "位置|定位服务|位置访问|GPS"
-msgctxt "Windows Settings"
-msgid "Camera privacy"
-msgstr "相机隐私"
-msgctxt "Windows Settings"
-msgid "camera privacy|camera permission|webcam access"
-msgstr "相机隐私|相机权限|摄像头访问"
-msgctxt "Windows Settings"
-msgid "Microphone privacy"
-msgstr "麦克风隐私"
-msgctxt "Windows Settings"
-msgid "microphone privacy|microphone permission|mic access"
-msgstr "麦克风隐私|麦克风权限|麦克风访问"
-msgctxt "Windows Settings"
-msgid "Notification privacy"
-msgstr "通知隐私"
-msgctxt "Windows Settings"
-msgid "notification privacy|app notifications|notification access"
-msgstr "通知隐私|应用通知|通知权限"
-msgctxt "Windows Settings"
-msgid "Search settings"
-msgstr "搜索设置"
-msgctxt "Windows Settings"
-msgid "search settings|Windows Search|search permissions|search indexing"
-msgstr "搜索设置|Windows 搜索|搜索权限|搜索索引"
-msgctxt "Windows Settings"
-msgid "Windows Security"
-msgstr "Windows 安全中心"
-msgctxt "Windows Settings"
-msgid "Windows Security|Windows Defender|antivirus|firewall|security"
-msgstr "Windows 安全中心|Windows Defender|防病毒|防火墙|安全"
-msgctxt "Windows Settings"
-msgid "System"
-msgstr "系统"
-msgctxt "Windows Settings"
-msgid "Bluetooth and devices"
-msgstr "蓝牙和其他设备"
-msgctxt "Windows Settings"
-msgid "Network and internet"
-msgstr "网络和 Internet"
-msgctxt "Windows Settings"
-msgid "Apps"
-msgstr "应用"
-msgctxt "Windows Settings"
-msgid "Personalization"
-msgstr "个性化"
+
+msgctxt "Windows Settings"
+msgid "AccessWorkOrSchool"
+msgstr "访问工作或学校"
+
+msgctxt "Windows Settings"
+msgid "AccessibilityOptions"
+msgstr "辅助功能选项"
+
+msgctxt "Windows Settings"
+msgid "AccessoryApps"
+msgstr "附件应用"
+
+msgctxt "Windows Settings"
+msgid "AccountInfo"
+msgstr "帐户信息"
+
 msgctxt "Windows Settings"
 msgid "Accounts"
 msgstr "帐户"
+
 msgctxt "Windows Settings"
-msgid "Time and language"
+msgid "ActionCenter"
+msgstr "操作中心"
+
+msgctxt "Windows Settings"
+msgid "Activation"
+msgstr "激活"
+
+msgctxt "Windows Settings"
+msgid "ActivityHistory"
+msgstr "活动历史记录"
+
+msgctxt "Windows Settings"
+msgid "AddDevices"
+msgstr "添加设备"
+
+msgctxt "Windows Settings"
+msgid "AddHardware"
+msgstr "添加硬件"
+
+msgctxt "Windows Settings"
+msgid "AddRemovePrograms"
+msgstr "添加或删除程序"
+
+msgctxt "Windows Settings"
+msgid "AddYourPhone"
+msgstr "添加手机"
+
+msgctxt "Windows Settings"
+msgid "AdministrativeTools"
+msgstr "管理工具"
+
+msgctxt "Windows Settings"
+msgid "AdvancedDisplaySettings"
+msgstr "高级显示设置"
+
+msgctxt "Windows Settings"
+msgid "AdvancedGraphics"
+msgstr "高级图形"
+
+msgctxt "Windows Settings"
+msgid "AdvertisingId"
+msgstr "广告 ID"
+
+msgctxt "Windows Settings"
+msgid "AirplaneMode"
+msgstr "飞行模式"
+
+msgctxt "Windows Settings"
+msgid "AltAndTab"
+msgstr "Alt+Tab"
+
+msgctxt "Windows Settings"
+msgid "Animations"
+msgstr "动画"
+
+msgctxt "Windows Settings"
+msgid "AppColor"
+msgstr "应用颜色"
+
+msgctxt "Windows Settings"
+msgid "AppControlPanel"
+msgstr "控制面板"
+
+msgctxt "Windows Settings"
+msgid "AppDiagnostics"
+msgstr "应用诊断"
+
+msgctxt "Windows Settings"
+msgid "AppFeatures"
+msgstr "应用特征"
+
+msgctxt "Windows Settings"
+msgid "AppMMC"
+msgstr "Microsoft 管理控制台"
+
+msgctxt "Windows Settings"
+msgid "AppSettingsApp"
+msgstr "设置应用程序"
+
+msgctxt "Windows Settings"
+msgid "AppVolumeAndDevicePreferences"
+msgstr "应用卷和设备首选项"
+
+msgctxt "Windows Settings"
+msgid "AppsAndFeatures"
+msgstr "应用和功能"
+
+msgctxt "Windows Settings"
+msgid "AppsForWebsites"
+msgstr "网站应用"
+
+msgctxt "Windows Settings"
+msgid "AreaAccounts"
+msgstr "帐户"
+
+msgctxt "Windows Settings"
+msgid "AreaAdministrativeTools"
+msgstr "管理工具"
+
+msgctxt "Windows Settings"
+msgid "AreaAppearanceAndPersonalization"
+msgstr "外观和个性化"
+
+msgctxt "Windows Settings"
+msgid "AreaApps"
+msgstr "应用"
+
+msgctxt "Windows Settings"
+msgid "AreaBluetoothAndDevices11"
+msgstr "蓝牙和设备"
+
+msgctxt "Windows Settings"
+msgid "AreaClockAndRegion"
+msgstr "时钟和区域"
+
+msgctxt "Windows Settings"
+msgid "AreaCortana"
+msgstr "Cortana"
+
+msgctxt "Windows Settings"
+msgid "AreaDevices"
+msgstr "设备"
+
+msgctxt "Windows Settings"
+msgid "AreaEaseOfAccess"
+msgstr "轻松访问"
+
+msgctxt "Windows Settings"
+msgid "AreaExtras"
+msgstr "附加内容"
+
+msgctxt "Windows Settings"
+msgid "AreaGaming"
+msgstr "游戏"
+
+msgctxt "Windows Settings"
+msgid "AreaHardwareAndSound"
+msgstr "硬件和声音"
+
+msgctxt "Windows Settings"
+msgid "AreaMixedReality"
+msgstr "混合现实"
+
+msgctxt "Windows Settings"
+msgid "AreaNetworkAndInternet"
+msgstr "网络和 Internet"
+
+msgctxt "Windows Settings"
+msgid "AreaPersonalization"
+msgstr "个性化"
+
+msgctxt "Windows Settings"
+msgid "AreaPhone"
+msgstr "手机"
+
+msgctxt "Windows Settings"
+msgid "AreaPrivacy"
+msgstr "隐私"
+
+msgctxt "Windows Settings"
+msgid "AreaPrograms"
+msgstr "计划"
+
+msgctxt "Windows Settings"
+msgid "AreaSecurityAndMaintenance"
+msgstr "安全和维护"
+
+msgctxt "Windows Settings"
+msgid "AreaSurfaceHub"
+msgstr "SurfaceHub"
+
+msgctxt "Windows Settings"
+msgid "AreaSystem"
+msgstr "系统"
+
+msgctxt "Windows Settings"
+msgid "AreaSystemAndSecurity"
+msgstr "系统和安全性"
+
+msgctxt "Windows Settings"
+msgid "AreaSystemPropertiesAdvanced"
+msgstr "系统属性"
+
+msgctxt "Windows Settings"
+msgid "AreaTimeAndLanguage"
 msgstr "时间和语言"
+
 msgctxt "Windows Settings"
-msgid "Privacy and security"
-msgstr "隐私和安全"
+msgid "AreaUpdateAndSecurity"
+msgstr "更新和安全"
+
 msgctxt "Windows Settings"
-msgid "Search"
-msgstr "搜索"
+msgid "AreaUserAccounts"
+msgstr "用户帐户"
+
+msgctxt "Windows Settings"
+msgid "AssignedAccess"
+msgstr "分配的访问权限"
+
+msgctxt "Windows Settings"
+msgid "Audio"
+msgstr "音频"
+
+msgctxt "Windows Settings"
+msgid "AudioAlerts"
+msgstr "音频警报"
+
+msgctxt "Windows Settings"
+msgid "AudioAndSpeech"
+msgstr "音频和语音"
+
+msgctxt "Windows Settings"
+msgid "AuthorizationManager"
+msgstr "授权管理器"
+
+msgctxt "Windows Settings"
+msgid "AutoPlay"
+msgstr "自动播放"
+
+msgctxt "Windows Settings"
+msgid "AutomaticFileDownloads"
+msgstr "自动文件下载"
+
+msgctxt "Windows Settings"
+msgid "Background"
+msgstr "背景"
+
+msgctxt "Windows Settings"
+msgid "BackgroundApps"
+msgstr "背景应用"
+
+msgctxt "Windows Settings"
+msgid "Backup"
+msgstr "备份"
+
+msgctxt "Windows Settings"
+msgid "BackupAndRestore"
+msgstr "备份和还原"
+
+msgctxt "Windows Settings"
+msgid "BatterySaver"
+msgstr "节电模式"
+
+msgctxt "Windows Settings"
+msgid "BatterySaverSettings"
+msgstr "节电模式设置"
+
+msgctxt "Windows Settings"
+msgid "BatterySaverUsageDetails"
+msgstr "节电模式使用情况详细信息"
+
+msgctxt "Windows Settings"
+msgid "BatteryUse"
+msgstr "电池使用"
+
+msgctxt "Windows Settings"
+msgid "BiometricDevices"
+msgstr "生物识别设备"
+
+msgctxt "Windows Settings"
+msgid "BitLockerDriveEncryption"
+msgstr "BitLocker 驱动器加密"
+
+msgctxt "Windows Settings"
+msgid "BlueLight"
+msgstr "蓝光"
+
+msgctxt "Windows Settings"
+msgid "BlueYellow"
+msgstr "蓝黄色"
+
+msgctxt "Windows Settings"
+msgid "BluetoothAndDevices10"
+msgstr "蓝牙和其他设备"
+
+msgctxt "Windows Settings"
+msgid "BluetoothDevices"
+msgstr "蓝牙设备"
+
+msgctxt "Windows Settings"
+msgid "BopomofoIme"
+msgstr "注音输入法"
+
+msgctxt "Windows Settings"
+msgid "Broadcasting"
+msgstr "广播"
+
+msgctxt "Windows Settings"
+msgid "Calendar"
+msgstr "日历"
+
+msgctxt "Windows Settings"
+msgid "CallHistory"
+msgstr "呼叫历史记录"
+
+msgctxt "Windows Settings"
+msgid "Camera"
+msgstr "照相机"
+
+msgctxt "Windows Settings"
+msgid "CangjieIme"
+msgstr "仓颉输入法"
+
+msgctxt "Windows Settings"
+msgid "CapsLock"
+msgstr "大写锁定"
+
+msgctxt "Windows Settings"
+msgid "CellularAndSim"
+msgstr "手机网络和 SIM 卡"
+
+msgctxt "Windows Settings"
+msgid "CertificatesCurrentUser"
+msgstr "证书 - 当前用户"
+
+msgctxt "Windows Settings"
+msgid "CertificatesLocalComputer"
+msgstr "证书 - 本地计算机"
+
+msgctxt "Windows Settings"
+msgid "ChangePrograms"
+msgstr "更改程序"
+
+msgctxt "Windows Settings"
+msgid "ChangeScreenSaver"
+msgstr "更改屏幕保护"
+
+msgctxt "Windows Settings"
+msgid "ChangeUACSettings"
+msgstr "更改用户帐户控制设置"
+
+msgctxt "Windows Settings"
+msgid "ChooseWhichFoldersAppearOnStart"
+msgstr "选择“开始”菜单上显示的文件夹"
+
+msgctxt "Windows Settings"
+msgid "ClientServiceForNetWare"
+msgstr "NetWare 的客户端服务"
+
+msgctxt "Windows Settings"
+msgid "Clipboard"
+msgstr "剪贴板"
+
+msgctxt "Windows Settings"
+msgid "ClosedCaptions"
+msgstr "隐藏式字幕"
+
+msgctxt "Windows Settings"
+msgid "ColorFilters"
+msgstr "颜色筛选器"
+
+msgctxt "Windows Settings"
+msgid "ColorManagement"
+msgstr "颜色管理"
+
+msgctxt "Windows Settings"
+msgid "Colors"
+msgstr "颜色"
+
+msgctxt "Windows Settings"
+msgid "ComObjects"
+msgstr "COM 对象"
+
+msgctxt "Windows Settings"
+msgid "ComponentServices"
+msgstr "组件服务"
+
+msgctxt "Windows Settings"
+msgid "ComputerManagement"
+msgstr "计算机管理"
+
+msgctxt "Windows Settings"
+msgid "ConnectPanel"
+msgstr "连接面板"
+
+msgctxt "Windows Settings"
+msgid "ConnectWirelessAudio"
+msgstr "连接到无线音频设备"
+
+msgctxt "Windows Settings"
+msgid "ConnectWirelessDisplay"
+msgstr "连接到无线显示器"
+
+msgctxt "Windows Settings"
+msgid "ConnectableDevices"
+msgstr "可连接设备"
+
+msgctxt "Windows Settings"
+msgid "ConnectedDevices"
+msgstr "已连接的设备"
+
+msgctxt "Windows Settings"
+msgid "Contacts"
+msgstr "联系人"
+
+msgctxt "Windows Settings"
+msgid "CoreIsolation"
+msgstr "核心隔离"
+
+msgctxt "Windows Settings"
+msgid "Cortana"
+msgstr "Cortana"
+
+msgctxt "Windows Settings"
+msgid "CortanaLanguage"
+msgstr "Cortana - 语言"
+
+msgctxt "Windows Settings"
+msgid "CreateAndFormatHardDiskPartitions"
+msgstr "创建并格式化硬盘分区"
+
+msgctxt "Windows Settings"
+msgid "CredentialManager"
+msgstr "凭据管理器"
+
+msgctxt "Windows Settings"
+msgid "Crossdevice"
+msgstr "跨设备"
+
+msgctxt "Windows Settings"
+msgid "CustomDevices"
+msgstr "自定义设备"
+
+msgctxt "Windows Settings"
+msgid "DNS"
+msgstr "DNS"
+
+msgctxt "Windows Settings"
+msgid "DarkColor"
+msgstr "深色"
+
+msgctxt "Windows Settings"
+msgid "DarkMode"
+msgstr "深色模式"
+
+msgctxt "Windows Settings"
+msgid "DataUsage"
+msgstr "数据使用情况"
+
+msgctxt "Windows Settings"
+msgid "DateAndTime"
+msgstr "日期和时间"
+
+msgctxt "Windows Settings"
+msgid "DefaultApps"
+msgstr "默认应用"
+
+msgctxt "Windows Settings"
+msgid "DefaultCamera"
+msgstr "默认照相机"
+
+msgctxt "Windows Settings"
+msgid "DefaultLocation"
+msgstr "默认位置"
+
+msgctxt "Windows Settings"
+msgid "DefaultPrograms"
+msgstr "默认程序"
+
+msgctxt "Windows Settings"
+msgid "DefaultSaveLocations"
+msgstr "默认保存位置"
+
+msgctxt "Windows Settings"
+msgid "DefenderFirewallAdvancedSecurity"
+msgstr "高级安全 Windows Defender 防火墙"
+
+msgctxt "Windows Settings"
+msgid "DeliveryOptimization"
+msgstr "传递优化"
+
+msgctxt "Windows Settings"
+msgid "DesktopThemes"
+msgstr "桌面主题"
+
+msgctxt "Windows Settings"
+msgid "DeviceDiscovery"
+msgstr "设备发现"
+
+msgctxt "Windows Settings"
+msgid "DeviceManager"
+msgstr "设备管理器"
+
+msgctxt "Windows Settings"
+msgid "Devices"
+msgstr "设备"
+
+msgctxt "Windows Settings"
+msgid "DevicesAndPrinters"
+msgstr "设备和打印机"
+
+msgctxt "Windows Settings"
+msgid "Dhcp"
+msgstr "DHCP"
+
+msgctxt "Windows Settings"
+msgid "DialUp"
+msgstr "拨号"
+
+msgctxt "Windows Settings"
+msgid "DirectAccess"
+msgstr "直接访问"
+
+msgctxt "Windows Settings"
+msgid "DirectOpenYourPhone"
+msgstr "直接打开手机"
+
+msgctxt "Windows Settings"
+msgid "DiskManagement"
+msgstr "磁盘管理"
+
+msgctxt "Windows Settings"
+msgid "Display"
+msgstr "显示"
+
+msgctxt "Windows Settings"
+msgid "DisplayProperties"
+msgstr "显示属性"
+
+msgctxt "Windows Settings"
+msgid "Documents"
+msgstr "文档"
+
+msgctxt "Windows Settings"
+msgid "DuplicatingMyDisplay"
+msgstr "复制我的显示器"
+
+msgctxt "Windows Settings"
+msgid "DuringTheseHours"
+msgstr "在这些时间"
+
+msgctxt "Windows Settings"
+msgid "EaseOfAccessCenter"
+msgstr "轻松访问中心"
+
+msgctxt "Windows Settings"
+msgid "EditEnvironmentVariables"
+msgstr "编辑环境变量"
+
+msgctxt "Windows Settings"
+msgid "EditSystemEnvironmentVariables"
+msgstr "编辑系统环境变量"
+
+msgctxt "Windows Settings"
+msgid "EditUserEnvironmentVariables"
+msgstr "编辑帐户的环境变量"
+
+msgctxt "Windows Settings"
+msgid "Edition"
+msgstr "版本"
+
+msgctxt "Windows Settings"
+msgid "Email"
+msgstr "电子邮件"
+
+msgctxt "Windows Settings"
+msgid "EmailAndAppAccounts"
+msgstr "电子邮件和应用帐户"
+
+msgctxt "Windows Settings"
+msgid "Encryption"
+msgstr "加密"
+
+msgctxt "Windows Settings"
+msgid "EnvVars"
+msgstr "环境变量"
+
+msgctxt "Windows Settings"
+msgid "Environment"
+msgstr "环境"
+
+msgctxt "Windows Settings"
+msgid "Ethernet"
+msgstr "以太网"
+
+msgctxt "Windows Settings"
+msgid "EventViewer"
+msgstr "事件查看器"
+
+msgctxt "Windows Settings"
+msgid "ExploitProtection"
+msgstr "Exploit Protection"
+
+msgctxt "Windows Settings"
+msgid "Extras"
+msgstr "附加程序"
+
+msgctxt "Windows Settings"
+msgid "EyeControl"
+msgstr "目视控制"
+
+msgctxt "Windows Settings"
+msgid "EyeTracker"
+msgstr "眼动追踪仪"
+
+msgctxt "Windows Settings"
+msgid "FamilyAndOtherPeople"
+msgstr "家庭和其他人员"
+
+msgctxt "Windows Settings"
+msgid "FeedbackAndDiagnostics"
+msgstr "反馈和诊断"
+
+msgctxt "Windows Settings"
+msgid "FileSystem"
+msgstr "文件系统"
+
+msgctxt "Windows Settings"
+msgid "FindFast"
+msgstr "FindFast"
+
+msgctxt "Windows Settings"
+msgid "FindMyDevice"
+msgstr "查找我的设备"
+
+msgctxt "Windows Settings"
+msgid "Firewall"
+msgstr "防火墙"
+
+msgctxt "Windows Settings"
+msgid "Firewall.cpl"
+msgstr "Firewall.cpl"
+
+msgctxt "Windows Settings"
+msgid "FocusAssistQuietHours"
+msgstr "专注助手 - 免打扰时间"
+
+msgctxt "Windows Settings"
+msgid "FocusAssistQuietMoments"
+msgstr "专注助手 - 免扰时间"
+
+msgctxt "Windows Settings"
+msgid "FolderOptions"
+msgstr "文件夹选项"
+
+msgctxt "Windows Settings"
+msgid "Fonts"
+msgstr "字体"
+
+msgctxt "Windows Settings"
+msgid "ForDevelopers"
+msgstr "适用于开发人员"
+
+msgctxt "Windows Settings"
+msgid "GPT"
+msgstr "GPT"
+
+msgctxt "Windows Settings"
+msgid "GameBar"
+msgstr "游戏栏"
+
+msgctxt "Windows Settings"
+msgid "GameControllers"
+msgstr "游戏控制器"
+
+msgctxt "Windows Settings"
+msgid "GameDvr"
+msgstr "游戏 DVR"
+
+msgctxt "Windows Settings"
+msgid "GameMode"
+msgstr "游戏模式"
+
+msgctxt "Windows Settings"
+msgid "Gateway"
+msgstr "网关"
+
+msgctxt "Windows Settings"
+msgid "General"
+msgstr "常规"
+
+msgctxt "Windows Settings"
+msgid "GetPrograms"
+msgstr "获取应用程序"
+
+msgctxt "Windows Settings"
+msgid "GettingStarted"
+msgstr "入门"
+
+msgctxt "Windows Settings"
+msgid "Glance"
+msgstr "概览"
+
+msgctxt "Windows Settings"
+msgid "GraphicsSettings"
+msgstr "图形设置"
+
+msgctxt "Windows Settings"
+msgid "Grayscale"
+msgstr "灰度"
+
+msgctxt "Windows Settings"
+msgid "GreenWeek"
+msgstr "绿色周"
+
+msgctxt "Windows Settings"
+msgid "GroupPolicy"
+msgstr "组策略"
+
+msgctxt "Windows Settings"
+msgid "HeadsetDisplay"
+msgstr "头戴显示设备"
+
+msgctxt "Windows Settings"
+msgid "HighContrast"
+msgstr "高对比度"
+
+msgctxt "Windows Settings"
+msgid "HolographicAudio"
+msgstr "全息音频"
+
+msgctxt "Windows Settings"
+msgid "HolographicEnvironment"
+msgstr "全息环境"
+
+msgctxt "Windows Settings"
+msgid "HolographicHeadset"
+msgstr "全息头戴显示设备"
+
+msgctxt "Windows Settings"
+msgid "HolographicManagement"
+msgstr "全息管理"
+
+msgctxt "Windows Settings"
+msgid "HomeGroup"
+msgstr "家庭组"
+
+msgctxt "Windows Settings"
+msgid "Id"
+msgstr "ID"
+
+msgctxt "Windows Settings"
+msgid "Image"
+msgstr "图像"
+
+msgctxt "Windows Settings"
+msgid "IndexingOptions"
+msgstr "索引选项"
+
+msgctxt "Windows Settings"
+msgid "Infrared"
+msgstr "红外线"
+
+msgctxt "Windows Settings"
+msgid "InkingAndTyping"
+msgstr "墨迹书写和键入"
+
+msgctxt "Windows Settings"
+msgid "InternetOptions"
+msgstr "Internet 选项"
+
+msgctxt "Windows Settings"
+msgid "InvertedColors"
+msgstr "倒色"
+
+msgctxt "Windows Settings"
+msgid "Ip"
+msgstr "IP"
+
+msgctxt "Windows Settings"
+msgid "IpSecurityMonitor"
+msgstr "IP 安全监视器"
+
+msgctxt "Windows Settings"
+msgid "IpSecurityPoliciesOnLocalComputer"
+msgstr "本地计算机上的 IP 安全策略"
+
+msgctxt "Windows Settings"
+msgid "IsolatedBrowsing"
+msgstr "隔离浏览"
+
+msgctxt "Windows Settings"
+msgid "JapanImeSettings"
+msgstr "日语输入法设置"
+
+msgctxt "Windows Settings"
+msgid "JoystickProperties"
+msgstr "游戏杆属性"
+
+msgctxt "Windows Settings"
+msgid "Keyboard"
+msgstr "键盘"
+
+msgctxt "Windows Settings"
+msgid "Keypad"
+msgstr "小键盘"
+
+msgctxt "Windows Settings"
+msgid "Keys"
+msgstr "键"
+
+msgctxt "Windows Settings"
+msgid "LightColor"
+msgstr "浅色"
+
+msgctxt "Windows Settings"
+msgid "LightMode"
+msgstr "浅色模式"
+
+msgctxt "Windows Settings"
+msgid "LocalGroupPolicy"
+msgstr "本地计算机策略"
+
+msgctxt "Windows Settings"
+msgid "LocalUsersAndGroups"
+msgstr "本地用户和组"
+
+msgctxt "Windows Settings"
+msgid "Location"
+msgstr "位置"
+
+msgctxt "Windows Settings"
+msgid "LockScreen"
+msgstr "锁屏界面"
+
+msgctxt "Windows Settings"
+msgid "MBR"
+msgstr "MBR"
+
+msgctxt "Windows Settings"
+msgid "MMC_azman"
+msgstr "azman.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_certlm"
+msgstr "certlm.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_certmgr"
+msgstr "certmgr.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_comexp"
+msgstr "comexp.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_compmgmt"
+msgstr "compmgmt.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_devmgmt"
+msgstr "devmgmt.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_diskmgmt"
+msgstr "diskmgmt.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_eventvwr"
+msgstr "eventvwr.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_fsmgmt"
+msgstr "fsmgmt.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_gpedit"
+msgstr "gpedit.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_lusrmgr"
+msgstr "lusrmgr.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_mmcexe"
+msgstr "mmc.exe"
+
+msgctxt "Windows Settings"
+msgid "MMC_perfmon"
+msgstr "perfmon.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_printmanagement"
+msgstr "printmanagement.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_rsop"
+msgstr "rsop.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_secpol"
+msgstr "secpol.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_services"
+msgstr "services.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_taskschd"
+msgstr "taskschd.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_tpm"
+msgstr "tpm.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_wf"
+msgstr "WF.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_wmimgmt"
+msgstr "WmiMgmt.msc"
+
+msgctxt "Windows Settings"
+msgid "Magnifier"
+msgstr "放大镜"
+
+msgctxt "Windows Settings"
+msgid "MailMicrosoftExchangeOrWindowsMessaging"
+msgstr "邮件 - Microsoft Exchange 或 Windows 消息"
+
+msgctxt "Windows Settings"
+msgid "ManageDevices"
+msgstr "管理设备"
+
+msgctxt "Windows Settings"
+msgid "ManageKnownNetworks"
+msgstr "管理已知网络"
+
+msgctxt "Windows Settings"
+msgid "ManageOptionalFeatures"
+msgstr "管理可选功能"
+
+msgctxt "Windows Settings"
+msgid "Messaging"
+msgstr "消息传递"
+
+msgctxt "Windows Settings"
+msgid "MeteredConnection"
+msgstr "按流量计费的连接"
+
+msgctxt "Windows Settings"
+msgid "Microphone"
+msgstr "麦克风"
+
+msgctxt "Windows Settings"
+msgid "MicrosoftMailPostOffice"
+msgstr "Microsoft Mail Post Office"
+
+msgctxt "Windows Settings"
+msgid "MobileDevices"
+msgstr "移动设备"
+
+msgctxt "Windows Settings"
+msgid "MobileHotspot"
+msgstr "移动热点"
+
+msgctxt "Windows Settings"
+msgid "Mono"
+msgstr "Mono"
+
+msgctxt "Windows Settings"
+msgid "MoreDetails"
+msgstr "更多详细信息"
+
+msgctxt "Windows Settings"
+msgid "Motion"
+msgstr "运动"
+
+msgctxt "Windows Settings"
+msgid "Mouse"
+msgstr "鼠标"
+
+msgctxt "Windows Settings"
+msgid "MouseAndTouchpad"
+msgstr "鼠标和触摸板"
+
+msgctxt "Windows Settings"
+msgid "MouseFontsKeyboardAndPrintersProperties"
+msgstr "鼠标、字体、键盘和打印机属性"
+
+msgctxt "Windows Settings"
+msgid "MousePointer"
+msgstr "鼠标指针"
+
+msgctxt "Windows Settings"
+msgid "MultimediaProperties"
+msgstr "多媒体属性"
+
+msgctxt "Windows Settings"
+msgid "Multitasking"
+msgstr "多任务"
+
+msgctxt "Windows Settings"
+msgid "NFC"
+msgstr "NFC"
+
+msgctxt "Windows Settings"
+msgid "NFCTransactions"
+msgstr "NFC 交易"
+
+msgctxt "Windows Settings"
+msgid "Narrator"
+msgstr "讲述人"
+
+msgctxt "Windows Settings"
+msgid "NavigationBar"
+msgstr "导航栏"
+
+msgctxt "Windows Settings"
+msgid "NearbyShareSettings"
+msgstr "就近共享设置"
+
+msgctxt "Windows Settings"
+msgid "Network"
+msgstr "网络"
+
+msgctxt "Windows Settings"
+msgid "NetworkAndSharingCenter"
+msgstr "网络与共享中心"
+
+msgctxt "Windows Settings"
+msgid "NetworkConnection"
+msgstr "网络连接"
+
+msgctxt "Windows Settings"
+msgid "NetworkProperties"
+msgstr "网络属性"
+
+msgctxt "Windows Settings"
+msgid "NetworkSessions"
+msgstr "网络会话"
+
+msgctxt "Windows Settings"
+msgid "NetworkSetupWizard"
+msgstr "网络安装向导"
+
+msgctxt "Windows Settings"
+msgid "NetworkStatus"
+msgstr "网络状态"
+
+msgctxt "Windows Settings"
+msgid "NightLight"
+msgstr "夜灯"
+
+msgctxt "Windows Settings"
+msgid "NightLightSettings"
+msgstr "夜灯设置"
+
+msgctxt "Windows Settings"
+msgid "NoteAddYourPhone"
+msgstr "仅当移动设备连接到设备时可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteAdvancedGraphics"
+msgstr "仅在支持高级图形选项的设备上可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteBattery"
+msgstr "仅适用于配备电池的设备，如平板电脑。"
+
+msgctxt "Windows Settings"
+msgid "NoteDeprecated17763"
+msgstr "已在 Windows 10 版本 1809 (内部版本 17763) 及更高版本中弃用。"
+
+msgctxt "Windows Settings"
+msgid "NoteDialPaired"
+msgstr "仅当拨号匹配时可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteDirectAccess"
+msgstr "仅在启用 DirectAccess 时可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteDisplayGraphics"
+msgstr "仅在支持高级显示选项的设备上可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteEditingRequireAdminPrivileges"
+msgstr "编辑此设置可能需要管理权限。"
+
+msgctxt "Windows Settings"
+msgid "NoteEnrolledWIP"
+msgstr "仅当用户已注册 WIP 时显示。"
+
+msgctxt "Windows Settings"
+msgid "NoteEyetrackerHardware"
+msgstr "需要眼动追踪仪硬件。"
+
+msgctxt "Windows Settings"
+msgid "NoteImeJapan"
+msgstr "如果已安装 Microsoft 日语输入法编辑器，则可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteImePinyin"
+msgstr "如果已安装 Microsoft 拼音输入法编辑器，则可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteImeWubi"
+msgstr "如果已安装 Microsoft 五笔输入法编辑器，则可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteMixedReality"
+msgstr "仅当已安装混合现实门户应用时可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteMobileProvisioning"
+msgstr "仅在移动设备上以及企业已部署预配程序包的情况下可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteNoMscFileExist"
+msgstr "必须手动添加此管理单元。"
+
+msgctxt "Windows Settings"
+msgid "NoteSince18362"
+msgstr "已在 Windows 10 版本 1903 (内部版本 18362) 新增。"
+
+msgctxt "Windows Settings"
+msgid "NoteSince19041"
+msgstr "已在 Windows 10 版本 2004 (内部版本 19041) 新增。"
+
+msgctxt "Windows Settings"
+msgid "NoteThirdParty"
+msgstr "仅当已安装“设置应用” (例如，由第三方安装) 时可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteTouchpad"
+msgstr "仅当存在触摸板硬件时可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteWiFiAdapter"
+msgstr "仅当设备具有 Wi-Fi 适配器时可用。"
+
+msgctxt "Windows Settings"
+msgid "NoteWindowsAnywhere"
+msgstr "设备必须支持 Windows Anywhere。"
+
+msgctxt "Windows Settings"
+msgid "NoteWorkplaceProvisioning"
+msgstr "仅当企业已部署预配程序包时可用。"
+
+msgctxt "Windows Settings"
+msgid "Notifications"
+msgstr "通知"
+
+msgctxt "Windows Settings"
+msgid "NotificationsAndActions"
+msgstr "通知和操作"
+
+msgctxt "Windows Settings"
+msgid "NumLock"
+msgstr "Num Lock"
+
+msgctxt "Windows Settings"
+msgid "OdbcDataSourceAdministrator32Bit"
+msgstr "ODBC 数据源管理员 (32 位)"
+
+msgctxt "Windows Settings"
+msgid "OdbcDataSourceAdministrator64Bit"
+msgstr "ODBC 数据源管理员 (64 位)"
+
+msgctxt "Windows Settings"
+msgid "OfflineFiles"
+msgstr "脱机文件"
+
+msgctxt "Windows Settings"
+msgid "OfflineMaps"
+msgstr "离线离线地图"
+
+msgctxt "Windows Settings"
+msgid "OfflineMapsDownloadMaps"
+msgstr "离线地图 - 下载地图"
+
+msgctxt "Windows Settings"
+msgid "OnScreen"
+msgstr "屏上"
+
+msgctxt "Windows Settings"
+msgid "OpenControlPanel"
+msgstr "打开控制面板"
+
+msgctxt "Windows Settings"
+msgid "OpenMMC"
+msgstr "打开 Microsoft 管理控制台"
+
+msgctxt "Windows Settings"
+msgid "OpenSettingsApp"
+msgstr "打开设置应用"
+
+msgctxt "Windows Settings"
+msgid "Os"
+msgstr "OS"
+
+msgctxt "Windows Settings"
+msgid "OtherDevices"
+msgstr "其他设备"
+
+msgctxt "Windows Settings"
+msgid "OtherOptions"
+msgstr "其他选项"
+
+msgctxt "Windows Settings"
+msgid "OtherUsers"
+msgstr "其他用户"
+
+msgctxt "Windows Settings"
+msgid "ParentalControls"
+msgstr "家长控制"
+
+msgctxt "Windows Settings"
+msgid "Password"
+msgstr "密码"
+
+msgctxt "Windows Settings"
+msgid "PasswordProperties"
+msgstr "密码属性"
+
+msgctxt "Windows Settings"
+msgid "PenAndInputDevices"
+msgstr "笔和输入设备"
+
+msgctxt "Windows Settings"
+msgid "PenAndTouch"
+msgstr "触笔和触控"
+
+msgctxt "Windows Settings"
+msgid "PenAndWindowsInk"
+msgstr "笔和 Windows Ink"
+
+msgctxt "Windows Settings"
+msgid "PeopleNearMe"
+msgstr "网络邻居"
+
+msgctxt "Windows Settings"
+msgid "PerformanceInformationAndTools"
+msgstr "性能信息和工具"
+
+msgctxt "Windows Settings"
+msgid "PerformanceMonitor"
+msgstr "性能监视器"
+
+msgctxt "Windows Settings"
+msgid "PermissionsAndHistory"
+msgstr "权限和历史记录"
+
+msgctxt "Windows Settings"
+msgid "PersonalizationCategory"
+msgstr "个性化(类别)"
+
+msgctxt "Windows Settings"
+msgid "Phone"
+msgstr "手机"
+
+msgctxt "Windows Settings"
+msgid "PhoneAndModem"
+msgstr "电话和调制解调器"
+
+msgctxt "Windows Settings"
+msgid "PhoneAndModemOptions"
+msgstr "电话和调制解调器 - 选项"
+
+msgctxt "Windows Settings"
+msgid "PhoneCalls"
+msgstr "电话"
+
+msgctxt "Windows Settings"
+msgid "PhoneDefaultApps"
+msgstr "手机 - 默认应用"
+
+msgctxt "Windows Settings"
+msgid "PhoneLink"
+msgstr "手机连接"
+
+msgctxt "Windows Settings"
+msgid "Picture"
+msgstr "图片"
+
+msgctxt "Windows Settings"
+msgid "Pictures"
+msgstr "图片"
+
+msgctxt "Windows Settings"
+msgid "PinyinImeSettings"
+msgstr "拼音输入法设置"
+
+msgctxt "Windows Settings"
+msgid "PinyinImeSettingsDomainLexicon"
+msgstr "拼音输入法设置 - 专业词典"
+
+msgctxt "Windows Settings"
+msgid "PinyinImeSettingsKeyConfiguration"
+msgstr "拼音输入法设置 - 按键配置"
+
+msgctxt "Windows Settings"
+msgid "PinyinImeSettingsUdp"
+msgstr "拼音输入法设置 - UDP"
+
+msgctxt "Windows Settings"
+msgid "PlayingGameFullScreen"
+msgstr "全屏进行游戏"
+
+msgctxt "Windows Settings"
+msgid "PnpDevice"
+msgstr "PNP 设备"
+
+msgctxt "Windows Settings"
+msgid "PowerAndSleep"
+msgstr "电源和休眠"
+
+msgctxt "Windows Settings"
+msgid "PowerOptions"
+msgstr "电源选项"
+
+msgctxt "Windows Settings"
+msgid "Presentation"
+msgstr "表示"
+
+msgctxt "Windows Settings"
+msgid "PrintManagement"
+msgstr "打印管理"
+
+msgctxt "Windows Settings"
+msgid "PrintScreen"
+msgstr "打印屏幕"
+
+msgctxt "Windows Settings"
+msgid "PrinterSpooler"
+msgstr "打印机后台处理程序"
+
+msgctxt "Windows Settings"
+msgid "Printers"
+msgstr "打印机"
+
+msgctxt "Windows Settings"
+msgid "PrintersAndScanners"
+msgstr "打印机和扫描仪"
+
+msgctxt "Windows Settings"
+msgid "ProblemReportsAndSolutions"
+msgstr "问题报告和解决方案"
+
+msgctxt "Windows Settings"
+msgid "Processor"
+msgstr "处理器"
+
+msgctxt "Windows Settings"
+msgid "ProgramsAndFeatures"
+msgstr "程序与功能"
+
+msgctxt "Windows Settings"
+msgid "ProjectingToThisPc"
+msgstr "投影到这台电脑"
+
+msgctxt "Windows Settings"
+msgid "Provisioning"
+msgstr "正在预配"
+
+msgctxt "Windows Settings"
+msgid "Proximity"
+msgstr "邻近"
+
+msgctxt "Windows Settings"
+msgid "Proxy"
+msgstr "代理"
+
+msgctxt "Windows Settings"
+msgid "Quickime"
+msgstr "Quickime"
+
+msgctxt "Windows Settings"
+msgid "QuietMomentsGame"
+msgstr "免扰时间游戏"
+
+msgctxt "Windows Settings"
+msgid "Radios"
+msgstr "无线电收发器"
+
+msgctxt "Windows Settings"
+msgid "Ram"
+msgstr "RAM"
+
+msgctxt "Windows Settings"
+msgid "Recognition"
+msgstr "识别"
+
+msgctxt "Windows Settings"
+msgid "Recovery"
+msgstr "恢复"
+
+msgctxt "Windows Settings"
+msgid "RedEye"
+msgstr "红眼"
+
+msgctxt "Windows Settings"
+msgid "RedGreen"
+msgstr "红-绿"
+
+msgctxt "Windows Settings"
+msgid "RedWeek"
+msgstr "红色周"
+
+msgctxt "Windows Settings"
+msgid "Region"
+msgstr "区域"
+
+msgctxt "Windows Settings"
+msgid "RegionAndLanguage"
+msgstr "区域与语言"
+
+msgctxt "Windows Settings"
+msgid "RegionFormatting"
+msgstr "区域格式设置"
+
+msgctxt "Windows Settings"
+msgid "RegionalLanguage"
+msgstr "区域语言"
+
+msgctxt "Windows Settings"
+msgid "RegionalSettingsProperties"
+msgstr "区域设置属性"
+
+msgctxt "Windows Settings"
+msgid "RemoteAppAndDesktopConnections"
+msgstr "RemoteApp 和桌面连接"
+
+msgctxt "Windows Settings"
+msgid "RemoteDesktop"
+msgstr "远程桌面"
+
+msgctxt "Windows Settings"
+msgid "RemovePrograms"
+msgstr "删除程序"
+
+msgctxt "Windows Settings"
+msgid "RepairPrograms"
+msgstr "修复程序"
+
+msgctxt "Windows Settings"
+msgid "ResultantSetOfPolicy"
+msgstr "策略的结果集"
+
+msgctxt "Windows Settings"
+msgid "SMB"
+msgstr "SMB"
+
+msgctxt "Windows Settings"
+msgid "ScannersAndCameras"
+msgstr "扫描仪和照相机"
+
+msgctxt "Windows Settings"
+msgid "Scheduled"
+msgstr "已计划"
+
+msgctxt "Windows Settings"
+msgid "ScheduledTasks"
+msgstr "计划任务"
+
+msgctxt "Windows Settings"
+msgid "ScreenRotation"
+msgstr "屏幕旋转"
+
+msgctxt "Windows Settings"
+msgid "ScreenSaver"
+msgstr "屏幕保护"
+
+msgctxt "Windows Settings"
+msgid "ScrollBars"
+msgstr "滚动条"
+
+msgctxt "Windows Settings"
+msgid "ScrollLock"
+msgstr "滚动锁定"
+
+msgctxt "Windows Settings"
+msgid "Sdns"
+msgstr "SDNS"
+
+msgctxt "Windows Settings"
+msgid "SecureDNS"
+msgstr "SecureDNS"
+
+msgctxt "Windows Settings"
+msgid "SecurityCenter"
+msgstr "安全中心"
+
+msgctxt "Windows Settings"
+msgid "SecurityConfigurationAndAnalysis"
+msgstr "安全配置和分析"
+
+msgctxt "Windows Settings"
+msgid "SecurityProcessor"
+msgstr "安全处理器"
+
+msgctxt "Windows Settings"
+msgid "SecurityTemplates"
+msgstr "安全模板"
+
+msgctxt "Windows Settings"
+msgid "ServicesSnapIn"
+msgstr "服务"
+
+msgctxt "Windows Settings"
+msgid "SessionCleanup"
+msgstr "会话清理"
+
+msgctxt "Windows Settings"
+msgid "SetUpKiosk"
+msgstr "设置展台"
+
+msgctxt "Windows Settings"
+msgid "SettingsApp"
+msgstr "设置应用程序"
+
+msgctxt "Windows Settings"
+msgid "ShareAcrossDevices"
+msgstr "跨设备共享"
+
+msgctxt "Windows Settings"
+msgid "SharedExperiences"
+msgstr "共享体验设置"
+
+msgctxt "Windows Settings"
+msgid "SharedFolders"
+msgstr "共享文件夹"
+
+msgctxt "Windows Settings"
+msgid "ShortNameWiFi"
+msgstr "Wifi"
+
+msgctxt "Windows Settings"
+msgid "Shortcuts"
+msgstr "快捷方式"
+
+msgctxt "Windows Settings"
+msgid "SignInOptions"
+msgstr "登录选项"
+
+msgctxt "Windows Settings"
+msgid "SignInOptionsDynamicLock"
+msgstr "登录选项 - 动态锁定"
+
+msgctxt "Windows Settings"
+msgid "Size"
+msgstr "大小"
+
+msgctxt "Windows Settings"
+msgid "Sound"
+msgstr "声音"
+
+msgctxt "Windows Settings"
+msgid "Speech"
+msgstr "语音"
+
+msgctxt "Windows Settings"
+msgid "SpeechRecognition"
+msgstr "语音识别"
+
+msgctxt "Windows Settings"
+msgid "SpeechTyping"
+msgstr "语音键入"
+
+msgctxt "Windows Settings"
+msgid "Start"
+msgstr "开始"
+
+msgctxt "Windows Settings"
+msgid "StartPlaces"
+msgstr "起始位置"
+
+msgctxt "Windows Settings"
+msgid "StartupApps"
+msgstr "启动应用"
+
+msgctxt "Windows Settings"
+msgid "Storage"
+msgstr "存储"
+
+msgctxt "Windows Settings"
+msgid "StoragePolicies"
+msgstr "存储策略"
+
+msgctxt "Windows Settings"
+msgid "StorageSense"
+msgstr "存储感知"
+
+msgctxt "Windows Settings"
+msgid "SyncCenter"
+msgstr "同步中心"
+
+msgctxt "Windows Settings"
+msgid "SyncYourSettings"
+msgstr "同步设置"
+
+msgctxt "Windows Settings"
+msgid "System"
+msgstr "系统"
+
+msgctxt "Windows Settings"
+msgid "SystemEnvVars"
+msgstr "系统环境变量"
+
+msgctxt "Windows Settings"
+msgid "SystemPropertiesAndAddNewHardwareWizard"
+msgstr "系统属性和添加新硬件向导"
+
+msgctxt "Windows Settings"
+msgid "SystemTools"
+msgstr "系统工具"
+
+msgctxt "Windows Settings"
+msgid "SystemVariables"
+msgstr "系统变量"
+
+msgctxt "Windows Settings"
+msgid "Tab"
+msgstr "制表符"
+
+msgctxt "Windows Settings"
+msgid "TabletMode"
+msgstr "平板电脑模式"
+
+msgctxt "Windows Settings"
+msgid "TabletPC.cpl"
+msgstr "TabletPC.cpl"
+
+msgctxt "Windows Settings"
+msgid "TabletPcSettings"
+msgstr "平板电脑设置"
+
+msgctxt "Windows Settings"
+msgid "Talk"
+msgstr "说话"
+
+msgctxt "Windows Settings"
+msgid "TalkToCortana"
+msgstr "与 Cortana 交谈"
+
+msgctxt "Windows Settings"
+msgid "TaskScheduler"
+msgstr "任务计划程序"
+
+msgctxt "Windows Settings"
+msgid "Taskbar"
+msgstr "任务栏"
+
+msgctxt "Windows Settings"
+msgid "TaskbarColor"
+msgstr "任务栏颜色"
+
+msgctxt "Windows Settings"
+msgid "Tasks"
+msgstr "任务"
+
+msgctxt "Windows Settings"
+msgid "TeamConferencing"
+msgstr "团队会议"
+
+msgctxt "Windows Settings"
+msgid "TeamDeviceManagement"
+msgstr "团队设备管理"
+
+msgctxt "Windows Settings"
+msgid "TextToSpeech"
+msgstr "文本转语音"
+
+msgctxt "Windows Settings"
+msgid "Themes"
+msgstr "主题"
+
+msgctxt "Windows Settings"
+msgid "Timeline"
+msgstr "时间线"
+
+msgctxt "Windows Settings"
+msgid "Timeout"
+msgstr "超时"
+
+msgctxt "Windows Settings"
+msgid "Touch"
+msgstr "触摸"
+
+msgctxt "Windows Settings"
+msgid "TouchFeedback"
+msgstr "触控反馈"
+
+msgctxt "Windows Settings"
+msgid "Touchpad"
+msgstr "触摸板"
+
+msgctxt "Windows Settings"
+msgid "TpmManagement"
+msgstr "TPM 管理"
+
+msgctxt "Windows Settings"
+msgid "Transparency"
+msgstr "透明度"
+
+msgctxt "Windows Settings"
+msgid "Troubleshoot"
+msgstr "排除故障"
+
+msgctxt "Windows Settings"
+msgid "TruePlay"
+msgstr "TruePlay"
+
+msgctxt "Windows Settings"
+msgid "TurnScreenSaverOnOff"
+msgstr "启用或禁用屏幕保护"
+
+msgctxt "Windows Settings"
+msgid "Typing"
+msgstr "键入"
+
+msgctxt "Windows Settings"
+msgid "UAC"
+msgstr "UAC"
+
+msgctxt "Windows Settings"
+msgid "Uninstall"
+msgstr "卸载"
+
+msgctxt "Windows Settings"
+msgid "UninstallPrograms"
+msgstr "卸载程序"
+
+msgctxt "Windows Settings"
+msgid "Usb"
+msgstr "USB"
+
+msgctxt "Windows Settings"
+msgid "UserAccountControlSettings.exe"
+msgstr "UserAccountControlSettings.exe"
+
+msgctxt "Windows Settings"
+msgid "UserAccounts"
+msgstr "用户帐户"
+
+msgctxt "Windows Settings"
+msgid "UserEnvVars"
+msgstr "用户环境变量"
+
+msgctxt "Windows Settings"
+msgid "UserEnvironmentVariables"
+msgstr "用户环境变量"
+
+msgctxt "Windows Settings"
+msgid "UserVariables"
+msgstr "用户变量"
+
+msgctxt "Windows Settings"
+msgid "Version"
+msgstr "版本"
+
+msgctxt "Windows Settings"
+msgid "VideoPlayback"
+msgstr "视频播放"
+
+msgctxt "Windows Settings"
+msgid "Videos"
+msgstr "视频"
+
+msgctxt "Windows Settings"
+msgid "VirtualDesktops"
+msgstr "虚拟桌面"
+
+msgctxt "Windows Settings"
+msgid "Virus"
+msgstr "病毒"
+
+msgctxt "Windows Settings"
+msgid "VoiceActivation"
+msgstr "语音激活"
+
+msgctxt "Windows Settings"
+msgid "Volume"
+msgstr "音量"
+
+msgctxt "Windows Settings"
+msgid "Vpn"
+msgstr "VPN"
+
+msgctxt "Windows Settings"
+msgid "Wallpaper"
+msgstr "壁纸"
+
+msgctxt "Windows Settings"
+msgid "WarmerColor"
+msgstr "较暖的颜色"
+
+msgctxt "Windows Settings"
+msgid "WelcomeCenter"
+msgstr "欢迎中心"
+
+msgctxt "Windows Settings"
+msgid "WelcomeScreen"
+msgstr "欢迎屏幕"
+
+msgctxt "Windows Settings"
+msgid "Wheel"
+msgstr "滚轮"
+
+msgctxt "Windows Settings"
+msgid "WiFi"
+msgstr "WLAN"
+
+msgctxt "Windows Settings"
+msgid "WiFiCalling"
+msgstr "WLAN 呼叫"
+
+msgctxt "Windows Settings"
+msgid "WiFiSettings"
+msgstr "Wi-Fi 设置"
+
+msgctxt "Windows Settings"
+msgid "WindowBorder"
+msgstr "窗口边框"
+
+msgctxt "Windows Settings"
+msgid "WindowsAnytimeUpgrade"
+msgstr "ADMX Windows Anytime Upgrade"
+
+msgctxt "Windows Settings"
+msgid "WindowsAnywhere"
+msgstr "随处使用 Windows"
+
+msgctxt "Windows Settings"
+msgid "WindowsCardSpace"
+msgstr "Windows CardSpace"
+
+msgctxt "Windows Settings"
+msgid "WindowsDefender"
+msgstr "Windows Defender"
+
+msgctxt "Windows Settings"
+msgid "WindowsFirewall"
+msgstr "Windows 防火墙"
+
+msgctxt "Windows Settings"
+msgid "WindowsHelloSetupFace"
+msgstr "Windows Hello 设置 - 人脸"
+
+msgctxt "Windows Settings"
+msgid "WindowsHelloSetupFingerprint"
+msgstr "Windows Hello 设置 - 指纹"
+
+msgctxt "Windows Settings"
+msgid "WindowsInsiderProgram"
+msgstr "Windows 预览体验计划"
+
+msgctxt "Windows Settings"
+msgid "WindowsManagementInstrumentation"
+msgstr "Windows Management Instrumentation"
+
+msgctxt "Windows Settings"
+msgid "WindowsMobilityCenter"
+msgstr "Windows 移动中心"
+
+msgctxt "Windows Settings"
+msgid "WindowsSearch"
+msgstr "Windows 搜索"
+
+msgctxt "Windows Settings"
+msgid "WindowsSearchSettings"
+msgstr "Windows Search 设置"
+
+msgctxt "Windows Settings"
+msgid "WindowsSecurity"
+msgstr "Windows 安全中心"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdate"
+msgstr "Windows 更新"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdateAdvancedOptions"
+msgstr "Windows 更新 - 高级选项"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdateCheckForUpdates"
+msgstr "Windows 更新 - 检查更新"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdateRestartOptions"
+msgstr "Windows 更新 - 重启选项"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdateViewOptionalUpdates"
+msgstr "Windows 更新 - 查看可选更新"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdateViewUpdateHistory"
+msgstr "Windows 更新 - 查看更新历史记录"
+
+msgctxt "Windows Settings"
+msgid "Wireless"
+msgstr "无线"
+
+msgctxt "Windows Settings"
+msgid "WmiControl"
+msgstr "WMI 控件"
+
+msgctxt "Windows Settings"
+msgid "Workplace"
+msgstr "工作区"
+
+msgctxt "Windows Settings"
+msgid "WorkplaceProvisioning"
+msgstr "工作区预配"
+
+msgctxt "Windows Settings"
+msgid "WubiImeSettings"
+msgstr "五笔输入法设置"
+
+msgctxt "Windows Settings"
+msgid "WubiImeSettingsUdp"
+msgstr "五笔输入法设置 - UDP"
+
+msgctxt "Windows Settings"
+msgid "XboxNetworking"
+msgstr "Xbox 网络"
+
+msgctxt "Windows Settings"
+msgid "YourInfo"
+msgstr "你的信息"
+
+msgctxt "Windows Settings"
+msgid "Zoom"
+msgstr "缩放"
+
+msgctxt "Windows Settings"
+msgid "access.cpl"
+msgstr "access.cpl"
+
+msgctxt "Windows Settings"
+msgid "appwiz.cpl"
+msgstr "appwiz.cpl"
+
+msgctxt "Windows Settings"
+msgid "bpmf"
+msgstr "bpmf"
+
+msgctxt "Windows Settings"
+msgid "bthprops.cpl"
+msgstr "bthprops.cpl"
+
+msgctxt "Windows Settings"
+msgid "calling"
+msgstr "通话"
+
+msgctxt "Windows Settings"
+msgid "desk.cpl"
+msgstr "desk.cpl"
+
+msgctxt "Windows Settings"
+msgid "deuteranopia"
+msgstr "绿色盲"
+
+msgctxt "Windows Settings"
+msgid "findfast.cpl"
+msgstr "findfast.cpl"
+
+msgctxt "Windows Settings"
+msgid "hdwwiz.cpl"
+msgstr "hdwwiz.cpl"
+
+msgctxt "Windows Settings"
+msgid "inetcpl.cpl"
+msgstr "inetcpl.cpl"
+
+msgctxt "Windows Settings"
+msgid "intl.cpl"
+msgstr "intl.cpl"
+
+msgctxt "Windows Settings"
+msgid "irprops.cpl"
+msgstr "irprops.cpl"
+
+msgctxt "Windows Settings"
+msgid "joy.cpl"
+msgstr "joy.cpl"
+
+msgctxt "Windows Settings"
+msgid "jpnime"
+msgstr "jpnime"
+
+msgctxt "Windows Settings"
+msgid "main.cpl"
+msgstr "main.cpl"
+
+msgctxt "Windows Settings"
+msgid "mlcfg32.cpl"
+msgstr "mlcfg32.cpl"
+
+msgctxt "Windows Settings"
+msgid "mmsys.cpl"
+msgstr "mmsys.cpl"
+
+msgctxt "Windows Settings"
+msgid "modem.cpl"
+msgstr "modem.cpl"
+
+msgctxt "Windows Settings"
+msgid "ncpa.cpl"
+msgstr "ncpa.cpl"
+
+msgctxt "Windows Settings"
+msgid "netcpl.cpl"
+msgstr "netcpl.cpl"
+
+msgctxt "Windows Settings"
+msgid "netsetup.cpl"
+msgstr "netsetup.cpl"
+
+msgctxt "Windows Settings"
+msgid "nwc.cpl"
+msgstr "nwc.cpl"
+
+msgctxt "Windows Settings"
+msgid "odbccp32.cpl"
+msgstr "odbccp32.cpl"
+
+msgctxt "Windows Settings"
+msgid "password.cpl"
+msgstr "password.cpl"
+
+msgctxt "Windows Settings"
+msgid "powercfg.cpl"
+msgstr "powercfg.cpl"
+
+msgctxt "Windows Settings"
+msgid "protanopia"
+msgstr "红色盲"
+
+msgctxt "Windows Settings"
+msgid "schedtasks"
+msgstr "schedtasks"
+
+msgctxt "Windows Settings"
+msgid "sticpl.cpl"
+msgstr "sticpl.cpl"
+
+msgctxt "Windows Settings"
+msgid "sysdm.cpl"
+msgstr "sysdm.cpl"
+
+msgctxt "Windows Settings"
+msgid "telephon.cpl"
+msgstr "telephon.cpl"
+
+msgctxt "Windows Settings"
+msgid "themes.cpl"
+msgstr "themes.cpl"
+
+msgctxt "Windows Settings"
+msgid "timedate.cpl"
+msgstr "timedate.cpl"
+
+msgctxt "Windows Settings"
+msgid "tritanopia"
+msgstr "蓝色盲"
+
+msgctxt "Windows Settings"
+msgid "wgpocpl.cpl"
+msgstr "wgpocpl.cpl"
+
+msgctxt "Windows Settings"
+msgid "wscui.cpl"
+msgstr "wscui.cpl"

@@ -12,6 +12,7 @@ dirs = "6"
 fontdb = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+roxmltree = "0.21"
 url = "2"
 png = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
@@ -30,7 +31,7 @@ raw-window-handle = "0.6"
 [target.'cfg(windows)'.dependencies]
 everything-ipc = "0.1.4"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
-windows = { version = "0.62", features = ["ApplicationModel", "ApplicationModel_Core", "Foundation", "Management_Deployment", "Storage_Search", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_SystemServices", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem"] }
+windows = { version = "0.62", features = ["ApplicationModel", "ApplicationModel_Core", "Foundation", "Management_Deployment", "Storage_Search", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_SystemServices", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem"] }
 
 [build-dependencies]
 slint-build = "~1.18.0"

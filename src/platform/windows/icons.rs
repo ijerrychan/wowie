@@ -48,26 +48,29 @@ fn bitmap_pixels(
     height: u32,
 ) -> Option<super::super::IconData> {
     let mut pixels = read_bitmap_pixels(bitmap, width, height)?;
-    if pixels.chunks_exact(4).all(|pixel| pixel[3] == 0) {
+    if pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0) {
         // Some legacy Win32 icons store RGB in the color bitmap and put all
         // transparency in the monochrome AND mask. Treating the unused alpha
         // channel as authoritative makes those icons fully invisible.
         if !mask.is_null() {
             if let Some(mask_pixels) = read_bitmap_pixels(mask, width, height) {
-                for (pixel, mask_pixel) in
-                    pixels.chunks_exact_mut(4).zip(mask_pixels.chunks_exact(4))
+                for (pixel, mask_pixel) in pixels
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(mask_pixels.as_chunks::<4>().0)
                 {
                     let transparent =
                         mask_pixel[0] > 127 || mask_pixel[1] > 127 || mask_pixel[2] > 127;
                     pixel[3] = if transparent { 0 } else { 255 };
                 }
             } else {
-                for pixel in pixels.chunks_exact_mut(4) {
+                for pixel in pixels.as_chunks_mut::<4>().0 {
                     pixel[3] = 255;
                 }
             }
         } else {
-            for pixel in pixels.chunks_exact_mut(4) {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
                 pixel[3] = 255;
             }
         }
@@ -198,12 +201,23 @@ fn application_icon_with_flags(
         // not filesystem paths. Resolve them on an initialized COM apartment
         // before asking Shell32 for their icon.
         let _com = super::ComScope::initialize()?;
+        // AppsFolder items (including Settings) can expose their actual icon
+        // through the image factory while SHGetFileInfo returns no HICON.
+        if let Some(icon) = shell_item_image(_target) {
+            return Some(icon);
+        }
         use windows::{
             core::PCWSTR,
             Win32::{System::Com::CoTaskMemFree, UI::Shell::SHParseDisplayName},
         };
-        let mut pidl = std::ptr::null_mut();
-        if unsafe { SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut pidl, 0, None).is_err() }
+        let owned_pidl = super::super::shell_id_list::decode(_target);
+        let mut pidl = owned_pidl.as_ref().map_or(std::ptr::null_mut(), |value| {
+            value.as_ptr().cast_mut().cast()
+        });
+        if owned_pidl.is_none()
+            && unsafe {
+                SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut pidl, 0, None).is_err()
+            }
             || pidl.is_null()
         {
             return None;
@@ -217,7 +231,9 @@ fn application_icon_with_flags(
                 SHGFI_ICON | SHGFI_LARGEICON | windows_sys::Win32::UI::Shell::SHGFI_PIDL,
             )
         };
-        unsafe { CoTaskMemFree(Some(pidl.cast())) };
+        if owned_pidl.is_none() {
+            unsafe { CoTaskMemFree(Some(pidl.cast())) };
+        }
         if ok == 0 || file_info.hIcon.is_null() {
             return None;
         }
@@ -250,5 +266,55 @@ fn application_icon_with_flags(
         bitmap_pixels(icon_info.hbmColor, icon_info.hbmMask, 32, 32)
     })();
     destroy_icon_resources(file_info.hIcon as _, &icon_info);
+    result
+}
+
+fn shell_item_image(target: &Path) -> Option<super::super::IconData> {
+    use windows::{
+        core::PCWSTR,
+        Win32::{
+            Foundation::SIZE,
+            UI::Shell::{
+                IShellItemImageFactory, SHCreateItemFromIDList, SHCreateItemFromParsingName,
+                SIIGBF_ICONONLY,
+            },
+        },
+    };
+    let wide = super::wide_path(target);
+    let owned_pidl = super::super::shell_id_list::decode(target);
+    let factory: IShellItemImageFactory = if let Some(pidl) = &owned_pidl {
+        unsafe { SHCreateItemFromIDList(pidl.as_ptr().cast()).ok()? }
+    } else {
+        unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None).ok()? }
+    };
+    let bitmap = unsafe {
+        factory
+            .GetImage(SIZE { cx: 32, cy: 32 }, SIIGBF_ICONONLY)
+            .ok()?
+    };
+    if bitmap.0.is_null() {
+        return None;
+    }
+    let result = (|| {
+        use windows_sys::Win32::Graphics::Gdi::{GetObjectW, BITMAP};
+        let mut information: BITMAP = unsafe { std::mem::zeroed() };
+        if unsafe {
+            GetObjectW(
+                bitmap.0,
+                std::mem::size_of::<BITMAP>() as i32,
+                (&mut information as *mut BITMAP).cast(),
+            )
+        } == 0
+        {
+            return None;
+        }
+        let width = u32::try_from(information.bmWidth).ok()?;
+        let height = u32::try_from(information.bmHeight).ok()?;
+        if width == 0 || height == 0 || width > 128 || height > 128 {
+            return None;
+        }
+        bitmap_pixels(bitmap.0, std::ptr::null_mut(), width, height)
+    })();
+    unsafe { windows_sys::Win32::Graphics::Gdi::DeleteObject(bitmap.0) };
     result
 }

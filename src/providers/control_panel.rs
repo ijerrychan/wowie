@@ -16,9 +16,9 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
                 // The platform provider supplies localized titles and the
                 // language-independent canonical name as a searchable alias.
                 aliases: item.aliases,
-                // The Shell parsing name is an implementation detail (often a
-                // `::{GUID}` value), useful for launching but not for search.
-                location: String::new(),
+                // Tasks expose their localized applet area; Shell identities
+                // remain launch details and never become searchable locations.
+                location: item.area.unwrap_or_default(),
                 launch_target: shell_target.clone(),
                 launch_arguments: String::new(),
                 launch_working_directory: None,
@@ -45,86 +45,29 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
                 allow_favorite: true,
                 visibility: crate::result::ResultVisibility::Always,
             };
-            apply_compatible_destination(&mut result);
+            crate::providers::windows_settings::enrich_shell_result(&mut result);
+            crate::providers::windows_settings::apply_compatible_destination(&mut result);
             result
         })
         .collect::<Vec<_>>();
 
     #[cfg(windows)]
     {
-        let existing_settings_targets = results
+        let mut existing_settings_targets = results
             .iter()
             .filter(|item| item.category == crate::result::ResultCategory::Settings)
             .map(|item| item.launch_target.to_string_lossy().to_ascii_lowercase())
             .collect::<std::collections::HashSet<_>>();
-        let mut known_names = results
-            .iter()
-            .flat_map(|item| {
-                std::iter::once(item.title.as_str()).chain(
-                    item.aliases
-                        .iter()
-                        .filter(|alias| {
-                            alias
-                                .get(..10)
-                                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Microsoft."))
-                        })
-                        .map(String::as_str),
-                )
-            })
-            .map(normalize_setting_name)
-            .collect::<std::collections::HashSet<_>>();
-        let mut powertoys_titles = std::collections::HashSet::new();
         for item in crate::providers::windows_settings::powertoys_results() {
-            let canonical_names = crate::providers::windows_settings::powertoys_name_aliases(&item)
-                .into_iter()
-                .map(|name| normalize_setting_name(&name))
-                .collect::<Vec<_>>();
-            if existing_settings_targets
-                .contains(&item.launch_target.to_string_lossy().to_ascii_lowercase())
-                || canonical_names
-                    .iter()
-                    .any(|name| known_names.contains(name))
-                || !powertoys_titles.insert(normalize_setting_name(&item.title))
+            if item.category == ResultCategory::Settings
+                && !existing_settings_targets
+                    .insert(item.launch_target.to_string_lossy().to_ascii_lowercase())
             {
                 continue;
             }
-            known_names.extend(canonical_names);
-            known_names.insert(normalize_setting_name(&item.title));
             results.push(item);
         }
     }
 
     results
-}
-
-fn normalize_setting_name(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
-/// Normalize known destinations for newly discovered rows and cached rows
-/// restored from an older build. Identity stays tied to the Shell item.
-fn apply_compatible_destination(item: &mut SearchResult) {
-    if item.category != ResultCategory::ControlPanel {
-        return;
-    }
-
-    let is_compatible = item.aliases.iter().any(|alias| {
-        crate::providers::windows_settings::compatible_settings_uri_for_canonical_name(alias)
-            .is_some()
-    });
-    if !is_compatible {
-        return;
-    }
-    // The legacy Control Panel entry now launches the supported Settings URI.
-    crate::providers::windows_settings::apply_compatible_destination(item);
-}
-
-pub(crate) fn normalize_cached_destinations(items: &mut [SearchResult]) {
-    for item in items {
-        apply_compatible_destination(item);
-    }
 }

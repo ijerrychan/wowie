@@ -299,12 +299,10 @@ impl AppProvider {
         self.source_fingerprints = cache.source_fingerprints.into_iter().collect();
         self.source_indexed_at = cache.source_indexed_at.into_iter().collect();
         self.sources = cache.sources.into_iter().collect();
-        if let Some(items) = self
-            .sources
-            .get_mut(&crate::platform::AppProviderSource::ControlPanel)
-        {
-            crate::providers::control_panel::normalize_cached_destinations(items);
-        }
+        // Never publish provisional system pages: edition, hardware, policy
+        // and installed management tools may have changed since this cache.
+        self.sources
+            .remove(&crate::platform::AppProviderSource::ControlPanel);
         self.rebuild_source_lookup();
         self.items = Arc::new(merge_sources(&self.sources));
         eprintln!(

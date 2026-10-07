@@ -846,324 +846,2087 @@ msgstr "Press a modifier and key, or Escape to cancel"
 msgid "Settings"
 msgstr "Settings"
 
+# Generated from Microsoft Command Palette resources; see windows_settings_data/NOTICE.md.
 msgctxt "Windows Settings"
 msgid "About"
 msgstr "About"
-msgctxt "Windows Settings"
-msgid "about|system information|device information"
-msgstr "about|system information|device information"
-msgctxt "Windows Settings"
-msgid "Display"
-msgstr "Display"
-msgctxt "Windows Settings"
-msgid "display|screen|monitor|resolution|brightness"
-msgstr "display|screen|monitor|resolution|brightness"
-msgctxt "Windows Settings"
-msgid "Sound"
-msgstr "Sound"
-msgctxt "Windows Settings"
-msgid "sound|audio|volume|output device|speaker"
-msgstr "sound|audio|volume|output device|speaker"
-msgctxt "Windows Settings"
-msgid "Notifications"
-msgstr "Notifications"
-msgctxt "Windows Settings"
-msgid "notifications|notification banners|do not disturb"
-msgstr "notifications|notification banners|do not disturb"
-msgctxt "Windows Settings"
-msgid "Power and battery"
-msgstr "Power and battery"
-msgctxt "Windows Settings"
-msgid "power|battery|sleep|power button"
-msgstr "power|battery|sleep|power button"
-msgctxt "Windows Settings"
-msgid "Storage"
-msgstr "Storage"
-msgctxt "Windows Settings"
-msgid "storage|disk space|temporary files|cleanup"
-msgstr "storage|disk space|temporary files|cleanup"
-msgctxt "Windows Settings"
-msgid "Clipboard"
-msgstr "Clipboard"
-msgctxt "Windows Settings"
-msgid "clipboard|clipboard history|copy and paste"
-msgstr "clipboard|clipboard history|copy and paste"
-msgctxt "Windows Settings"
-msgid "Multitasking"
-msgstr "Multitasking"
-msgctxt "Windows Settings"
-msgid "multitasking|snap windows|virtual desktops|window layout"
-msgstr "multitasking|snap windows|virtual desktops|window layout"
-msgctxt "Windows Settings"
-msgid "Night light"
-msgstr "Night light"
-msgctxt "Windows Settings"
-msgid "night light|blue light|eye comfort"
-msgstr "night light|blue light|eye comfort"
-msgctxt "Windows Settings"
-msgid "Remote Desktop"
-msgstr "Remote Desktop"
-msgctxt "Windows Settings"
-msgid "remote desktop|RDP|remote access"
-msgstr "remote desktop|RDP|remote access"
-msgctxt "Windows Settings"
-msgid "Recovery"
-msgstr "Recovery"
-msgctxt "Windows Settings"
-msgid "recovery|reset this PC|advanced startup"
-msgstr "recovery|reset this PC|advanced startup"
-msgctxt "Windows Settings"
-msgid "Troubleshoot"
-msgstr "Troubleshoot"
-msgctxt "Windows Settings"
-msgid "troubleshoot|troubleshooter|diagnose|fix problems"
-msgstr "troubleshoot|troubleshooter|diagnose|fix problems"
-msgctxt "Windows Settings"
-msgid "Windows Update"
-msgstr "Windows Update"
-msgctxt "Windows Settings"
-msgid "Windows Update|update history|check for updates|optional updates"
-msgstr "Windows Update|update history|check for updates|optional updates"
-msgctxt "Windows Settings"
-msgid "Bluetooth"
-msgstr "Bluetooth"
-msgctxt "Windows Settings"
-msgid "Bluetooth|pair device|wireless headphones|wireless devices"
-msgstr "Bluetooth|pair device|wireless headphones|wireless devices"
-msgctxt "Windows Settings"
-msgid "Connected devices"
-msgstr "Connected devices"
-msgctxt "Windows Settings"
-msgid "connected devices|nearby devices|device pairing"
-msgstr "connected devices|nearby devices|device pairing"
-msgctxt "Windows Settings"
-msgid "Printers and scanners"
-msgstr "Printers and scanners"
-msgctxt "Windows Settings"
-msgid "printer|scanner|print queue|add a printer"
-msgstr "printer|scanner|print queue|add a printer"
-msgctxt "Windows Settings"
-msgid "Mouse and touchpad"
-msgstr "Mouse and touchpad"
-msgctxt "Windows Settings"
-msgid "mouse|touchpad|pointer speed|scrolling"
-msgstr "mouse|touchpad|pointer speed|scrolling"
-msgctxt "Windows Settings"
-msgid "Typing and keyboard"
-msgstr "Typing and keyboard"
-msgctxt "Windows Settings"
-msgid "typing|keyboard|text suggestions|input"
-msgstr "typing|keyboard|text suggestions|input"
-msgctxt "Windows Settings"
-msgid "Network status"
-msgstr "Network status"
-msgctxt "Windows Settings"
-msgid "network|internet connection|network status"
-msgstr "network|internet connection|network status"
-msgctxt "Windows Settings"
-msgid "Wi-Fi"
-msgstr "Wi-Fi"
-msgctxt "Windows Settings"
-msgid "Wi-Fi|wireless|WLAN|wireless network"
-msgstr "Wi-Fi|wireless|WLAN|wireless network"
-msgctxt "Windows Settings"
-msgid "Ethernet"
-msgstr "Ethernet"
-msgctxt "Windows Settings"
-msgid "Ethernet|wired network|LAN"
-msgstr "Ethernet|wired network|LAN"
-msgctxt "Windows Settings"
-msgid "VPN"
-msgstr "VPN"
-msgctxt "Windows Settings"
-msgid "VPN|virtual private network|VPN connection"
-msgstr "VPN|virtual private network|VPN connection"
-msgctxt "Windows Settings"
-msgid "Proxy"
-msgstr "Proxy"
-msgctxt "Windows Settings"
-msgid "proxy|proxy server|proxy settings"
-msgstr "proxy|proxy server|proxy settings"
-msgctxt "Windows Settings"
-msgid "Airplane mode"
-msgstr "Airplane mode"
-msgctxt "Windows Settings"
-msgid "airplane mode|flight mode|wireless radios"
-msgstr "airplane mode|flight mode|wireless radios"
-msgctxt "Windows Settings"
-msgid "Mobile hotspot"
-msgstr "Mobile hotspot"
-msgctxt "Windows Settings"
-msgid "mobile hotspot|Wi-Fi hotspot|internet sharing|tethering"
-msgstr "mobile hotspot|Wi-Fi hotspot|internet sharing|tethering"
-msgctxt "Windows Settings"
-msgid "Installed apps"
-msgstr "Installed apps"
-msgctxt "Windows Settings"
-msgid "installed apps|apps and features|uninstall|app settings"
-msgstr "installed apps|apps and features|uninstall|app settings"
-msgctxt "Windows Settings"
-msgid "Default apps"
-msgstr "Default apps"
-msgctxt "Windows Settings"
-msgid "default apps|default browser|file associations|open with"
-msgstr "default apps|default browser|file associations|open with"
-msgctxt "Windows Settings"
-msgid "Startup apps"
-msgstr "Startup apps"
-msgctxt "Windows Settings"
-msgid "startup apps|startup programs|launch at startup"
-msgstr "startup apps|startup programs|launch at startup"
-msgctxt "Windows Settings"
-msgid "Optional features"
-msgstr "Optional features"
-msgctxt "Windows Settings"
-msgid "optional features|Windows features|add a feature"
-msgstr "optional features|Windows features|add a feature"
-msgctxt "Windows Settings"
-msgid "Background"
-msgstr "Background"
-msgctxt "Windows Settings"
-msgid "background|wallpaper|desktop background"
-msgstr "background|wallpaper|desktop background"
-msgctxt "Windows Settings"
-msgid "Colors"
-msgstr "Colors"
-msgctxt "Windows Settings"
-msgid "colors|accent color|dark mode|light mode"
-msgstr "colors|accent color|dark mode|light mode"
-msgctxt "Windows Settings"
-msgid "Themes"
-msgstr "Themes"
-msgctxt "Windows Settings"
-msgid "themes|theme|desktop theme"
-msgstr "themes|theme|desktop theme"
-msgctxt "Windows Settings"
-msgid "Lock screen"
-msgstr "Lock screen"
-msgctxt "Windows Settings"
-msgid "lock screen|lockscreen|screen timeout"
-msgstr "lock screen|lockscreen|screen timeout"
-msgctxt "Windows Settings"
-msgid "Start menu"
-msgstr "Start menu"
-msgctxt "Windows Settings"
-msgid "Start menu|Start layout|pinned apps"
-msgstr "Start menu|Start layout|pinned apps"
-msgctxt "Windows Settings"
-msgid "Taskbar"
-msgstr "Taskbar"
-msgctxt "Windows Settings"
-msgid "taskbar|system tray|taskbar icons"
-msgstr "taskbar|system tray|taskbar icons"
-msgctxt "Windows Settings"
-msgid "Fonts"
-msgstr "Fonts"
-msgctxt "Windows Settings"
-msgid "fonts|font size|install fonts|typeface"
-msgstr "fonts|font size|install fonts|typeface"
-msgctxt "Windows Settings"
-msgid "Your info"
-msgstr "Your info"
-msgctxt "Windows Settings"
-msgid "your info|Microsoft account|account profile|profile photo"
-msgstr "your info|Microsoft account|account profile|profile photo"
-msgctxt "Windows Settings"
-msgid "Sign-in options"
-msgstr "Sign-in options"
-msgctxt "Windows Settings"
-msgid "sign-in options|password|PIN|Windows Hello|fingerprint"
-msgstr "sign-in options|password|PIN|Windows Hello|fingerprint"
-msgctxt "Windows Settings"
-msgid "Email and accounts"
-msgstr "Email and accounts"
-msgctxt "Windows Settings"
-msgid "email accounts|work or school account|add account"
-msgstr "email accounts|work or school account|add account"
-msgctxt "Windows Settings"
-msgid "Other users"
-msgstr "Other users"
-msgctxt "Windows Settings"
-msgid "other users|family account|add user|local account"
-msgstr "other users|family account|add user|local account"
-msgctxt "Windows Settings"
-msgid "Date and time"
-msgstr "Date and time"
-msgctxt "Windows Settings"
-msgid "date and time|clock|time zone|automatic time"
-msgstr "date and time|clock|time zone|automatic time"
-msgctxt "Windows Settings"
-msgid "Language and region"
-msgstr "Language and region"
-msgctxt "Windows Settings"
-msgid "language and region|display language|regional format|keyboard language"
-msgstr "language and region|display language|regional format|keyboard language"
-msgctxt "Windows Settings"
-msgid "Privacy"
-msgstr "Privacy"
-msgctxt "Windows Settings"
-msgid "privacy|privacy settings|permissions"
-msgstr "privacy|privacy settings|permissions"
-msgctxt "Windows Settings"
-msgid "Location"
-msgstr "Location"
-msgctxt "Windows Settings"
-msgid "location|location services|location access|GPS"
-msgstr "location|location services|location access|GPS"
-msgctxt "Windows Settings"
-msgid "Camera privacy"
-msgstr "Camera privacy"
-msgctxt "Windows Settings"
-msgid "camera privacy|camera permission|webcam access"
-msgstr "camera privacy|camera permission|webcam access"
-msgctxt "Windows Settings"
-msgid "Microphone privacy"
-msgstr "Microphone privacy"
-msgctxt "Windows Settings"
-msgid "microphone privacy|microphone permission|mic access"
-msgstr "microphone privacy|microphone permission|mic access"
-msgctxt "Windows Settings"
-msgid "Notification privacy"
-msgstr "Notification privacy"
-msgctxt "Windows Settings"
-msgid "notification privacy|app notifications|notification access"
-msgstr "notification privacy|app notifications|notification access"
-msgctxt "Windows Settings"
-msgid "Search settings"
-msgstr "Search settings"
-msgctxt "Windows Settings"
-msgid "search settings|Windows Search|search permissions|search indexing"
-msgstr "search settings|Windows Search|search permissions|search indexing"
-msgctxt "Windows Settings"
-msgid "Windows Security"
-msgstr "Windows Security"
-msgctxt "Windows Settings"
-msgid "Windows Security|Windows Defender|antivirus|firewall|security"
-msgstr "Windows Security|Windows Defender|antivirus|firewall|security"
-msgctxt "Windows Settings"
-msgid "System"
-msgstr "System"
-msgctxt "Windows Settings"
-msgid "Bluetooth and devices"
-msgstr "Bluetooth and devices"
-msgctxt "Windows Settings"
-msgid "Network and internet"
-msgstr "Network and internet"
-msgctxt "Windows Settings"
-msgid "Apps"
-msgstr "Apps"
-msgctxt "Windows Settings"
-msgid "Personalization"
-msgstr "Personalization"
+
+msgctxt "Windows Settings"
+msgid "AccessWorkOrSchool"
+msgstr "Access work or school"
+
+msgctxt "Windows Settings"
+msgid "AccessibilityOptions"
+msgstr "Accessibility Options"
+
+msgctxt "Windows Settings"
+msgid "AccessoryApps"
+msgstr "Accessory apps"
+
+msgctxt "Windows Settings"
+msgid "AccountInfo"
+msgstr "Account info"
+
 msgctxt "Windows Settings"
 msgid "Accounts"
 msgstr "Accounts"
+
 msgctxt "Windows Settings"
-msgid "Time and language"
+msgid "ActionCenter"
+msgstr "Action Center"
+
+msgctxt "Windows Settings"
+msgid "Activation"
+msgstr "Activation"
+
+msgctxt "Windows Settings"
+msgid "ActivityHistory"
+msgstr "Activity history"
+
+msgctxt "Windows Settings"
+msgid "AddDevices"
+msgstr "Add devices"
+
+msgctxt "Windows Settings"
+msgid "AddHardware"
+msgstr "Add Hardware"
+
+msgctxt "Windows Settings"
+msgid "AddRemovePrograms"
+msgstr "Add or remove programs"
+
+msgctxt "Windows Settings"
+msgid "AddYourPhone"
+msgstr "Add your phone"
+
+msgctxt "Windows Settings"
+msgid "AdministrativeTools"
+msgstr "Administrative Tools"
+
+msgctxt "Windows Settings"
+msgid "AdvancedDisplaySettings"
+msgstr "Advanced display settings"
+
+msgctxt "Windows Settings"
+msgid "AdvancedGraphics"
+msgstr "Advanced graphics"
+
+msgctxt "Windows Settings"
+msgid "AdvertisingId"
+msgstr "Advertising ID"
+
+msgctxt "Windows Settings"
+msgid "AirplaneMode"
+msgstr "Airplane mode"
+
+msgctxt "Windows Settings"
+msgid "AltAndTab"
+msgstr "Alt+Tab"
+
+msgctxt "Windows Settings"
+msgid "Animations"
+msgstr "Animations"
+
+msgctxt "Windows Settings"
+msgid "AppColor"
+msgstr "App color"
+
+msgctxt "Windows Settings"
+msgid "AppControlPanel"
+msgstr "Control Panel"
+
+msgctxt "Windows Settings"
+msgid "AppDiagnostics"
+msgstr "App diagnostics"
+
+msgctxt "Windows Settings"
+msgid "AppFeatures"
+msgstr "App features"
+
+msgctxt "Windows Settings"
+msgid "AppMMC"
+msgstr "Microsoft Management Console"
+
+msgctxt "Windows Settings"
+msgid "AppSettingsApp"
+msgstr "Settings app"
+
+msgctxt "Windows Settings"
+msgid "AppVolumeAndDevicePreferences"
+msgstr "App volume and device preferences"
+
+msgctxt "Windows Settings"
+msgid "AppsAndFeatures"
+msgstr "Apps & Features"
+
+msgctxt "Windows Settings"
+msgid "AppsForWebsites"
+msgstr "Apps for websites"
+
+msgctxt "Windows Settings"
+msgid "AreaAccounts"
+msgstr "Accounts"
+
+msgctxt "Windows Settings"
+msgid "AreaAdministrativeTools"
+msgstr "Administrative Tools"
+
+msgctxt "Windows Settings"
+msgid "AreaAppearanceAndPersonalization"
+msgstr "Appearance and Personalization"
+
+msgctxt "Windows Settings"
+msgid "AreaApps"
+msgstr "Apps"
+
+msgctxt "Windows Settings"
+msgid "AreaBluetoothAndDevices11"
+msgstr "Bluetooth & devices"
+
+msgctxt "Windows Settings"
+msgid "AreaClockAndRegion"
+msgstr "Clock and Region"
+
+msgctxt "Windows Settings"
+msgid "AreaCortana"
+msgstr "Cortana"
+
+msgctxt "Windows Settings"
+msgid "AreaDevices"
+msgstr "Devices"
+
+msgctxt "Windows Settings"
+msgid "AreaEaseOfAccess"
+msgstr "Ease of access"
+
+msgctxt "Windows Settings"
+msgid "AreaExtras"
+msgstr "Extras"
+
+msgctxt "Windows Settings"
+msgid "AreaGaming"
+msgstr "Gaming"
+
+msgctxt "Windows Settings"
+msgid "AreaHardwareAndSound"
+msgstr "Hardware and Sound"
+
+msgctxt "Windows Settings"
+msgid "AreaMixedReality"
+msgstr "Mixed reality"
+
+msgctxt "Windows Settings"
+msgid "AreaNetworkAndInternet"
+msgstr "Network and Internet"
+
+msgctxt "Windows Settings"
+msgid "AreaPersonalization"
+msgstr "Personalization"
+
+msgctxt "Windows Settings"
+msgid "AreaPhone"
+msgstr "Phone"
+
+msgctxt "Windows Settings"
+msgid "AreaPrivacy"
+msgstr "Privacy"
+
+msgctxt "Windows Settings"
+msgid "AreaPrograms"
+msgstr "Programs"
+
+msgctxt "Windows Settings"
+msgid "AreaSecurityAndMaintenance"
+msgstr "Security and Maintenance"
+
+msgctxt "Windows Settings"
+msgid "AreaSurfaceHub"
+msgstr "SurfaceHub"
+
+msgctxt "Windows Settings"
+msgid "AreaSystem"
+msgstr "System"
+
+msgctxt "Windows Settings"
+msgid "AreaSystemAndSecurity"
+msgstr "System and Security"
+
+msgctxt "Windows Settings"
+msgid "AreaSystemPropertiesAdvanced"
+msgstr "System Properties"
+
+msgctxt "Windows Settings"
+msgid "AreaTimeAndLanguage"
 msgstr "Time and language"
+
 msgctxt "Windows Settings"
-msgid "Privacy and security"
-msgstr "Privacy and security"
+msgid "AreaUpdateAndSecurity"
+msgstr "Update and security"
+
 msgctxt "Windows Settings"
-msgid "Search"
-msgstr "Search"
+msgid "AreaUserAccounts"
+msgstr "User accounts"
+
+msgctxt "Windows Settings"
+msgid "AssignedAccess"
+msgstr "Assigned access"
+
+msgctxt "Windows Settings"
+msgid "Audio"
+msgstr "Audio"
+
+msgctxt "Windows Settings"
+msgid "AudioAlerts"
+msgstr "Audio alerts"
+
+msgctxt "Windows Settings"
+msgid "AudioAndSpeech"
+msgstr "Audio and speech"
+
+msgctxt "Windows Settings"
+msgid "AuthorizationManager"
+msgstr "Authorization Manager"
+
+msgctxt "Windows Settings"
+msgid "AutoPlay"
+msgstr "AutoPlay"
+
+msgctxt "Windows Settings"
+msgid "AutomaticFileDownloads"
+msgstr "Automatic file downloads"
+
+msgctxt "Windows Settings"
+msgid "Background"
+msgstr "Background"
+
+msgctxt "Windows Settings"
+msgid "BackgroundApps"
+msgstr "Background Apps"
+
+msgctxt "Windows Settings"
+msgid "Backup"
+msgstr "Backup"
+
+msgctxt "Windows Settings"
+msgid "BackupAndRestore"
+msgstr "Backup and Restore"
+
+msgctxt "Windows Settings"
+msgid "BatterySaver"
+msgstr "Battery Saver"
+
+msgctxt "Windows Settings"
+msgid "BatterySaverSettings"
+msgstr "Battery Saver settings"
+
+msgctxt "Windows Settings"
+msgid "BatterySaverUsageDetails"
+msgstr "Battery saver usage details"
+
+msgctxt "Windows Settings"
+msgid "BatteryUse"
+msgstr "Battery use"
+
+msgctxt "Windows Settings"
+msgid "BiometricDevices"
+msgstr "Biometric Devices"
+
+msgctxt "Windows Settings"
+msgid "BitLockerDriveEncryption"
+msgstr "BitLocker Drive Encryption"
+
+msgctxt "Windows Settings"
+msgid "BlueLight"
+msgstr "Blue light"
+
+msgctxt "Windows Settings"
+msgid "BlueYellow"
+msgstr "Blue-yellow"
+
+msgctxt "Windows Settings"
+msgid "BluetoothAndDevices10"
+msgstr "Bluetooth and other devices"
+
+msgctxt "Windows Settings"
+msgid "BluetoothDevices"
+msgstr "Bluetooth devices"
+
+msgctxt "Windows Settings"
+msgid "BopomofoIme"
+msgstr "Bopomofo IME"
+
+msgctxt "Windows Settings"
+msgid "Broadcasting"
+msgstr "Broadcasting"
+
+msgctxt "Windows Settings"
+msgid "Calendar"
+msgstr "Calendar"
+
+msgctxt "Windows Settings"
+msgid "CallHistory"
+msgstr "Call history"
+
+msgctxt "Windows Settings"
+msgid "Camera"
+msgstr "Camera"
+
+msgctxt "Windows Settings"
+msgid "CangjieIme"
+msgstr "Cangjie IME"
+
+msgctxt "Windows Settings"
+msgid "CapsLock"
+msgstr "Caps Lock"
+
+msgctxt "Windows Settings"
+msgid "CellularAndSim"
+msgstr "Cellular and SIM"
+
+msgctxt "Windows Settings"
+msgid "CertificatesCurrentUser"
+msgstr "Certificates - Current User"
+
+msgctxt "Windows Settings"
+msgid "CertificatesLocalComputer"
+msgstr "Certificates - Local Computer"
+
+msgctxt "Windows Settings"
+msgid "ChangePrograms"
+msgstr "Change programs"
+
+msgctxt "Windows Settings"
+msgid "ChangeScreenSaver"
+msgstr "Change screen saver"
+
+msgctxt "Windows Settings"
+msgid "ChangeUACSettings"
+msgstr "Change User Account Control settings"
+
+msgctxt "Windows Settings"
+msgid "ChooseWhichFoldersAppearOnStart"
+msgstr "Choose which folders appear on Start"
+
+msgctxt "Windows Settings"
+msgid "ClientServiceForNetWare"
+msgstr "Client service for NetWare"
+
+msgctxt "Windows Settings"
+msgid "Clipboard"
+msgstr "Clipboard"
+
+msgctxt "Windows Settings"
+msgid "ClosedCaptions"
+msgstr "Closed captions"
+
+msgctxt "Windows Settings"
+msgid "ColorFilters"
+msgstr "Color filters"
+
+msgctxt "Windows Settings"
+msgid "ColorManagement"
+msgstr "Color management"
+
+msgctxt "Windows Settings"
+msgid "Colors"
+msgstr "Colors"
+
+msgctxt "Windows Settings"
+msgid "ComObjects"
+msgstr "COM-Objects"
+
+msgctxt "Windows Settings"
+msgid "ComponentServices"
+msgstr "Component Services"
+
+msgctxt "Windows Settings"
+msgid "ComputerManagement"
+msgstr "Computer Management"
+
+msgctxt "Windows Settings"
+msgid "ConnectPanel"
+msgstr "Connect panel"
+
+msgctxt "Windows Settings"
+msgid "ConnectWirelessAudio"
+msgstr "Connect to a wireless audio device"
+
+msgctxt "Windows Settings"
+msgid "ConnectWirelessDisplay"
+msgstr "Connect to a wireless display"
+
+msgctxt "Windows Settings"
+msgid "ConnectableDevices"
+msgstr "Connectable devices"
+
+msgctxt "Windows Settings"
+msgid "ConnectedDevices"
+msgstr "Connected Devices"
+
+msgctxt "Windows Settings"
+msgid "Contacts"
+msgstr "Contacts"
+
+msgctxt "Windows Settings"
+msgid "CoreIsolation"
+msgstr "Core Isolation"
+
+msgctxt "Windows Settings"
+msgid "Cortana"
+msgstr "Cortana"
+
+msgctxt "Windows Settings"
+msgid "CortanaLanguage"
+msgstr "Cortana - Language"
+
+msgctxt "Windows Settings"
+msgid "CreateAndFormatHardDiskPartitions"
+msgstr "Create and format hard disk partitions"
+
+msgctxt "Windows Settings"
+msgid "CredentialManager"
+msgstr "Credential manager"
+
+msgctxt "Windows Settings"
+msgid "Crossdevice"
+msgstr "Crossdevice"
+
+msgctxt "Windows Settings"
+msgid "CustomDevices"
+msgstr "Custom devices"
+
+msgctxt "Windows Settings"
+msgid "DNS"
+msgstr "DNS"
+
+msgctxt "Windows Settings"
+msgid "DarkColor"
+msgstr "Dark color"
+
+msgctxt "Windows Settings"
+msgid "DarkMode"
+msgstr "Dark mode"
+
+msgctxt "Windows Settings"
+msgid "DataUsage"
+msgstr "Data usage"
+
+msgctxt "Windows Settings"
+msgid "DateAndTime"
+msgstr "Date and time"
+
+msgctxt "Windows Settings"
+msgid "DefaultApps"
+msgstr "Default apps"
+
+msgctxt "Windows Settings"
+msgid "DefaultCamera"
+msgstr "Default camera"
+
+msgctxt "Windows Settings"
+msgid "DefaultLocation"
+msgstr "Default location"
+
+msgctxt "Windows Settings"
+msgid "DefaultPrograms"
+msgstr "Default programs"
+
+msgctxt "Windows Settings"
+msgid "DefaultSaveLocations"
+msgstr "Default Save Locations"
+
+msgctxt "Windows Settings"
+msgid "DefenderFirewallAdvancedSecurity"
+msgstr "Windows Defender Firewall with Advanced Security"
+
+msgctxt "Windows Settings"
+msgid "DeliveryOptimization"
+msgstr "Delivery Optimization"
+
+msgctxt "Windows Settings"
+msgid "DesktopThemes"
+msgstr "Desktop themes"
+
+msgctxt "Windows Settings"
+msgid "DeviceDiscovery"
+msgstr "Device discovery"
+
+msgctxt "Windows Settings"
+msgid "DeviceManager"
+msgstr "Device manager"
+
+msgctxt "Windows Settings"
+msgid "Devices"
+msgstr "Devices"
+
+msgctxt "Windows Settings"
+msgid "DevicesAndPrinters"
+msgstr "Devices and printers"
+
+msgctxt "Windows Settings"
+msgid "Dhcp"
+msgstr "DHCP"
+
+msgctxt "Windows Settings"
+msgid "DialUp"
+msgstr "Dial-up"
+
+msgctxt "Windows Settings"
+msgid "DirectAccess"
+msgstr "Direct access"
+
+msgctxt "Windows Settings"
+msgid "DirectOpenYourPhone"
+msgstr "Direct open your phone"
+
+msgctxt "Windows Settings"
+msgid "DiskManagement"
+msgstr "Disk Management"
+
+msgctxt "Windows Settings"
+msgid "Display"
+msgstr "Display"
+
+msgctxt "Windows Settings"
+msgid "DisplayProperties"
+msgstr "Display properties"
+
+msgctxt "Windows Settings"
+msgid "Documents"
+msgstr "Documents"
+
+msgctxt "Windows Settings"
+msgid "DuplicatingMyDisplay"
+msgstr "Duplicating my display"
+
+msgctxt "Windows Settings"
+msgid "DuringTheseHours"
+msgstr "During these hours"
+
+msgctxt "Windows Settings"
+msgid "EaseOfAccessCenter"
+msgstr "Ease of access center"
+
+msgctxt "Windows Settings"
+msgid "EditEnvironmentVariables"
+msgstr "Edit environment variables"
+
+msgctxt "Windows Settings"
+msgid "EditSystemEnvironmentVariables"
+msgstr "Edit the system environment variables"
+
+msgctxt "Windows Settings"
+msgid "EditUserEnvironmentVariables"
+msgstr "Edit environment variables for your account"
+
+msgctxt "Windows Settings"
+msgid "Edition"
+msgstr "Edition"
+
+msgctxt "Windows Settings"
+msgid "Email"
+msgstr "Email"
+
+msgctxt "Windows Settings"
+msgid "EmailAndAppAccounts"
+msgstr "Email and app accounts"
+
+msgctxt "Windows Settings"
+msgid "Encryption"
+msgstr "Encryption"
+
+msgctxt "Windows Settings"
+msgid "EnvVars"
+msgstr "Env vars"
+
+msgctxt "Windows Settings"
+msgid "Environment"
+msgstr "Environment"
+
+msgctxt "Windows Settings"
+msgid "Ethernet"
+msgstr "Ethernet"
+
+msgctxt "Windows Settings"
+msgid "EventViewer"
+msgstr "Event Viewer"
+
+msgctxt "Windows Settings"
+msgid "ExploitProtection"
+msgstr "Exploit Protection"
+
+msgctxt "Windows Settings"
+msgid "Extras"
+msgstr "Extras"
+
+msgctxt "Windows Settings"
+msgid "EyeControl"
+msgstr "Eye control"
+
+msgctxt "Windows Settings"
+msgid "EyeTracker"
+msgstr "Eye tracker"
+
+msgctxt "Windows Settings"
+msgid "FamilyAndOtherPeople"
+msgstr "Family and other people"
+
+msgctxt "Windows Settings"
+msgid "FeedbackAndDiagnostics"
+msgstr "Feedback and diagnostics"
+
+msgctxt "Windows Settings"
+msgid "FileSystem"
+msgstr "File system"
+
+msgctxt "Windows Settings"
+msgid "FindFast"
+msgstr "FindFast"
+
+msgctxt "Windows Settings"
+msgid "FindMyDevice"
+msgstr "Find My Device"
+
+msgctxt "Windows Settings"
+msgid "Firewall"
+msgstr "Firewall"
+
+msgctxt "Windows Settings"
+msgid "Firewall.cpl"
+msgstr "Firewall.cpl"
+
+msgctxt "Windows Settings"
+msgid "FocusAssistQuietHours"
+msgstr "Focus assist - Quiet hours"
+
+msgctxt "Windows Settings"
+msgid "FocusAssistQuietMoments"
+msgstr "Focus assist - Quiet moments"
+
+msgctxt "Windows Settings"
+msgid "FolderOptions"
+msgstr "Folder options"
+
+msgctxt "Windows Settings"
+msgid "Fonts"
+msgstr "Fonts"
+
+msgctxt "Windows Settings"
+msgid "ForDevelopers"
+msgstr "For developers"
+
+msgctxt "Windows Settings"
+msgid "GPT"
+msgstr "GPT"
+
+msgctxt "Windows Settings"
+msgid "GameBar"
+msgstr "Game bar"
+
+msgctxt "Windows Settings"
+msgid "GameControllers"
+msgstr "Game controllers"
+
+msgctxt "Windows Settings"
+msgid "GameDvr"
+msgstr "Game DVR"
+
+msgctxt "Windows Settings"
+msgid "GameMode"
+msgstr "Game Mode"
+
+msgctxt "Windows Settings"
+msgid "Gateway"
+msgstr "Gateway"
+
+msgctxt "Windows Settings"
+msgid "General"
+msgstr "General"
+
+msgctxt "Windows Settings"
+msgid "GetPrograms"
+msgstr "Get programs"
+
+msgctxt "Windows Settings"
+msgid "GettingStarted"
+msgstr "Getting started"
+
+msgctxt "Windows Settings"
+msgid "Glance"
+msgstr "Glance"
+
+msgctxt "Windows Settings"
+msgid "GraphicsSettings"
+msgstr "Graphics settings"
+
+msgctxt "Windows Settings"
+msgid "Grayscale"
+msgstr "Grayscale"
+
+msgctxt "Windows Settings"
+msgid "GreenWeek"
+msgstr "Green week"
+
+msgctxt "Windows Settings"
+msgid "GroupPolicy"
+msgstr "Group Policy"
+
+msgctxt "Windows Settings"
+msgid "HeadsetDisplay"
+msgstr "Headset display"
+
+msgctxt "Windows Settings"
+msgid "HighContrast"
+msgstr "High contrast"
+
+msgctxt "Windows Settings"
+msgid "HolographicAudio"
+msgstr "Holographic audio"
+
+msgctxt "Windows Settings"
+msgid "HolographicEnvironment"
+msgstr "Holographic Environment"
+
+msgctxt "Windows Settings"
+msgid "HolographicHeadset"
+msgstr "Holographic Headset"
+
+msgctxt "Windows Settings"
+msgid "HolographicManagement"
+msgstr "Holographic Management"
+
+msgctxt "Windows Settings"
+msgid "HomeGroup"
+msgstr "Home group"
+
+msgctxt "Windows Settings"
+msgid "Id"
+msgstr "ID"
+
+msgctxt "Windows Settings"
+msgid "Image"
+msgstr "Image"
+
+msgctxt "Windows Settings"
+msgid "IndexingOptions"
+msgstr "Indexing options"
+
+msgctxt "Windows Settings"
+msgid "Infrared"
+msgstr "Infrared"
+
+msgctxt "Windows Settings"
+msgid "InkingAndTyping"
+msgstr "Inking and typing"
+
+msgctxt "Windows Settings"
+msgid "InternetOptions"
+msgstr "Internet options"
+
+msgctxt "Windows Settings"
+msgid "InvertedColors"
+msgstr "Inverted colors"
+
+msgctxt "Windows Settings"
+msgid "Ip"
+msgstr "IP"
+
+msgctxt "Windows Settings"
+msgid "IpSecurityMonitor"
+msgstr "IP Security Monitor"
+
+msgctxt "Windows Settings"
+msgid "IpSecurityPoliciesOnLocalComputer"
+msgstr "IP Security Policies on Local Computer"
+
+msgctxt "Windows Settings"
+msgid "IsolatedBrowsing"
+msgstr "Isolated Browsing"
+
+msgctxt "Windows Settings"
+msgid "JapanImeSettings"
+msgstr "Japan IME settings"
+
+msgctxt "Windows Settings"
+msgid "JoystickProperties"
+msgstr "Joystick properties"
+
+msgctxt "Windows Settings"
+msgid "Keyboard"
+msgstr "Keyboard"
+
+msgctxt "Windows Settings"
+msgid "Keypad"
+msgstr "Keypad"
+
+msgctxt "Windows Settings"
+msgid "Keys"
+msgstr "Keys"
+
+msgctxt "Windows Settings"
+msgid "LightColor"
+msgstr "Light color"
+
+msgctxt "Windows Settings"
+msgid "LightMode"
+msgstr "Light mode"
+
+msgctxt "Windows Settings"
+msgid "LocalGroupPolicy"
+msgstr "Local Computer Policy"
+
+msgctxt "Windows Settings"
+msgid "LocalUsersAndGroups"
+msgstr "Local Users and Groups"
+
+msgctxt "Windows Settings"
+msgid "Location"
+msgstr "Location"
+
+msgctxt "Windows Settings"
+msgid "LockScreen"
+msgstr "Lock screen"
+
+msgctxt "Windows Settings"
+msgid "MBR"
+msgstr "MBR"
+
+msgctxt "Windows Settings"
+msgid "MMC_azman"
+msgstr "azman.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_certlm"
+msgstr "certlm.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_certmgr"
+msgstr "certmgr.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_comexp"
+msgstr "comexp.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_compmgmt"
+msgstr "compmgmt.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_devmgmt"
+msgstr "devmgmt.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_diskmgmt"
+msgstr "diskmgmt.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_eventvwr"
+msgstr "eventvwr.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_fsmgmt"
+msgstr "fsmgmt.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_gpedit"
+msgstr "gpedit.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_lusrmgr"
+msgstr "lusrmgr.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_mmcexe"
+msgstr "mmc.exe"
+
+msgctxt "Windows Settings"
+msgid "MMC_perfmon"
+msgstr "perfmon.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_printmanagement"
+msgstr "printmanagement.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_rsop"
+msgstr "rsop.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_secpol"
+msgstr "secpol.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_services"
+msgstr "services.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_taskschd"
+msgstr "taskschd.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_tpm"
+msgstr "tpm.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_wf"
+msgstr "WF.msc"
+
+msgctxt "Windows Settings"
+msgid "MMC_wmimgmt"
+msgstr "WmiMgmt.msc"
+
+msgctxt "Windows Settings"
+msgid "Magnifier"
+msgstr "Magnifier"
+
+msgctxt "Windows Settings"
+msgid "MailMicrosoftExchangeOrWindowsMessaging"
+msgstr "Mail - Microsoft Exchange or Windows Messaging"
+
+msgctxt "Windows Settings"
+msgid "ManageDevices"
+msgstr "Manage devices"
+
+msgctxt "Windows Settings"
+msgid "ManageKnownNetworks"
+msgstr "Manage known networks"
+
+msgctxt "Windows Settings"
+msgid "ManageOptionalFeatures"
+msgstr "Manage optional features"
+
+msgctxt "Windows Settings"
+msgid "Messaging"
+msgstr "Messaging"
+
+msgctxt "Windows Settings"
+msgid "MeteredConnection"
+msgstr "Metered connection"
+
+msgctxt "Windows Settings"
+msgid "Microphone"
+msgstr "Microphone"
+
+msgctxt "Windows Settings"
+msgid "MicrosoftMailPostOffice"
+msgstr "Microsoft Mail Post Office"
+
+msgctxt "Windows Settings"
+msgid "MobileDevices"
+msgstr "Mobile devices"
+
+msgctxt "Windows Settings"
+msgid "MobileHotspot"
+msgstr "Mobile hotspot"
+
+msgctxt "Windows Settings"
+msgid "Mono"
+msgstr "Mono"
+
+msgctxt "Windows Settings"
+msgid "MoreDetails"
+msgstr "More details"
+
+msgctxt "Windows Settings"
+msgid "Motion"
+msgstr "Motion"
+
+msgctxt "Windows Settings"
+msgid "Mouse"
+msgstr "Mouse"
+
+msgctxt "Windows Settings"
+msgid "MouseAndTouchpad"
+msgstr "Mouse and touchpad"
+
+msgctxt "Windows Settings"
+msgid "MouseFontsKeyboardAndPrintersProperties"
+msgstr "Mouse, Fonts, Keyboard, and Printers properties"
+
+msgctxt "Windows Settings"
+msgid "MousePointer"
+msgstr "Mouse pointer"
+
+msgctxt "Windows Settings"
+msgid "MultimediaProperties"
+msgstr "Multimedia properties"
+
+msgctxt "Windows Settings"
+msgid "Multitasking"
+msgstr "Multitasking"
+
+msgctxt "Windows Settings"
+msgid "NFC"
+msgstr "NFC"
+
+msgctxt "Windows Settings"
+msgid "NFCTransactions"
+msgstr "NFC Transactions"
+
+msgctxt "Windows Settings"
+msgid "Narrator"
+msgstr "Narrator"
+
+msgctxt "Windows Settings"
+msgid "NavigationBar"
+msgstr "Navigation bar"
+
+msgctxt "Windows Settings"
+msgid "NearbyShareSettings"
+msgstr "Nearby sharing settings"
+
+msgctxt "Windows Settings"
+msgid "Network"
+msgstr "Network"
+
+msgctxt "Windows Settings"
+msgid "NetworkAndSharingCenter"
+msgstr "Network and sharing center"
+
+msgctxt "Windows Settings"
+msgid "NetworkConnection"
+msgstr "Network connection"
+
+msgctxt "Windows Settings"
+msgid "NetworkProperties"
+msgstr "Network properties"
+
+msgctxt "Windows Settings"
+msgid "NetworkSessions"
+msgstr "Network sessions"
+
+msgctxt "Windows Settings"
+msgid "NetworkSetupWizard"
+msgstr "Network Setup Wizard"
+
+msgctxt "Windows Settings"
+msgid "NetworkStatus"
+msgstr "Network status"
+
+msgctxt "Windows Settings"
+msgid "NightLight"
+msgstr "Night light"
+
+msgctxt "Windows Settings"
+msgid "NightLightSettings"
+msgstr "Night light settings"
+
+msgctxt "Windows Settings"
+msgid "NoteAddYourPhone"
+msgstr "Only available when you have connected a mobile device to your device."
+
+msgctxt "Windows Settings"
+msgid "NoteAdvancedGraphics"
+msgstr "Only available on devices that support advanced graphics options."
+
+msgctxt "Windows Settings"
+msgid "NoteBattery"
+msgstr "Only available on devices that have a battery, such as a tablet."
+
+msgctxt "Windows Settings"
+msgid "NoteDeprecated17763"
+msgstr "Deprecated in Windows 10, version 1809 (build 17763) and later."
+
+msgctxt "Windows Settings"
+msgid "NoteDialPaired"
+msgstr "Only available if Dial is paired."
+
+msgctxt "Windows Settings"
+msgid "NoteDirectAccess"
+msgstr "Only available if DirectAccess is enabled."
+
+msgctxt "Windows Settings"
+msgid "NoteDisplayGraphics"
+msgstr "Only available on devices that support advanced display options."
+
+msgctxt "Windows Settings"
+msgid "NoteEditingRequireAdminPrivileges"
+msgstr "Editing this setting may require administrative privileges."
+
+msgctxt "Windows Settings"
+msgid "NoteEnrolledWIP"
+msgstr "Only present if user is enrolled in WIP."
+
+msgctxt "Windows Settings"
+msgid "NoteEyetrackerHardware"
+msgstr "Requires eyetracker hardware."
+
+msgctxt "Windows Settings"
+msgid "NoteImeJapan"
+msgstr "Available if the Microsoft Japan input method editor is installed."
+
+msgctxt "Windows Settings"
+msgid "NoteImePinyin"
+msgstr "Available if the Microsoft Pinyin input method editor is installed."
+
+msgctxt "Windows Settings"
+msgid "NoteImeWubi"
+msgstr "Available if the Microsoft Wubi input method editor is installed."
+
+msgctxt "Windows Settings"
+msgid "NoteMixedReality"
+msgstr "Only available if the Mixed Reality Portal app is installed."
+
+msgctxt "Windows Settings"
+msgid "NoteMobileProvisioning"
+msgstr "Only available on mobile and if the enterprise has deployed a provisioning package."
+
+msgctxt "Windows Settings"
+msgid "NoteNoMscFileExist"
+msgstr "You have to add this snap-in manually."
+
+msgctxt "Windows Settings"
+msgid "NoteSince18362"
+msgstr "Added in Windows 10, version 1903 (build 18362)."
+
+msgctxt "Windows Settings"
+msgid "NoteSince19041"
+msgstr "Added in Windows 10, version 2004 (build 19041)."
+
+msgctxt "Windows Settings"
+msgid "NoteThirdParty"
+msgstr "Only available if \"settings apps\" are installed, for example, by a 3rd party."
+
+msgctxt "Windows Settings"
+msgid "NoteTouchpad"
+msgstr "Only available if touchpad hardware is present."
+
+msgctxt "Windows Settings"
+msgid "NoteWiFiAdapter"
+msgstr "Only available if the device has a Wi-Fi adapter."
+
+msgctxt "Windows Settings"
+msgid "NoteWindowsAnywhere"
+msgstr "Device must be Windows Anywhere-capable."
+
+msgctxt "Windows Settings"
+msgid "NoteWorkplaceProvisioning"
+msgstr "Only available if enterprise has deployed a provisioning package."
+
+msgctxt "Windows Settings"
+msgid "Notifications"
+msgstr "Notifications"
+
+msgctxt "Windows Settings"
+msgid "NotificationsAndActions"
+msgstr "Notifications and actions"
+
+msgctxt "Windows Settings"
+msgid "NumLock"
+msgstr "Num Lock"
+
+msgctxt "Windows Settings"
+msgid "OdbcDataSourceAdministrator32Bit"
+msgstr "ODBC Data Source Administrator (32-bit)"
+
+msgctxt "Windows Settings"
+msgid "OdbcDataSourceAdministrator64Bit"
+msgstr "ODBC Data Source Administrator (64-bit)"
+
+msgctxt "Windows Settings"
+msgid "OfflineFiles"
+msgstr "Offline files"
+
+msgctxt "Windows Settings"
+msgid "OfflineMaps"
+msgstr "Offline Maps"
+
+msgctxt "Windows Settings"
+msgid "OfflineMapsDownloadMaps"
+msgstr "Offline Maps - Download maps"
+
+msgctxt "Windows Settings"
+msgid "OnScreen"
+msgstr "On-Screen"
+
+msgctxt "Windows Settings"
+msgid "OpenControlPanel"
+msgstr "Open Control Panel"
+
+msgctxt "Windows Settings"
+msgid "OpenMMC"
+msgstr "Open Microsoft Management Console"
+
+msgctxt "Windows Settings"
+msgid "OpenSettingsApp"
+msgstr "Open Settings app"
+
+msgctxt "Windows Settings"
+msgid "Os"
+msgstr "OS"
+
+msgctxt "Windows Settings"
+msgid "OtherDevices"
+msgstr "Other devices"
+
+msgctxt "Windows Settings"
+msgid "OtherOptions"
+msgstr "Other options"
+
+msgctxt "Windows Settings"
+msgid "OtherUsers"
+msgstr "Other users"
+
+msgctxt "Windows Settings"
+msgid "ParentalControls"
+msgstr "Parental controls"
+
+msgctxt "Windows Settings"
+msgid "Password"
+msgstr "Password"
+
+msgctxt "Windows Settings"
+msgid "PasswordProperties"
+msgstr "Password properties"
+
+msgctxt "Windows Settings"
+msgid "PenAndInputDevices"
+msgstr "Pen and input devices"
+
+msgctxt "Windows Settings"
+msgid "PenAndTouch"
+msgstr "Pen and touch"
+
+msgctxt "Windows Settings"
+msgid "PenAndWindowsInk"
+msgstr "Pen and Windows Ink"
+
+msgctxt "Windows Settings"
+msgid "PeopleNearMe"
+msgstr "People Near Me"
+
+msgctxt "Windows Settings"
+msgid "PerformanceInformationAndTools"
+msgstr "Performance information and tools"
+
+msgctxt "Windows Settings"
+msgid "PerformanceMonitor"
+msgstr "Performance Monitor"
+
+msgctxt "Windows Settings"
+msgid "PermissionsAndHistory"
+msgstr "Permissions and history"
+
+msgctxt "Windows Settings"
+msgid "PersonalizationCategory"
+msgstr "Personalization (category)"
+
+msgctxt "Windows Settings"
+msgid "Phone"
+msgstr "Phone"
+
+msgctxt "Windows Settings"
+msgid "PhoneAndModem"
+msgstr "Phone and modem"
+
+msgctxt "Windows Settings"
+msgid "PhoneAndModemOptions"
+msgstr "Phone and modem - Options"
+
+msgctxt "Windows Settings"
+msgid "PhoneCalls"
+msgstr "Phone calls"
+
+msgctxt "Windows Settings"
+msgid "PhoneDefaultApps"
+msgstr "Phone - Default apps"
+
+msgctxt "Windows Settings"
+msgid "PhoneLink"
+msgstr "Phone Link"
+
+msgctxt "Windows Settings"
+msgid "Picture"
+msgstr "Picture"
+
+msgctxt "Windows Settings"
+msgid "Pictures"
+msgstr "Pictures"
+
+msgctxt "Windows Settings"
+msgid "PinyinImeSettings"
+msgstr "Pinyin IME settings"
+
+msgctxt "Windows Settings"
+msgid "PinyinImeSettingsDomainLexicon"
+msgstr "Pinyin IME settings - domain lexicon"
+
+msgctxt "Windows Settings"
+msgid "PinyinImeSettingsKeyConfiguration"
+msgstr "Pinyin IME settings - Key configuration"
+
+msgctxt "Windows Settings"
+msgid "PinyinImeSettingsUdp"
+msgstr "Pinyin IME settings - UDP"
+
+msgctxt "Windows Settings"
+msgid "PlayingGameFullScreen"
+msgstr "Playing a game full screen"
+
+msgctxt "Windows Settings"
+msgid "PnpDevice"
+msgstr "PNP Device"
+
+msgctxt "Windows Settings"
+msgid "PowerAndSleep"
+msgstr "Power and sleep"
+
+msgctxt "Windows Settings"
+msgid "PowerOptions"
+msgstr "Power options"
+
+msgctxt "Windows Settings"
+msgid "Presentation"
+msgstr "Presentation"
+
+msgctxt "Windows Settings"
+msgid "PrintManagement"
+msgstr "Print Management"
+
+msgctxt "Windows Settings"
+msgid "PrintScreen"
+msgstr "Print screen"
+
+msgctxt "Windows Settings"
+msgid "PrinterSpooler"
+msgstr "Printer Spooler"
+
+msgctxt "Windows Settings"
+msgid "Printers"
+msgstr "Printers"
+
+msgctxt "Windows Settings"
+msgid "PrintersAndScanners"
+msgstr "Printers and scanners"
+
+msgctxt "Windows Settings"
+msgid "ProblemReportsAndSolutions"
+msgstr "Problem reports and solutions"
+
+msgctxt "Windows Settings"
+msgid "Processor"
+msgstr "Processor"
+
+msgctxt "Windows Settings"
+msgid "ProgramsAndFeatures"
+msgstr "Programs and features"
+
+msgctxt "Windows Settings"
+msgid "ProjectingToThisPc"
+msgstr "Projecting to this PC"
+
+msgctxt "Windows Settings"
+msgid "Provisioning"
+msgstr "Provisioning"
+
+msgctxt "Windows Settings"
+msgid "Proximity"
+msgstr "Proximity"
+
+msgctxt "Windows Settings"
+msgid "Proxy"
+msgstr "Proxy"
+
+msgctxt "Windows Settings"
+msgid "Quickime"
+msgstr "Quickime"
+
+msgctxt "Windows Settings"
+msgid "QuietMomentsGame"
+msgstr "Quiet moments game"
+
+msgctxt "Windows Settings"
+msgid "Radios"
+msgstr "Radios"
+
+msgctxt "Windows Settings"
+msgid "Ram"
+msgstr "RAM"
+
+msgctxt "Windows Settings"
+msgid "Recognition"
+msgstr "Recognition"
+
+msgctxt "Windows Settings"
+msgid "Recovery"
+msgstr "Recovery"
+
+msgctxt "Windows Settings"
+msgid "RedEye"
+msgstr "Red eye"
+
+msgctxt "Windows Settings"
+msgid "RedGreen"
+msgstr "Red-green"
+
+msgctxt "Windows Settings"
+msgid "RedWeek"
+msgstr "Red week"
+
+msgctxt "Windows Settings"
+msgid "Region"
+msgstr "Region"
+
+msgctxt "Windows Settings"
+msgid "RegionAndLanguage"
+msgstr "Region and language"
+
+msgctxt "Windows Settings"
+msgid "RegionFormatting"
+msgstr "Region formatting"
+
+msgctxt "Windows Settings"
+msgid "RegionalLanguage"
+msgstr "Regional language"
+
+msgctxt "Windows Settings"
+msgid "RegionalSettingsProperties"
+msgstr "Regional settings properties"
+
+msgctxt "Windows Settings"
+msgid "RemoteAppAndDesktopConnections"
+msgstr "RemoteApp and desktop connections"
+
+msgctxt "Windows Settings"
+msgid "RemoteDesktop"
+msgstr "Remote Desktop"
+
+msgctxt "Windows Settings"
+msgid "RemovePrograms"
+msgstr "Remove programs"
+
+msgctxt "Windows Settings"
+msgid "RepairPrograms"
+msgstr "Repair programs"
+
+msgctxt "Windows Settings"
+msgid "ResultantSetOfPolicy"
+msgstr "Resultant Set of Policy"
+
+msgctxt "Windows Settings"
+msgid "SMB"
+msgstr "SMB"
+
+msgctxt "Windows Settings"
+msgid "ScannersAndCameras"
+msgstr "Scanners and cameras"
+
+msgctxt "Windows Settings"
+msgid "Scheduled"
+msgstr "Scheduled"
+
+msgctxt "Windows Settings"
+msgid "ScheduledTasks"
+msgstr "Scheduled tasks"
+
+msgctxt "Windows Settings"
+msgid "ScreenRotation"
+msgstr "Screen rotation"
+
+msgctxt "Windows Settings"
+msgid "ScreenSaver"
+msgstr "Screen saver"
+
+msgctxt "Windows Settings"
+msgid "ScrollBars"
+msgstr "Scroll bars"
+
+msgctxt "Windows Settings"
+msgid "ScrollLock"
+msgstr "Scroll Lock"
+
+msgctxt "Windows Settings"
+msgid "Sdns"
+msgstr "SDNS"
+
+msgctxt "Windows Settings"
+msgid "SecureDNS"
+msgstr "SecureDNS"
+
+msgctxt "Windows Settings"
+msgid "SecurityCenter"
+msgstr "Security Center"
+
+msgctxt "Windows Settings"
+msgid "SecurityConfigurationAndAnalysis"
+msgstr "Security Configuration and Analysis"
+
+msgctxt "Windows Settings"
+msgid "SecurityProcessor"
+msgstr "Security Processor"
+
+msgctxt "Windows Settings"
+msgid "SecurityTemplates"
+msgstr "Security Templates"
+
+msgctxt "Windows Settings"
+msgid "ServicesSnapIn"
+msgstr "Services"
+
+msgctxt "Windows Settings"
+msgid "SessionCleanup"
+msgstr "Session cleanup"
+
+msgctxt "Windows Settings"
+msgid "SetUpKiosk"
+msgstr "Set up a kiosk"
+
+msgctxt "Windows Settings"
+msgid "SettingsApp"
+msgstr "Settings app"
+
+msgctxt "Windows Settings"
+msgid "ShareAcrossDevices"
+msgstr "Share across devices"
+
+msgctxt "Windows Settings"
+msgid "SharedExperiences"
+msgstr "Shared experience settings"
+
+msgctxt "Windows Settings"
+msgid "SharedFolders"
+msgstr "Shared Folders"
+
+msgctxt "Windows Settings"
+msgid "ShortNameWiFi"
+msgstr "wifi"
+
+msgctxt "Windows Settings"
+msgid "Shortcuts"
+msgstr "Shortcuts"
+
+msgctxt "Windows Settings"
+msgid "SignInOptions"
+msgstr "Sign-in options"
+
+msgctxt "Windows Settings"
+msgid "SignInOptionsDynamicLock"
+msgstr "Sign-in options - Dynamic lock"
+
+msgctxt "Windows Settings"
+msgid "Size"
+msgstr "Size"
+
+msgctxt "Windows Settings"
+msgid "Sound"
+msgstr "Sound"
+
+msgctxt "Windows Settings"
+msgid "Speech"
+msgstr "Speech"
+
+msgctxt "Windows Settings"
+msgid "SpeechRecognition"
+msgstr "Speech recognition"
+
+msgctxt "Windows Settings"
+msgid "SpeechTyping"
+msgstr "Speech typing"
+
+msgctxt "Windows Settings"
+msgid "Start"
+msgstr "Start"
+
+msgctxt "Windows Settings"
+msgid "StartPlaces"
+msgstr "Start places"
+
+msgctxt "Windows Settings"
+msgid "StartupApps"
+msgstr "Startup apps"
+
+msgctxt "Windows Settings"
+msgid "Storage"
+msgstr "Storage"
+
+msgctxt "Windows Settings"
+msgid "StoragePolicies"
+msgstr "Storage policies"
+
+msgctxt "Windows Settings"
+msgid "StorageSense"
+msgstr "Storage Sense"
+
+msgctxt "Windows Settings"
+msgid "SyncCenter"
+msgstr "Sync center"
+
+msgctxt "Windows Settings"
+msgid "SyncYourSettings"
+msgstr "Sync your settings"
+
+msgctxt "Windows Settings"
+msgid "System"
+msgstr "System"
+
+msgctxt "Windows Settings"
+msgid "SystemEnvVars"
+msgstr "System env vars"
+
+msgctxt "Windows Settings"
+msgid "SystemPropertiesAndAddNewHardwareWizard"
+msgstr "System properties and Add New Hardware wizard"
+
+msgctxt "Windows Settings"
+msgid "SystemTools"
+msgstr "System Tools"
+
+msgctxt "Windows Settings"
+msgid "SystemVariables"
+msgstr "System variables"
+
+msgctxt "Windows Settings"
+msgid "Tab"
+msgstr "Tab"
+
+msgctxt "Windows Settings"
+msgid "TabletMode"
+msgstr "Tablet mode"
+
+msgctxt "Windows Settings"
+msgid "TabletPC.cpl"
+msgstr "TabletPC.cpl"
+
+msgctxt "Windows Settings"
+msgid "TabletPcSettings"
+msgstr "Tablet PC settings"
+
+msgctxt "Windows Settings"
+msgid "Talk"
+msgstr "Talk"
+
+msgctxt "Windows Settings"
+msgid "TalkToCortana"
+msgstr "Talk to Cortana"
+
+msgctxt "Windows Settings"
+msgid "TaskScheduler"
+msgstr "Task Scheduler"
+
+msgctxt "Windows Settings"
+msgid "Taskbar"
+msgstr "Taskbar"
+
+msgctxt "Windows Settings"
+msgid "TaskbarColor"
+msgstr "Taskbar color"
+
+msgctxt "Windows Settings"
+msgid "Tasks"
+msgstr "Tasks"
+
+msgctxt "Windows Settings"
+msgid "TeamConferencing"
+msgstr "Team Conferencing"
+
+msgctxt "Windows Settings"
+msgid "TeamDeviceManagement"
+msgstr "Team device management"
+
+msgctxt "Windows Settings"
+msgid "TextToSpeech"
+msgstr "Text to speech"
+
+msgctxt "Windows Settings"
+msgid "Themes"
+msgstr "Themes"
+
+msgctxt "Windows Settings"
+msgid "Timeline"
+msgstr "Timeline"
+
+msgctxt "Windows Settings"
+msgid "Timeout"
+msgstr "Timeout"
+
+msgctxt "Windows Settings"
+msgid "Touch"
+msgstr "Touch"
+
+msgctxt "Windows Settings"
+msgid "TouchFeedback"
+msgstr "Touch feedback"
+
+msgctxt "Windows Settings"
+msgid "Touchpad"
+msgstr "Touchpad"
+
+msgctxt "Windows Settings"
+msgid "TpmManagement"
+msgstr "TPM Management"
+
+msgctxt "Windows Settings"
+msgid "Transparency"
+msgstr "Transparency"
+
+msgctxt "Windows Settings"
+msgid "Troubleshoot"
+msgstr "Troubleshoot"
+
+msgctxt "Windows Settings"
+msgid "TruePlay"
+msgstr "TruePlay"
+
+msgctxt "Windows Settings"
+msgid "TurnScreenSaverOnOff"
+msgstr "Turn screen saver on or off"
+
+msgctxt "Windows Settings"
+msgid "Typing"
+msgstr "Typing"
+
+msgctxt "Windows Settings"
+msgid "UAC"
+msgstr "UAC"
+
+msgctxt "Windows Settings"
+msgid "Uninstall"
+msgstr "Uninstall"
+
+msgctxt "Windows Settings"
+msgid "UninstallPrograms"
+msgstr "Uninstall programs"
+
+msgctxt "Windows Settings"
+msgid "Usb"
+msgstr "USB"
+
+msgctxt "Windows Settings"
+msgid "UserAccountControlSettings.exe"
+msgstr "UserAccountControlSettings.exe"
+
+msgctxt "Windows Settings"
+msgid "UserAccounts"
+msgstr "User accounts"
+
+msgctxt "Windows Settings"
+msgid "UserEnvVars"
+msgstr "User env vars"
+
+msgctxt "Windows Settings"
+msgid "UserEnvironmentVariables"
+msgstr "User environment variables"
+
+msgctxt "Windows Settings"
+msgid "UserVariables"
+msgstr "User variables"
+
+msgctxt "Windows Settings"
+msgid "Version"
+msgstr "Version"
+
+msgctxt "Windows Settings"
+msgid "VideoPlayback"
+msgstr "Video playback"
+
+msgctxt "Windows Settings"
+msgid "Videos"
+msgstr "Videos"
+
+msgctxt "Windows Settings"
+msgid "VirtualDesktops"
+msgstr "Virtual Desktops"
+
+msgctxt "Windows Settings"
+msgid "Virus"
+msgstr "Virus"
+
+msgctxt "Windows Settings"
+msgid "VoiceActivation"
+msgstr "Voice activation"
+
+msgctxt "Windows Settings"
+msgid "Volume"
+msgstr "Volume"
+
+msgctxt "Windows Settings"
+msgid "Vpn"
+msgstr "VPN"
+
+msgctxt "Windows Settings"
+msgid "Wallpaper"
+msgstr "Wallpaper"
+
+msgctxt "Windows Settings"
+msgid "WarmerColor"
+msgstr "Warmer color"
+
+msgctxt "Windows Settings"
+msgid "WelcomeCenter"
+msgstr "Welcome center"
+
+msgctxt "Windows Settings"
+msgid "WelcomeScreen"
+msgstr "Welcome screen"
+
+msgctxt "Windows Settings"
+msgid "Wheel"
+msgstr "Wheel"
+
+msgctxt "Windows Settings"
+msgid "WiFi"
+msgstr "Wi-Fi"
+
+msgctxt "Windows Settings"
+msgid "WiFiCalling"
+msgstr "Wi-Fi Calling"
+
+msgctxt "Windows Settings"
+msgid "WiFiSettings"
+msgstr "Wi-Fi settings"
+
+msgctxt "Windows Settings"
+msgid "WindowBorder"
+msgstr "Window border"
+
+msgctxt "Windows Settings"
+msgid "WindowsAnytimeUpgrade"
+msgstr "Windows Anytime Upgrade"
+
+msgctxt "Windows Settings"
+msgid "WindowsAnywhere"
+msgstr "Windows Anywhere"
+
+msgctxt "Windows Settings"
+msgid "WindowsCardSpace"
+msgstr "Windows CardSpace"
+
+msgctxt "Windows Settings"
+msgid "WindowsDefender"
+msgstr "Windows Defender"
+
+msgctxt "Windows Settings"
+msgid "WindowsFirewall"
+msgstr "Windows Firewall"
+
+msgctxt "Windows Settings"
+msgid "WindowsHelloSetupFace"
+msgstr "Windows Hello setup - Face"
+
+msgctxt "Windows Settings"
+msgid "WindowsHelloSetupFingerprint"
+msgstr "Windows Hello setup - Fingerprint"
+
+msgctxt "Windows Settings"
+msgid "WindowsInsiderProgram"
+msgstr "Windows Insider Program"
+
+msgctxt "Windows Settings"
+msgid "WindowsManagementInstrumentation"
+msgstr "Windows Management Instrumentation"
+
+msgctxt "Windows Settings"
+msgid "WindowsMobilityCenter"
+msgstr "Windows Mobility Center"
+
+msgctxt "Windows Settings"
+msgid "WindowsSearch"
+msgstr "Windows search"
+
+msgctxt "Windows Settings"
+msgid "WindowsSearchSettings"
+msgstr "Windows search settings"
+
+msgctxt "Windows Settings"
+msgid "WindowsSecurity"
+msgstr "Windows Security"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdate"
+msgstr "Windows Update"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdateAdvancedOptions"
+msgstr "Windows Update - Advanced options"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdateCheckForUpdates"
+msgstr "Windows Update - Check for updates"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdateRestartOptions"
+msgstr "Windows Update - Restart options"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdateViewOptionalUpdates"
+msgstr "Windows Update - View optional updates"
+
+msgctxt "Windows Settings"
+msgid "WindowsUpdateViewUpdateHistory"
+msgstr "Windows Update - View update history"
+
+msgctxt "Windows Settings"
+msgid "Wireless"
+msgstr "Wireless"
+
+msgctxt "Windows Settings"
+msgid "WmiControl"
+msgstr "WMI Control"
+
+msgctxt "Windows Settings"
+msgid "Workplace"
+msgstr "Workplace"
+
+msgctxt "Windows Settings"
+msgid "WorkplaceProvisioning"
+msgstr "Workplace provisioning"
+
+msgctxt "Windows Settings"
+msgid "WubiImeSettings"
+msgstr "Wubi IME settings"
+
+msgctxt "Windows Settings"
+msgid "WubiImeSettingsUdp"
+msgstr "Wubi IME settings - UDP"
+
+msgctxt "Windows Settings"
+msgid "XboxNetworking"
+msgstr "Xbox Networking"
+
+msgctxt "Windows Settings"
+msgid "YourInfo"
+msgstr "Your info"
+
+msgctxt "Windows Settings"
+msgid "Zoom"
+msgstr "Zoom"
+
+msgctxt "Windows Settings"
+msgid "access.cpl"
+msgstr "access.cpl"
+
+msgctxt "Windows Settings"
+msgid "appwiz.cpl"
+msgstr "appwiz.cpl"
+
+msgctxt "Windows Settings"
+msgid "bpmf"
+msgstr "bpmf"
+
+msgctxt "Windows Settings"
+msgid "bthprops.cpl"
+msgstr "bthprops.cpl"
+
+msgctxt "Windows Settings"
+msgid "calling"
+msgstr "calling"
+
+msgctxt "Windows Settings"
+msgid "desk.cpl"
+msgstr "desk.cpl"
+
+msgctxt "Windows Settings"
+msgid "deuteranopia"
+msgstr "deuteranopia"
+
+msgctxt "Windows Settings"
+msgid "findfast.cpl"
+msgstr "findfast.cpl"
+
+msgctxt "Windows Settings"
+msgid "hdwwiz.cpl"
+msgstr "hdwwiz.cpl"
+
+msgctxt "Windows Settings"
+msgid "inetcpl.cpl"
+msgstr "inetcpl.cpl"
+
+msgctxt "Windows Settings"
+msgid "intl.cpl"
+msgstr "intl.cpl"
+
+msgctxt "Windows Settings"
+msgid "irprops.cpl"
+msgstr "irprops.cpl"
+
+msgctxt "Windows Settings"
+msgid "joy.cpl"
+msgstr "joy.cpl"
+
+msgctxt "Windows Settings"
+msgid "jpnime"
+msgstr "jpnime"
+
+msgctxt "Windows Settings"
+msgid "main.cpl"
+msgstr "main.cpl"
+
+msgctxt "Windows Settings"
+msgid "mlcfg32.cpl"
+msgstr "mlcfg32.cpl"
+
+msgctxt "Windows Settings"
+msgid "mmsys.cpl"
+msgstr "mmsys.cpl"
+
+msgctxt "Windows Settings"
+msgid "modem.cpl"
+msgstr "modem.cpl"
+
+msgctxt "Windows Settings"
+msgid "ncpa.cpl"
+msgstr "ncpa.cpl"
+
+msgctxt "Windows Settings"
+msgid "netcpl.cpl"
+msgstr "netcpl.cpl"
+
+msgctxt "Windows Settings"
+msgid "netsetup.cpl"
+msgstr "netsetup.cpl"
+
+msgctxt "Windows Settings"
+msgid "nwc.cpl"
+msgstr "nwc.cpl"
+
+msgctxt "Windows Settings"
+msgid "odbccp32.cpl"
+msgstr "odbccp32.cpl"
+
+msgctxt "Windows Settings"
+msgid "password.cpl"
+msgstr "password.cpl"
+
+msgctxt "Windows Settings"
+msgid "powercfg.cpl"
+msgstr "powercfg.cpl"
+
+msgctxt "Windows Settings"
+msgid "protanopia"
+msgstr "protanopia"
+
+msgctxt "Windows Settings"
+msgid "schedtasks"
+msgstr "schedtasks"
+
+msgctxt "Windows Settings"
+msgid "sticpl.cpl"
+msgstr "sticpl.cpl"
+
+msgctxt "Windows Settings"
+msgid "sysdm.cpl"
+msgstr "sysdm.cpl"
+
+msgctxt "Windows Settings"
+msgid "telephon.cpl"
+msgstr "telephon.cpl"
+
+msgctxt "Windows Settings"
+msgid "themes.cpl"
+msgstr "themes.cpl"
+
+msgctxt "Windows Settings"
+msgid "timedate.cpl"
+msgstr "timedate.cpl"
+
+msgctxt "Windows Settings"
+msgid "tritanopia"
+msgstr "tritanopia"
+
+msgctxt "Windows Settings"
+msgid "wgpocpl.cpl"
+msgstr "wgpocpl.cpl"
+
+msgctxt "Windows Settings"
+msgid "wscui.cpl"
+msgstr "wscui.cpl"

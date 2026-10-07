@@ -548,7 +548,6 @@ impl SearchEngineProvider for IndexedSearchEngine {
         self.indexed
             .lock()
             .map(|items| {
-                let mut powertoys_titles = std::collections::HashSet::new();
                 items
                     .iter()
                     .filter(|item| {
@@ -561,9 +560,11 @@ impl SearchEngineProvider for IndexedSearchEngine {
                     })
                     .cloned()
                     .map(|item| {
-                        if item.category == crate::result::ResultCategory::Settings
-                            || crate::providers::windows_settings::is_powertoys_result(&item)
-                        {
+                        if matches!(
+                            item.category,
+                            crate::result::ResultCategory::Settings
+                                | crate::result::ResultCategory::ControlPanel
+                        ) {
                             crate::providers::windows_settings::localized_result(
                                 item,
                                 &self.language,
@@ -579,15 +580,13 @@ impl SearchEngineProvider for IndexedSearchEngine {
                                 crate::result::ResultCategory::ControlPanel
                                     | crate::result::ResultCategory::Settings
                             )
-                        {
-                            if !crate::providers::windows_settings::matches_settings_path(
+                            && !crate::providers::windows_settings::matches_settings_path(
                                 item, query,
-                            ) {
-                                return false;
-                            }
+                            )
+                        {
+                            return false;
                         }
-                        !crate::providers::windows_settings::is_powertoys_result(item)
-                            || powertoys_titles.insert(item.title.to_ascii_lowercase())
+                        true
                     })
                     .map(|mut item| {
                         if query.contains('>')

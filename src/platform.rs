@@ -9,10 +9,15 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 
+#[cfg(windows)]
+pub(crate) mod shell_id_list;
 #[cfg(not(windows))]
 mod unsupported;
 #[cfg(windows)]
 mod windows;
+
+#[cfg(windows)]
+pub(crate) use windows::SettingsAvailability;
 
 #[cfg(windows)]
 pub(crate) fn windows_build_number() -> Option<u32> {
@@ -539,9 +544,9 @@ pub struct StoreApplication {
 pub struct ControlPanelItem {
     pub identity: String,
     pub title: String,
-    /// Language-independent Control Panel canonical name, kept searchable
-    /// alongside the localized title.
+    /// Canonical applet names or OS-localized task keywords.
     pub aliases: Vec<String>,
+    pub area: Option<String>,
     pub launch_target: std::path::PathBuf,
 }
 

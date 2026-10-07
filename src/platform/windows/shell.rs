@@ -28,12 +28,24 @@ pub(super) fn control_panel_clsid(parsing_name: &str) -> Option<&str> {
 /// it includes modern and third-party applets and gives us the same localized
 /// display names that Explorer shows to the user.
 pub(crate) fn discover_control_panel_items() -> Vec<super::super::ControlPanelItem> {
+    let mut items = enumerate_control_panel_folder("shell:ControlPanelFolder", false);
+    items.extend(enumerate_control_panel_folder(
+        "shell:::{ED7BA470-8E54-465E-825C-99712043E01C}",
+        true,
+    ));
+    items
+}
+
+fn enumerate_control_panel_folder(
+    namespace: &str,
+    tasks: bool,
+) -> Vec<super::super::ControlPanelItem> {
     use windows::Win32::{
         Foundation::HWND,
         System::Com::{CoTaskMemFree, IBindCtx},
         UI::Shell::{
-            IShellFolder, SHGetDesktopFolder, SHParseDisplayName, SHCONTF_FOLDERS,
-            SHCONTF_NONFOLDERS, SHGDN_FORPARSING, SHGDN_NORMAL,
+            ILCombine, ILGetSize, IShellFolder, SHGetDesktopFolder, SHParseDisplayName,
+            SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_FORPARSING, SHGDN_NORMAL,
         },
     };
 
@@ -41,7 +53,7 @@ pub(crate) fn discover_control_panel_items() -> Vec<super::super::ControlPanelIt
         provider_debug("Control Panel skipped: COM initialization failed");
         return Vec::new();
     };
-    let namespace = wide_path(Path::new("shell:ControlPanelFolder"));
+    let namespace = wide_path(Path::new(namespace));
     let mut root_pidl = std::ptr::null_mut();
     if unsafe {
         SHParseDisplayName(
@@ -93,6 +105,28 @@ pub(crate) fn discover_control_panel_items() -> Vec<super::super::ControlPanelIt
             let canonical_name =
                 control_panel_application_name(&folder, root_pidl, child, &parsing)
                     .or_else(|| parsing.as_deref().and_then(control_panel_canonical_name));
+            let task_target = if tasks {
+                let absolute = unsafe { ILCombine(Some(root_pidl), Some(child)) };
+                let target = if absolute.is_null() {
+                    None
+                } else {
+                    let size = unsafe { ILGetSize(Some(absolute)) } as usize;
+                    (size > 2 && size <= 65_536).then(|| {
+                        let bytes =
+                            unsafe { std::slice::from_raw_parts(absolute.cast::<u8>(), size) };
+                        super::super::shell_id_list::encode(bytes)
+                    })
+                };
+                unsafe { CoTaskMemFree(Some(absolute.cast())) };
+                target
+            } else {
+                None
+            };
+            let keywords = if tasks {
+                control_panel_keywords(&folder, root_pidl, child)
+            } else {
+                Vec::new()
+            };
             unsafe { CoTaskMemFree(Some(child.cast())) };
             let (Some(title), Some(parsing)) = (title, parsing) else {
                 continue;
@@ -100,15 +134,28 @@ pub(crate) fn discover_control_panel_items() -> Vec<super::super::ControlPanelIt
             if title.trim().is_empty() || parsing.trim().is_empty() {
                 continue;
             }
-            let target = PathBuf::from(parsing);
+            if tasks && (!parsing.starts_with("::{") || task_target.is_none()) {
+                continue;
+            }
+            let target = task_target.unwrap_or_else(|| PathBuf::from(&parsing));
             provider_debug(&format!(
                 "Control Panel item title={title:?} parsing={target:?} canonical={canonical_name:?}"
             ));
-            let identity = format!("control-panel:{}", target.to_string_lossy().to_lowercase());
+            let prefix = if tasks {
+                "control-panel-task"
+            } else {
+                "control-panel"
+            };
+            let identity = format!("{prefix}:{}", parsing.to_lowercase());
             items.push(super::super::ControlPanelItem {
                 identity,
                 title,
-                aliases: canonical_name.into_iter().collect(),
+                aliases: if tasks {
+                    keywords
+                } else {
+                    canonical_name.clone().into_iter().collect()
+                },
+                area: tasks.then_some(canonical_name).flatten(),
                 launch_target: target,
             });
         }
@@ -123,6 +170,47 @@ pub(crate) fn discover_control_panel_items() -> Vec<super::super::ControlPanelIt
     .unwrap_or_default();
     unsafe { CoTaskMemFree(Some(root_pidl.cast())) };
     result
+}
+
+fn control_panel_keywords(
+    folder: &windows::Win32::UI::Shell::IShellFolder,
+    root: *const windows::Win32::UI::Shell::Common::ITEMIDLIST,
+    child: *const windows::Win32::UI::Shell::Common::ITEMIDLIST,
+) -> Vec<String> {
+    use windows::{
+        core::GUID,
+        Win32::{
+            Foundation::PROPERTYKEY,
+            System::Com::CoTaskMemFree,
+            UI::Shell::{IShellItem2, SHCreateItemWithParent},
+        },
+    };
+    const KEYWORDS: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0xf29f85e0_4ff9_1068_ab91_08002b27b3d9),
+        pid: 5,
+    };
+    let read = || -> Option<String> {
+        let item: IShellItem2 = unsafe { SHCreateItemWithParent(Some(root), folder, child).ok()? };
+        let value = unsafe { item.GetString(&KEYWORDS).ok()? };
+        let text = unsafe { value.to_string().ok() };
+        unsafe { CoTaskMemFree(Some(value.0.cast())) };
+        text
+    };
+    let mut keywords = Vec::new();
+    for keyword in read()
+        .unwrap_or_default()
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if !keywords
+            .iter()
+            .any(|s: &String| s.eq_ignore_ascii_case(keyword))
+        {
+            keywords.push(keyword.to_owned());
+        }
+    }
+    keywords
 }
 
 fn control_panel_application_name(
@@ -178,7 +266,7 @@ fn control_panel_application_name(
         })
 }
 
-fn open_registry_key(hive: HKEY, subkey: &str) -> Option<HKEY> {
+pub(super) fn open_registry_key(hive: HKEY, subkey: &str) -> Option<HKEY> {
     let wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
     let mut key = std::ptr::null_mut();
     let result = unsafe { RegOpenKeyExW(hive, wide.as_ptr(), 0, KEY_READ, &mut key) };
@@ -206,6 +294,19 @@ pub(crate) fn windows_setting_capability_available(capability: &str) -> Option<b
         "touchpad" => system_has_precision_touchpad(),
         "wifi_adapter" => system_has_wifi_adapter(),
         "mixed_reality_portal" => package_is_installed("Microsoft.MixedReality.Portal"),
+        "professional_edition" => {
+            let key = open_registry_key(
+                HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+            )?;
+            let edition = read_registry_string(key, "EditionID");
+            unsafe { RegCloseKey(key) };
+            edition.map(|edition| {
+                ["Professional", "Enterprise", "Education", "IoTEnterprise"]
+                    .iter()
+                    .any(|prefix| edition.starts_with(prefix))
+            })
+        }
         _ => None,
     }
 }
@@ -433,7 +534,7 @@ fn package_is_installed(identity_name: &str) -> Option<bool> {
     }))
 }
 
-fn read_registry_string(key: HKEY, name: &str) -> Option<String> {
+pub(super) fn read_registry_string(key: HKEY, name: &str) -> Option<String> {
     let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
     let mut kind = 0u32;
     let mut size = 0u32;

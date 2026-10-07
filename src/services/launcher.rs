@@ -92,20 +92,31 @@ fn shell_execute(
 ) -> Result<()> {
     use windows_sys::Win32::{
         Foundation::GetLastError,
-        UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW},
+        UI::Shell::{ShellExecuteExW, SEE_MASK_IDLIST, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW},
     };
 
+    let pidl = crate::platform::shell_id_list::decode(file);
+    if file.to_string_lossy().starts_with("shell:pidl:") && pidl.is_none() {
+        anyhow::bail!("invalid Shell identity list");
+    }
     let file = wide_null_os(file);
     let args = wide_null_str(arguments);
     let verb = verb.map(wide_null_str);
     let directory = directory.map(wide_null_os);
     let mut execute = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOASYNC,
+        fMask: SEE_MASK_NOASYNC | if pidl.is_some() { SEE_MASK_IDLIST } else { 0 },
         lpVerb: verb
             .as_ref()
             .map_or(std::ptr::null(), |value| value.as_ptr()),
-        lpFile: file.as_ptr(),
+        lpFile: if pidl.is_some() {
+            std::ptr::null()
+        } else {
+            file.as_ptr()
+        },
+        lpIDList: pidl.as_ref().map_or(std::ptr::null_mut(), |value| {
+            value.as_ptr().cast_mut().cast()
+        }),
         lpParameters: if arguments.is_empty() {
             std::ptr::null()
         } else {
