@@ -2,7 +2,9 @@
 //!
 //! Windows does not provide a supported API for enumerating Settings pages.
 //! PowerToys' data catalog is the single source for indexed pages and legacy
-//! entries. A small compatibility map redirects a built-in Control Panel item.
+//! entries. Shell supplies installed applets/tasks; the catalog supplies pages,
+//! build bounds and multilingual aliases. Policy and device checks are vetoes,
+//! not an undocumented XML/DLL whitelist.
 
 use crate::{
     platform::source_ids,
@@ -141,19 +143,78 @@ fn powertoys_aliases(setting: &PowerToysSetting) -> Vec<String> {
 }
 
 fn parse_powertoys_command(command: &str) -> (PathBuf, String) {
-    let mut command = command.to_owned();
-    if command.to_ascii_lowercase().contains("%windir%") {
-        let windows_directory = std::env::var_os("WINDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-        command = command.replace("%windir%", &windows_directory.to_string_lossy());
+    let command = command.trim();
+    // Split before expanding environment variables: an expanded Windows path
+    // can contain spaces even when the catalog's executable token does not.
+    if let Some(quoted) = command.strip_prefix('"') {
+        if let Some((target, arguments)) = quoted.split_once('"') {
+            return (
+                expand_environment(target).into(),
+                arguments.trim().to_owned(),
+            );
+        }
     }
     if let Some(split_at) = command.find(char::is_whitespace) {
         let (target, arguments) = command.split_at(split_at);
-        (PathBuf::from(target), arguments.trim().to_owned())
+        (
+            expand_environment(target).into(),
+            arguments.trim().to_owned(),
+        )
     } else {
-        (PathBuf::from(command), String::new())
+        (expand_environment(command).into(), String::new())
     }
+}
+
+fn expand_environment(value: &str) -> String {
+    let mut expanded = String::new();
+    let mut remaining = value;
+    while let Some(start) = remaining.find('%') {
+        expanded.push_str(&remaining[..start]);
+        let tail = &remaining[start + 1..];
+        let Some(end) = tail.find('%') else {
+            expanded.push_str(&remaining[start..]);
+            return expanded;
+        };
+        let name = &tail[..end];
+        let replacement = std::env::vars_os()
+            .find(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+            .or_else(|| {
+                (name.eq_ignore_ascii_case("windir") || name.eq_ignore_ascii_case("systemroot"))
+                    .then(|| std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into()))
+            });
+        expanded.push_str(
+            replacement
+                .as_deref()
+                .unwrap_or(&remaining[start..start + end + 2]),
+        );
+        remaining = &tail[end + 1..];
+    }
+    expanded.push_str(remaining);
+    expanded
+}
+
+/// MMC console files specify their own icon; the .msc association only gives
+/// the generic MMC icon. Read the declarative resource without loading code.
+fn mmc_icon(xml: &str) -> Option<IconSpec> {
+    let document = roxmltree::Document::parse(xml.trim_start_matches('\u{feff}')).ok()?;
+    let root = document.root_element();
+    if !root.has_tag_name("MMC_ConsoleFile") {
+        return None;
+    }
+    let icon = root
+        .children()
+        .find(|n| n.has_tag_name("VisualAttributes"))?
+        .children()
+        .find(|n| n.has_tag_name("Icon"))?;
+    let path = PathBuf::from(expand_environment(icon.attribute("File")?));
+    if !path.is_absolute() {
+        return None;
+    }
+    Some(IconSpec::SystemIndexed {
+        path,
+        index: icon.attribute("Index")?.parse().ok()?,
+    })
 }
 
 fn powertoys_result(setting: &PowerToysSetting) -> SearchResult {
@@ -251,7 +312,6 @@ fn capability_requirement(setting: &PowerToysSetting) -> Option<&'static str> {
     }
 }
 
-#[cfg(windows)]
 fn available_on_build(setting: &PowerToysSetting, current_build: Option<u32>) -> bool {
     // Cortana's standalone Windows app was retired in 2023 and these old
     // Settings URIs are absent from Microsoft's current URI reference.
@@ -260,7 +320,8 @@ fn available_on_build(setting: &PowerToysSetting, current_build: Option<u32>) ->
     }
 
     let Some(current_build) = current_build else {
-        return false;
+        // Failure to read the build is not evidence that the host is too old.
+        return true;
     };
 
     // The upstream catalog incorrectly marks the still-documented Fonts page
@@ -283,16 +344,22 @@ fn available_on_build(setting: &PowerToysSetting, current_build: Option<u32>) ->
 #[cfg(windows)]
 fn available_on_device(setting: &PowerToysSetting) -> bool {
     capability_requirement(setting).is_none_or(|requirement| {
-        crate::platform::windows_setting_capability_available(requirement) == Some(true)
+        capability_allows(crate::platform::windows_setting_capability_available(
+            requirement,
+        ))
     })
 }
 
+fn capability_allows(detected: Option<bool>) -> bool {
+    detected != Some(false)
+}
+
 #[cfg(windows)]
-pub(crate) fn powertoys_results() -> Vec<SearchResult> {
+pub(crate) fn powertoys_results(
+    availability: &crate::platform::SettingsAvailability,
+) -> Vec<SearchResult> {
     let current_build = crate::platform::windows_build_number();
-    let availability = crate::platform::SettingsAvailability::discover();
     let mut capabilities = HashMap::new();
-    let mut targets = std::collections::HashSet::new();
     let mut results = powertoys_catalog()
         .settings
         .iter()
@@ -336,19 +403,54 @@ pub(crate) fn powertoys_results() -> Vec<SearchResult> {
                     .extension()
                     .is_some_and(|extension| extension == "msc")
                 {
-                    item.icon = Some(IconSpec::System(item.launch_target.clone()));
+                    item.icon = std::fs::metadata(&item.launch_target)
+                        .ok()
+                        .filter(|metadata| metadata.len() <= 4 * 1024 * 1024)
+                        .and_then(|_| std::fs::read_to_string(&item.launch_target).ok())
+                        .and_then(|xml| mmc_icon(&xml))
+                        .or_else(|| Some(IconSpec::System(item.launch_target.clone())));
                 }
+            }
+            for entry in &mut item.launch_entries {
+                entry.icon = item.icon.clone();
             }
             item
         })
-        .filter(|item| {
-            targets.insert((
-                item.launch_target.to_string_lossy().to_ascii_lowercase(),
-                item.launch_arguments.clone(),
-            ))
-        })
         .collect::<Vec<_>>();
     results.sort_by(|left, right| left.title.cmp(&right.title));
+    results
+}
+
+/// Merge by invariant launch destination, never by localized display title.
+/// Shell records come first to retain existing favorite IDs and native icons.
+/// Keep every catalog synonym when several entries lead to the same page.
+pub(crate) fn merge_results(items: impl IntoIterator<Item = SearchResult>) -> Vec<SearchResult> {
+    let mut positions = HashMap::new();
+    let mut results: Vec<SearchResult> = Vec::new();
+    for item in items {
+        let key = (
+            item.launch_target.to_string_lossy().to_ascii_lowercase(),
+            item.launch_arguments.trim().to_owned(),
+        );
+        if let Some(&index) = positions.get(&key) {
+            let existing: &mut SearchResult = &mut results[index];
+            for alias in std::iter::once(item.title)
+                .chain(std::iter::once(item.location))
+                .chain(item.aliases)
+            {
+                append_unique_alias(&mut existing.aliases, alias);
+            }
+            existing.ranking_bias = existing.ranking_bias.max(item.ranking_bias);
+            for entry in item.launch_entries {
+                if !existing.launch_entries.contains(&entry) {
+                    existing.launch_entries.push(entry);
+                }
+            }
+        } else {
+            positions.insert(key, results.len());
+            results.push(item);
+        }
+    }
     results
 }
 
@@ -382,12 +484,13 @@ pub(crate) fn matches_settings_path(item: &SearchResult, query: &str) -> bool {
         return true;
     }
     let query_parts = query
+        .trim()
+        .trim_end_matches('>')
         .split('>')
         .map(str::trim)
-        .take_while(|part| !part.is_empty())
         .collect::<Vec<_>>();
-    if query_parts.is_empty() {
-        return true;
+    if query_parts.iter().any(|part| part.is_empty()) {
+        return false;
     }
     let path_matches = |path: &str| {
         let path_parts = path.split('›').map(str::trim).collect::<Vec<_>>();
@@ -459,7 +562,10 @@ pub(crate) fn localized_result(mut item: SearchResult, language: &str) -> Search
 
 /// Redirect the legacy Fonts namespace item to Settings while retaining the
 /// localized title and stable Shell identity supplied by Windows.
-pub(crate) fn apply_compatible_destination(item: &mut SearchResult) {
+pub(crate) fn apply_compatible_destination(
+    item: &mut SearchResult,
+    #[cfg(windows)] availability: &crate::platform::SettingsAvailability,
+) {
     if item.category != ResultCategory::ControlPanel {
         return;
     }
@@ -474,12 +580,12 @@ pub(crate) fn apply_compatible_destination(item: &mut SearchResult) {
     let icon = Some(IconSpec::System(PathBuf::from(SETTINGS_ICON_TARGET)));
     #[cfg(windows)]
     let icon = {
-        let availability = crate::platform::SettingsAvailability::discover();
         if !availability.contains(uri) {
             return;
         }
         availability
             .settings_icon_path
+            .clone()
             .map(IconSpec::Resource)
             .or(icon)
     };
@@ -545,7 +651,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
     fn build_boundaries_filter_windows_10_and_11_and_unknown_builds() {
         let setting = powertoys_catalog()
@@ -555,13 +660,114 @@ mod tests {
             .unwrap();
         assert!(!available_on_build(setting, Some(19045)));
         assert!(available_on_build(setting, Some(22000)));
-        assert!(!available_on_build(setting, None));
+        assert!(available_on_build(setting, None));
         let fonts = powertoys_catalog()
             .settings
             .iter()
             .find(|entry| entry.name == "Fonts" && entry.kind == "AppSettingsApp")
             .unwrap();
         assert!(available_on_build(fonts, Some(26100)));
+        for entry in &powertoys_catalog().settings {
+            if entry.command.starts_with("ms-settings:cortana") {
+                assert!(!available_on_build(entry, Some(26100)));
+                assert!(!available_on_build(entry, None));
+            }
+            if let Some(build) = entry.deprecated_in_build {
+                if entry.name != "Fonts" {
+                    assert!(!available_on_build(entry, Some(build)), "{}", entry.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_capability_is_not_a_negative_probe() {
+        assert!(capability_allows(None));
+        assert!(capability_allows(Some(true)));
+        assert!(!capability_allows(Some(false)));
+    }
+
+    #[test]
+    fn commands_preserve_quoted_paths_arguments_and_environment_names() {
+        assert_eq!(
+            parse_powertoys_command(r#" "C:\Windows Tools\control.exe" /name Microsoft.Mouse "#),
+            (
+                PathBuf::from(r"C:\Windows Tools\control.exe"),
+                "/name Microsoft.Mouse".into()
+            )
+        );
+        assert_eq!(
+            parse_powertoys_command("ms-settings:network-wifi"),
+            (PathBuf::from("ms-settings:network-wifi"), String::new())
+        );
+        assert_eq!(
+            expand_environment("%WoWiE_MISSING_VARIABLE%/file"),
+            "%WoWiE_MISSING_VARIABLE%/file"
+        );
+        assert_eq!(
+            expand_environment("%WINDIR%"),
+            expand_environment("%windir%")
+        );
+    }
+
+    #[test]
+    fn merging_destinations_preserves_synonyms_and_existing_identity() {
+        let display = powertoys_catalog()
+            .settings
+            .iter()
+            .find(|s| s.command == "ms-settings:display")
+            .unwrap();
+        let first = powertoys_result(display);
+        let mut duplicate = first.clone();
+        duplicate.id = "another-resource-id".into();
+        duplicate.title = "屏幕设置".into();
+        duplicate.aliases = vec!["monitor configuration".into()];
+        let mut different = first.clone();
+        different.launch_target = "ms-settings:display-advanced".into();
+        let results = merge_results([first.clone(), duplicate, different]);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, first.id);
+        assert!(results[0].aliases.iter().any(|a| a == "屏幕设置"));
+        assert!(results[0]
+            .aliases
+            .iter()
+            .any(|a| a == "monitor configuration"));
+    }
+
+    #[test]
+    fn settings_paths_match_both_languages_and_reject_empty_middle_segments() {
+        let setting = powertoys_catalog()
+            .settings
+            .iter()
+            .find(|s| s.command == "ms-settings:display")
+            .unwrap();
+        let item = powertoys_result(setting);
+        assert!(matches_settings_path(&item, "settings > system"));
+        assert!(matches_settings_path(&item, "settings > system >"));
+        assert!(matches_settings_path(&item, "设置 > 系统"));
+        assert!(!matches_settings_path(&item, "settings >> unrelated"));
+        assert!(!matches_settings_path(&item, "settings > network"));
+    }
+
+    #[test]
+    fn mmc_resource_icon_uses_console_metadata_and_rejects_unrelated_xml() {
+        let path = if cfg!(windows) {
+            r"C:\Windows\System32\devmgr.dll"
+        } else {
+            "/windows/devmgr.dll"
+        };
+        let xml = format!(
+            r#"<MMC_ConsoleFile><VisualAttributes><Icon File="{path}" Index="4"/></VisualAttributes></MMC_ConsoleFile>"#
+        );
+        assert_eq!(
+            mmc_icon(&xml),
+            Some(IconSpec::SystemIndexed {
+                path: path.into(),
+                index: 4
+            })
+        );
+        assert!(mmc_icon("<Other><Icon File='x' Index='0'/></Other>").is_none());
+        assert!(mmc_icon("<MMC_ConsoleFile><VisualAttributes><Icon File='relative.dll' Index='0'/></VisualAttributes></MMC_ConsoleFile>").is_none());
     }
 
     #[cfg(windows)]
@@ -572,10 +778,16 @@ mod tests {
         let results =
             crate::providers::control_panel::discover(&crate::config::ProviderConfig::default());
         let mut ids = std::collections::HashSet::new();
+        let mut destinations = std::collections::HashSet::new();
         for result in &results {
             assert!(ids.insert(&result.id), "duplicate identity: {}", result.id);
             if result.category == ResultCategory::Settings {
                 assert!(availability.contains(&result.launch_target.to_string_lossy()));
+                assert!(destinations
+                    .insert(result.launch_target.to_string_lossy().to_ascii_lowercase()));
+            }
+            for entry in &result.launch_entries {
+                assert_eq!(entry.icon, result.icon);
             }
         }
         let icon_service = crate::services::icon_service::IconService::new();
@@ -614,11 +826,32 @@ mod tests {
                     && item.category == ResultCategory::ControlPanel
             })
             .unwrap();
-        assert!(crate::platform::application_icon(&shell_result.launch_target).is_some());
+        assert!(matches!(&shell_result.icon, Some(IconSpec::System(path))
+            if crate::platform::shell_id_list::decode(path).is_some()));
+        for result in &results {
+            let icon = icon_service
+                .resolve_at(result, 32)
+                .unwrap_or_else(|| panic!("missing icon: {}", result.title));
+            assert!(
+                icon.rgba
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[3] != 0),
+                "transparent icon: {}",
+                result.title
+            );
+        }
+        let settings_count = results
+            .iter()
+            .filter(|r| r.category == ResultCategory::Settings)
+            .count();
         eprintln!(
-            "Windows build {:?}: {} indexed items, Settings and Control Panel native icons OK",
+            "Windows build {:?}: {} indexed items ({} settings, {} tasks), all icons visible",
             crate::platform::windows_build_number(),
-            results.len()
+            results.len(),
+            settings_count,
+            tasks.len()
         );
     }
 }

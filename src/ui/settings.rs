@@ -20,7 +20,7 @@ struct Definition {
 fn definitions() -> Vec<Definition> {
     let mut languages = vec!["system"];
     languages.extend(i18n::SUPPORTED_LANGUAGES.iter().copied());
-    let fields = vec![
+    let mut fields = vec![
         field(
             "hotkey",
             "general",
@@ -173,6 +173,18 @@ fn definitions() -> Vec<Definition> {
             "text",
         ),
     ];
+    if cfg!(windows) {
+        fields.insert(
+            2,
+            field(
+                "run_at_sign_in",
+                "general",
+                "Run at sign-in",
+                "Start Wowie when you sign in to Windows.",
+                "toggle",
+            ),
+        );
+    }
     fields
 }
 
@@ -254,7 +266,7 @@ pub(super) fn categories(
     for plugin in plugins {
         values.push(SettingsCategory {
             id: plugin_category(&plugin.id).into(),
-            title: plugin.name.clone().into(),
+            title: i18n::tr_owned_in_context(language, "Settings", &plugin.name).into(),
             depth: 1,
             has_children: false,
         });
@@ -348,7 +360,7 @@ pub(super) fn category_title(
     plugins
         .iter()
         .find(|plugin| plugin_category(&plugin.id) == category)
-        .map(|plugin| plugin.name.clone())
+        .map(|plugin| i18n::tr_owned_in_context(language, "Settings", &plugin.name))
         .or_else(|| {
             [
                 ("general", "General"),
@@ -519,7 +531,7 @@ pub(super) fn entries(
                 values.push(priority_entry(
                     category,
                     format!("priority:plugin:{}", plugin.id),
-                    plugin.name.clone(),
+                    i18n::tr_owned_in_context(language, "Settings", &plugin.name),
                     translate(language, "Move this plugin earlier or later."),
                     index,
                     plugin_order.len(),
@@ -596,7 +608,16 @@ pub(super) fn entries(
             );
             if kind == "choice" {
                 entry.choice_values = choice_model(preference.options.clone());
-                entry.choice_labels = choice_model(preference.options.clone());
+                let labels = if preference.option_labels.len() == preference.options.len() {
+                    preference
+                        .option_labels
+                        .iter()
+                        .map(|label| i18n::tr_owned_in_context(language, "Settings", label))
+                        .collect()
+                } else {
+                    preference.options.clone()
+                };
+                entry.choice_labels = choice_model(labels);
                 entry.choice_index = choice_index;
             }
             values.push(entry);
@@ -676,15 +697,7 @@ fn entry_from_definition(
         .map(|value| (*value).to_owned())
         .collect::<Vec<_>>();
     if field.id == "font_family" {
-        options.push(String::new());
-        options.extend(installed_font_families().iter().cloned());
-        if !value.is_empty()
-            && !options
-                .iter()
-                .any(|option| option.eq_ignore_ascii_case(&value))
-        {
-            options.push(value.clone());
-        }
+        options = font_family_options(&value);
     }
     let labels = options
         .iter()
@@ -803,24 +816,83 @@ fn choice_model(values: Vec<String>) -> ModelRc<slint::SharedString> {
 }
 
 fn installed_font_families() -> &'static [String] {
-    static FONT_FAMILIES: OnceLock<Vec<String>> = OnceLock::new();
-    FONT_FAMILIES.get_or_init(|| {
-        let mut database = fontdb::Database::new();
-        database.load_system_fonts();
+    // UI reads must never initialize or wait for the font database.
+    FONT_FAMILIES.get().map(Vec::as_slice).unwrap_or_default()
+}
 
-        let mut families = database
-            .faces()
-            .filter_map(|face| {
-                face.families
-                    .first()
-                    .map(|(family, _)| family.trim().to_owned())
-            })
-            .filter(|family| !family.is_empty())
-            .collect::<Vec<_>>();
-        families.sort_unstable_by_key(|family| family.to_lowercase());
-        families.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
-        families
-    })
+static FONT_FAMILIES: OnceLock<Vec<String>> = OnceLock::new();
+
+pub(super) fn preload_font_families(window: slint::Weak<SettingsWindow>) {
+    std::thread::spawn(move || {
+        FONT_FAMILIES.get_or_init(scan_font_families);
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            if window.get_selected_category() != "appearance" {
+                return;
+            }
+            // Update only the font row from its current value, so a late scan
+            // cannot overwrite edits or replace a different settings page.
+            let entries = window.get_entries();
+            let Some(model) = entries.as_any().downcast_ref::<VecModel<SettingsEntry>>() else {
+                return;
+            };
+            let (config, _) = config::Config::load();
+            for index in 0..model.row_count() {
+                if let Some(mut entry) = model.row_data(index) {
+                    if entry.id == "font_family" {
+                        let options = font_family_options(entry.value.as_str());
+                        entry.choice_index = options
+                            .iter()
+                            .position(|option| option == entry.value.as_str())
+                            .map(|index| index as i32)
+                            .unwrap_or(-1);
+                        entry.choice_labels = choice_model(
+                            options
+                                .iter()
+                                .map(|value| choice_label(&config.language, "font_family", value))
+                                .collect(),
+                        );
+                        entry.choice_values = choice_model(options);
+                        model.set_row_data(index, entry);
+                        break;
+                    }
+                }
+            }
+        });
+    });
+}
+
+fn font_family_options(value: &str) -> Vec<String> {
+    let mut options = vec![String::new()];
+    options.extend(installed_font_families().iter().cloned());
+    if !value.is_empty()
+        && !options
+            .iter()
+            .any(|option| option.eq_ignore_ascii_case(value))
+    {
+        options.push(value.to_owned());
+    }
+    options
+}
+
+fn scan_font_families() -> Vec<String> {
+    let mut database = fontdb::Database::new();
+    database.load_system_fonts();
+
+    let mut families = database
+        .faces()
+        .filter_map(|face| {
+            face.families
+                .first()
+                .map(|(family, _)| family.trim().to_owned())
+        })
+        .filter(|family| !family.is_empty())
+        .collect::<Vec<_>>();
+    families.sort_unstable_by_key(|family| family.to_lowercase());
+    families.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    families
 }
 
 fn choice_label(language: &str, setting_id: &str, value: &str) -> String {
@@ -972,6 +1044,7 @@ pub(super) fn apply(
     match id {
         "hotkey" => config.hotkey = value,
         "show_on_startup" => config.show_on_startup = parse_bool(&value)?,
+        "run_at_sign_in" => config.run_at_sign_in = parse_bool(&value)?,
         "hide_on_focus_loss" => config.hide_on_focus_loss = parse_bool(&value)?,
         "theme" => config.theme = value,
         "language" => config.language = value,

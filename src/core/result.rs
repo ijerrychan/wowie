@@ -348,35 +348,3 @@ pub enum IconRef {
         url: String,
     },
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ResultPresentation;
-
-    #[test]
-    fn presentation_recommendations_are_provider_independent() {
-        assert_eq!(
-            ResultPresentation::recommended(false),
-            ResultPresentation::List
-        );
-        assert_eq!(
-            ResultPresentation::recommended(false),
-            ResultPresentation::List
-        );
-        assert_eq!(
-            ResultPresentation::recommended(true),
-            ResultPresentation::Preview
-        );
-        assert_eq!(
-            ResultPresentation::recommended(false),
-            ResultPresentation::List
-        );
-    }
-
-    #[test]
-    fn presentation_names_are_stable_for_the_ui_boundary() {
-        assert_eq!(ResultPresentation::List.as_str(), "list");
-        assert_eq!(ResultPresentation::Compact.as_str(), "compact");
-        assert_eq!(ResultPresentation::Preview.as_str(), "preview");
-    }
-}

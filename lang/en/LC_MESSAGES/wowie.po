@@ -36,6 +36,10 @@ msgid "No results"
 msgstr "No results"
 
 msgctxt "Launcher"
+msgid "Searching..."
+msgstr "Searching..."
+
+msgctxt "Launcher"
 msgid "Could not open application"
 msgstr "Could not open application"
 
@@ -2930,3 +2934,31 @@ msgstr "wgpocpl.cpl"
 msgctxt "Windows Settings"
 msgid "wscui.cpl"
 msgstr "wscui.cpl"
+
+msgctxt "Settings"
+msgid "File search backend"
+msgstr "File search backend"
+
+msgctxt "Settings"
+msgid "File Search"
+msgstr "File Search"
+
+msgctxt "Settings"
+msgid "Automatic prefers Everything and falls back to the Windows Search index. Choose a backend to force it."
+msgstr "Automatic prefers Everything and falls back to the Windows Search index. Choose a backend to force it."
+
+msgctxt "Settings"
+msgid "Automatic"
+msgstr "Automatic"
+
+msgctxt "Settings"
+msgid "Windows Search index"
+msgstr "Windows Search index"
+
+msgctxt "Settings"
+msgid "Run at sign-in"
+msgstr "Run at sign-in"
+
+msgctxt "Settings"
+msgid "Start Wowie when you sign in to Windows."
+msgstr "Start Wowie when you sign in to Windows."

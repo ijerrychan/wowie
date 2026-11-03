@@ -16,10 +16,10 @@ pub fn run() -> Result<()> {
     window.set_native_window_frame(cfg!(windows));
     settings_window.set_native_window_frame(cfg!(windows));
     context_window.set_native_window_frame(cfg!(windows));
-    if config.language != "system" {
-        slint::select_bundled_translation(&config.language)
-            .map_err(|error| anyhow::anyhow!("could not select language: {error}"))?;
-    }
+    settings::preload_font_families(settings_window.as_weak());
+    let slint_language = i18n::effective_language(&config.language);
+    slint::select_bundled_translation(&slint_language)
+        .map_err(|error| anyhow::anyhow!("could not select language: {error}"))?;
     let platform = platform::current();
     let platform_shutdown = platform::PlatformShutdown::new();
     let tray_registration = platform.start_tray(
@@ -89,6 +89,7 @@ pub fn run() -> Result<()> {
     let query_generation = Arc::new(AtomicU64::new(0));
     let search_icon_generation = Arc::new(AtomicU64::new(0));
     let detail_generation = Arc::new(AtomicU64::new(0));
+    let current_language = Arc::new(Mutex::new(config.language.clone()));
     let explicit_detail_item = Arc::new(Mutex::new(None::<String>));
     let mut detail_registry = crate::details::DetailRegistry::default_providers();
     detail_registry.register(Arc::new(plugins));
@@ -133,6 +134,15 @@ pub fn run() -> Result<()> {
     window.set_search_icon_is_shortcut(false);
     window.set_launch_error(String::new().into());
     context_window.set_dark_mode(dark_mode);
+    window::install_native_background(window.as_weak(), Launcher::get_native_background_color);
+    window::install_native_background(
+        settings_window.as_weak(),
+        SettingsWindow::get_native_background_color,
+    );
+    window::install_native_background(
+        context_window.as_weak(),
+        ContextMenu::get_native_background_color,
+    );
     context_window.set_ui_font_family(config.font_family.clone().into());
     context_window.set_ui_font_size(config.font_size as f32);
     context_window.set_accent_color(slint::Color::from_rgb_u8(
@@ -671,11 +681,15 @@ pub fn run() -> Result<()> {
     }
     {
         let weak = window.as_weak();
-        let language = config.language.clone();
+        let current_language = Arc::clone(&current_language);
         window.on_detail_link_requested(move |url| {
             let result = launcher::open_url(url.as_str());
             if result.is_err() {
                 if let Some(window) = weak.upgrade() {
+                    let language = current_language
+                        .lock()
+                        .map(|language| language.clone())
+                        .unwrap_or_else(|_| "system".to_owned());
                     window.set_launch_error(
                         i18n::tr(&language, "Could not open preview link").into(),
                     );
@@ -689,6 +703,7 @@ pub fn run() -> Result<()> {
         let active_session = Arc::clone(&active_session);
         let query_history = Arc::clone(&query_history);
         window.on_normalize_query(move |query| {
+            engine.cancel_active_queries();
             let query = query.to_string();
             if let Ok(mut history) = query_history.lock() {
                 history.1 = history.0.len();
@@ -744,6 +759,7 @@ pub fn run() -> Result<()> {
         let platform_for_query = Arc::clone(&platform);
         let weak = window.as_weak();
         window.on_query_changed(move |query| {
+            engine.cancel_active_queries();
             // Invalidate an in-flight detail request immediately. The result
             // list for the new query may arrive slightly later on the worker
             // thread, so waiting for selection changes here can let stale
@@ -968,7 +984,7 @@ pub fn run() -> Result<()> {
         let detail_generation = Arc::clone(&detail_generation);
         let explicit_detail_item = Arc::clone(&explicit_detail_item);
         let detail_registry = detail_registry.clone();
-        let detail_language = config.language.clone();
+        let detail_language = Arc::clone(&current_language);
         let icon_items = Arc::clone(&icon_items);
         let action_generation = Arc::clone(&query_generation);
         let action_in_flight = Arc::new(AtomicBool::new(false));
@@ -1088,10 +1104,14 @@ pub fn run() -> Result<()> {
                         window.set_detail_panel_visible(true);
                     }
                     if has_dynamic_detail {
+                        let language = detail_language
+                            .lock()
+                            .map(|language| language.clone())
+                            .unwrap_or_else(|_| "system".to_owned());
                         request_dynamic_detail(
                             item,
                             detail_registry.clone(),
-                            detail_language.clone(),
+                            language,
                             Arc::clone(&detail_generation),
                             weak.clone(),
                             icon_service.clone(),
@@ -1232,7 +1252,7 @@ pub fn run() -> Result<()> {
         let context_item = Arc::clone(&context_item);
         let visible = Arc::clone(&visible);
         let show_advanced_launch_entries = Arc::clone(&show_advanced_launch_entries);
-        let context_language = config.language.clone();
+        let context_language = Arc::clone(&current_language);
         let icon_items = Arc::clone(&icon_items);
         let active_session = Arc::clone(&active_session);
         window.on_context_menu_requested(move |index, keyboard| {
@@ -1290,11 +1310,17 @@ pub fn run() -> Result<()> {
                 window.set_context_menu_open(true);
             }
             if let Some(menu) = context_weak.upgrade() {
-                menu.set_menu_width(context_menu_width(&actions, &context_language) as f32);
+                let language = context_language
+                    .lock()
+                    .map(|language| language.clone())
+                    .unwrap_or_else(|_| "system".to_owned());
+                menu.set_menu_width(context_menu_width(&actions, &language) as f32);
                 menu.set_keyboard_invoked(keyboard);
                 menu.set_actions(ModelRc::from(Rc::new(VecModel::from(actions))));
+                platform::set_window_background(menu.window(), menu.get_native_background_color());
                 platform.disable_window_transitions(menu.window());
                 let _ = menu.show();
+                menu.window().request_redraw();
                 let launcher = weak.upgrade();
                 let anchor = launcher.as_ref().and_then(|launcher| {
                     keyboard.then(|| {
@@ -1393,8 +1419,7 @@ pub fn run() -> Result<()> {
         let engine = Arc::clone(&engine);
         let active_session_for_favorite = Arc::clone(&active_session);
         let action_generation = Arc::clone(&query_generation);
-        let favorite_limit_message =
-            i18n::tr(&config.language, "Maximum number of favorites reached").to_owned();
+        let favorite_limit_language = Arc::clone(&current_language);
         context_window.on_action_requested(move |action_id| {
             let Some(item) = context_item.lock().ok().and_then(|current| current.clone()) else {
                 return;
@@ -1432,7 +1457,15 @@ pub fn run() -> Result<()> {
                             window.set_launch_error(String::new().into());
                             window.invoke_query_changed(window.get_query_text());
                         }
-                        None => window.set_launch_error(favorite_limit_message.clone().into()),
+                        None => {
+                            let language = favorite_limit_language
+                                .lock()
+                                .map(|language| language.clone())
+                                .unwrap_or_else(|_| "system".to_owned());
+                            window.set_launch_error(
+                                i18n::tr(&language, "Maximum number of favorites reached").into(),
+                            );
+                        }
                     }
                 }
                 return;
@@ -1637,6 +1670,7 @@ pub fn run() -> Result<()> {
             context_window: context_window.as_weak(),
             plugin_settings: plugin_settings.clone(),
             current_query: Arc::clone(&current_query),
+            current_language: Arc::clone(&current_language),
         };
         let detail_registry = detail_registry.clone();
         let search_icon_generation = Arc::clone(&search_icon_generation);
@@ -1811,8 +1845,10 @@ pub fn run() -> Result<()> {
         );
     }
     if config.show_on_startup {
+        platform::set_window_background(window.window(), window.get_native_background_color());
         platform.disable_window_transitions(window.window());
         window.show()?;
+        window.window().request_redraw();
         visible.store(true, Ordering::Release);
         let weak = window.as_weak();
         let platform = Arc::clone(&platform);
@@ -1883,9 +1919,17 @@ pub fn run() -> Result<()> {
                 platform::PlatformEvent::SystemThemeChanged
                     if follow_system_theme.load(Ordering::Acquire) =>
                 {
-                    if let Some(window) = weak.upgrade() {
-                        window.set_dark_mode(platform.system_prefers_dark_theme());
-                    }
+                    let dark_mode = platform.system_prefers_dark_theme();
+                    let window = weak.upgrade();
+                    let settings = settings_weak.upgrade();
+                    let context = context_weak.upgrade();
+                    apply_theme_to_windows(
+                        dark_mode,
+                        platform.as_ref(),
+                        window.as_ref(),
+                        settings.as_ref(),
+                        context.as_ref(),
+                    );
                 }
                 platform::PlatformEvent::SystemThemeChanged => {}
                 platform::PlatformEvent::OpenSettings => {

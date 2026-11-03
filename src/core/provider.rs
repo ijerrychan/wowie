@@ -358,6 +358,10 @@ impl ProviderRegistry {
         results
     }
 
+    pub fn cancel_active_queries(&self) {
+        self.plugins.cancel_active_queries();
+    }
+
     pub fn history_limit(&self, session: &SearchEngineSession) -> usize {
         self.engines
             .iter()
@@ -414,7 +418,7 @@ impl ProviderRegistry {
             return DEFAULT_SEARCH_DEBOUNCE;
         };
         for engine in &self.engines {
-            if let Ok(engine) = engine.lock() {
+            if let Ok(engine) = engine.try_lock() {
                 if engine.owns_session(session) {
                     return engine.search_debounce(session);
                 }
@@ -428,7 +432,7 @@ impl ProviderRegistry {
             .iter()
             .find_map(|engine| {
                 engine
-                    .lock()
+                    .try_lock()
                     .ok()
                     .and_then(|engine| engine.search_engine(query))
             })

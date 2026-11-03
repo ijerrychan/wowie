@@ -19,7 +19,7 @@ pub(super) fn control_panel_clsid(parsing_name: &str) -> Option<&str> {
     let remaining = &parsing_name[start..];
     let end = remaining.find('}')? + 1;
     let guid = &remaining[..end];
-    (guid.starts_with('{') && guid.ends_with('}')).then_some(guid)
+    (end == remaining.len() && parse_guid(&guid[1..guid.len() - 1]).is_some()).then_some(guid)
 }
 
 /// Enumerate the localized items exposed by the Control Panel shell folder.
@@ -105,7 +105,7 @@ fn enumerate_control_panel_folder(
             let canonical_name =
                 control_panel_application_name(&folder, root_pidl, child, &parsing)
                     .or_else(|| parsing.as_deref().and_then(control_panel_canonical_name));
-            let task_target = if tasks {
+            let icon_target = {
                 let absolute = unsafe { ILCombine(Some(root_pidl), Some(child)) };
                 let target = if absolute.is_null() {
                     None
@@ -119,14 +119,8 @@ fn enumerate_control_panel_folder(
                 };
                 unsafe { CoTaskMemFree(Some(absolute.cast())) };
                 target
-            } else {
-                None
             };
-            let keywords = if tasks {
-                control_panel_keywords(&folder, root_pidl, child)
-            } else {
-                Vec::new()
-            };
+            let mut keywords = control_panel_keywords(&folder, root_pidl, child);
             unsafe { CoTaskMemFree(Some(child.cast())) };
             let (Some(title), Some(parsing)) = (title, parsing) else {
                 continue;
@@ -134,10 +128,15 @@ fn enumerate_control_panel_folder(
             if title.trim().is_empty() || parsing.trim().is_empty() {
                 continue;
             }
-            if tasks && (!parsing.starts_with("::{") || task_target.is_none()) {
+            if tasks && icon_target.is_none() {
                 continue;
             }
-            let target = task_target.unwrap_or_else(|| PathBuf::from(&parsing));
+            let icon_target = icon_target.unwrap_or_else(|| PathBuf::from(&parsing));
+            let target = if tasks {
+                icon_target.clone()
+            } else {
+                PathBuf::from(&parsing)
+            };
             provider_debug(&format!(
                 "Control Panel item title={title:?} parsing={target:?} canonical={canonical_name:?}"
             ));
@@ -147,16 +146,16 @@ fn enumerate_control_panel_folder(
                 "control-panel"
             };
             let identity = format!("{prefix}:{}", parsing.to_lowercase());
+            if !tasks {
+                keywords.extend(canonical_name.clone());
+            }
             items.push(super::super::ControlPanelItem {
                 identity,
                 title,
-                aliases: if tasks {
-                    keywords
-                } else {
-                    canonical_name.clone().into_iter().collect()
-                },
+                aliases: keywords,
                 area: tasks.then_some(canonical_name).flatten(),
                 launch_target: target,
+                icon_target,
             });
         }
         items.sort_by(|left, right| {
@@ -291,7 +290,8 @@ pub(crate) fn windows_build_number() -> Option<u32> {
 pub(crate) fn windows_setting_capability_available(capability: &str) -> Option<bool> {
     match capability {
         "battery" => system_has_battery(),
-        "touchpad" => system_has_precision_touchpad(),
+        "touchpad" => system_has_hid_usage(0x000d, 0x0005),
+        "surface_dial" => system_has_hid_usage(0x0001, 0x000e),
         "wifi_adapter" => system_has_wifi_adapter(),
         "mixed_reality_portal" => package_is_installed("Microsoft.MixedReality.Portal"),
         "professional_edition" => {
@@ -389,7 +389,7 @@ unsafe extern "system" {
     ) -> u32;
 }
 
-fn system_has_precision_touchpad() -> Option<bool> {
+fn system_has_hid_usage(usage_page: u16, usage: u16) -> Option<bool> {
     const RIM_TYPEHID: u32 = 2;
     const RIDI_DEVICEINFO: u32 = 0x2000_000b;
     let device_size = std::mem::size_of::<RawInputDeviceList>() as u32;
@@ -411,7 +411,7 @@ fn system_has_precision_touchpad() -> Option<bool> {
         return None;
     }
 
-    let mut read_any_hid_info = false;
+    let mut complete = true;
     for device in devices.iter().take(listed as usize) {
         if device.device_type != RIM_TYPEHID {
             continue;
@@ -431,18 +431,18 @@ fn system_has_precision_touchpad() -> Option<bool> {
             )
         };
         if result == u32::MAX {
+            complete = false;
             continue;
         }
-        read_any_hid_info = true;
         if info.device_type != RIM_TYPEHID {
             continue;
         }
         let hid = unsafe { info.data.hid };
-        if hid.usage_page == 0x000d && hid.usage == 0x0005 {
+        if hid.usage_page == usage_page && hid.usage == usage {
             return Some(true);
         }
     }
-    read_any_hid_info.then_some(false)
+    complete.then_some(false)
 }
 
 #[repr(C)]

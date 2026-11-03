@@ -1,10 +1,19 @@
 {
   "id": "everything",
-  "name": "Everything",
+  "name": "File Search",
   "version": "0.1.0",
   "api_version": 1,
   "entry_point": "main.lua",
-  "permissions": ["everything"],
+  "permissions": ["everything", "file_search"],
+  "preferences": [{
+    "key": "backend",
+    "title": "File search backend",
+    "description": "Automatic prefers Everything and falls back to the Windows Search index. Choose a backend to force it.",
+    "type": "enum",
+    "options": ["auto", "everything", "windows-index"],
+    "option_labels": ["Automatic", "Everything", "Windows Search index"],
+    "default": "auto"
+  }],
   "engine": {
     "participates_in_root": true,
     "respect_global_fuzzy_search": true,
@@ -12,7 +21,7 @@
   },
   "commands": [{
     "id": "search",
-    "title": "Search with Everything",
+    "title": "Search files",
     "action_words": ["e"],
     "mode": "search",
     "require_separator": true,

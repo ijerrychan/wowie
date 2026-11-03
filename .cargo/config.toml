@@ -1,3 +1,8 @@
+[build]
+# Avoid growing incremental caches during check/build/test. Dependencies remain cached.
+# CARGO_INCREMENTAL=1 can be used temporarily when faster rebuilds matter more.
+incremental = false
+
 # Slint's Windows guide recommends an 8 MiB stack for MSVC debug builds.
 # This avoids STATUS_STACK_OVERFLOW when renderer/UI code needs more stack
 # than the Windows default main-thread allocation.

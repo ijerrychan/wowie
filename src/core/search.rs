@@ -132,6 +132,10 @@ impl SearchCore {
         self.providers.search_debounce(context)
     }
 
+    pub fn cancel_active_queries(&self) {
+        self.providers.cancel_active_queries();
+    }
+
     pub fn search_context(&self, query: &str) -> crate::page::SearchContext {
         self.providers.search_context(query)
     }

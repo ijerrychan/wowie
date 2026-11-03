@@ -27,6 +27,7 @@ pub(super) struct SettingsReloadContext {
     pub(super) context_window: slint::Weak<ContextMenu>,
     pub(super) plugin_settings: Vec<plugin::PluginSettingsDefinition>,
     pub(super) current_query: Arc<Mutex<String>>,
+    pub(super) current_language: Arc<Mutex<String>>,
 }
 
 impl SettingsReloadContext {
@@ -69,16 +70,29 @@ impl SettingsReloadContext {
         let updated = updated.clone();
         let platform = Arc::clone(&self.platform);
         let current_query = Arc::clone(&self.current_query);
+        let current_language = Arc::clone(&self.current_language);
         let _ = slint::invoke_from_event_loop(move || {
-            if updated.language != "system" {
-                let _ = slint::select_bundled_translation(&updated.language);
+            if let Ok(mut language) = current_language.lock() {
+                *language = updated.language.clone();
             }
+            let slint_language = i18n::effective_language(&updated.language);
+            let _ = slint::select_bundled_translation(&slint_language);
             let dark_mode = match updated.theme.as_str() {
                 "dark" => true,
                 "light" => false,
                 _ => platform.system_prefers_dark_theme(),
             };
-            if let Some(window) = window.upgrade() {
+            let window = window.upgrade();
+            let settings = settings_window.upgrade();
+            let context = context_window.upgrade();
+            super::apply_theme_to_windows(
+                dark_mode,
+                platform.as_ref(),
+                window.as_ref(),
+                settings.as_ref(),
+                context.as_ref(),
+            );
+            if let Some(window) = window {
                 window.set_ui_font_family(updated.font_family.clone().into());
                 window.set_ui_font_size(updated.font_size as f32);
                 window.set_compact_search(updated.compact_search);
@@ -97,30 +111,15 @@ impl SettingsReloadContext {
                     platform.position_palette(window.window(), window.get_result_window_height());
                 }
                 window.set_list_item_height(updated.list_item_height as f32);
-                window.set_dark_mode(dark_mode);
-                let accent = platform.system_accent_color();
-                window.set_accent_background(slint::Color::from_argb_u8(
-                    if dark_mode { 0x42 } else { 0x28 },
-                    ((accent >> 16) & 0xff) as u8,
-                    ((accent >> 8) & 0xff) as u8,
-                    (accent & 0xff) as u8,
-                ));
             }
-            if let Some(context) = context_window.upgrade() {
+            if let Some(context) = context {
                 context.set_ui_font_family(updated.font_family.clone().into());
                 context.set_ui_font_size(updated.font_size as f32);
             }
-            if let Some(settings) = settings_window.upgrade() {
+            if let Some(settings) = settings {
                 settings.set_ui_font_family(updated.font_family.clone().into());
                 settings.set_ui_font_size(updated.font_size as f32);
                 settings::refresh(&settings, &updated, &plugin_settings, &updated.language);
-                settings.set_dark_mode(dark_mode);
-                let accent = platform.system_accent_color();
-                settings.set_accent_color(slint::Color::from_rgb_u8(
-                    ((accent >> 16) & 0xff) as u8,
-                    ((accent >> 8) & 0xff) as u8,
-                    (accent & 0xff) as u8,
-                ));
             }
         });
     }

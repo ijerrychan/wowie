@@ -427,6 +427,7 @@ component SettingsField inherits Rectangle {
 }
 
 export component SettingsWindow inherits Window {
+    out property <color> native-background-color: root.canvas;
     title: "Wowie Settings";
     no-frame: true;
     preferred-width: 900px;

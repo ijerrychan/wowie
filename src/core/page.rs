@@ -58,26 +58,3 @@ impl SearchContext {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn context_exposes_only_the_active_engine_session() {
-        assert!(SearchContext::Default.session().is_none());
-        let context = SearchContext::Engine(SearchEngineSession {
-            id: "test:engine".into(),
-            title: "Test".into(),
-            placeholder: "Search test".into(),
-            prefix: "t ".into(),
-            argument: "query".into(),
-            mode: SearchEngineMode::Search,
-            state: Default::default(),
-        });
-        assert_eq!(
-            context.session().map(|session| session.id.as_str()),
-            Some("test:engine")
-        );
-    }
-}

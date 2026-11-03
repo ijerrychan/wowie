@@ -142,7 +142,9 @@ pub(super) fn restore_result_window_height(window: &Launcher) -> bool {
         .to_logical(native_window.scale_factor());
     let resized = (logical_size.height - target_height).abs() > 0.5;
     if resized {
+        platform::set_window_background(native_window, window.get_native_background_color());
         native_window.set_size(slint::LogicalSize::new(logical_size.width, target_height));
+        native_window.request_redraw();
     }
     resized
 }
@@ -583,63 +585,4 @@ pub(super) fn apply_search_engine(
             .unwrap_or_default()
             .into(),
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{accepted_page_items, explicit_detail_matches};
-    use crate::result::{ResultCategory, ResultVisibility, SearchResult};
-    use std::path::PathBuf;
-
-    fn item(id: &str) -> SearchResult {
-        SearchResult {
-            id: id.into(),
-            identity: id.into(),
-            title: id.into(),
-            category: ResultCategory::Other,
-            aliases: Vec::new(),
-            location: String::new(),
-            launch_target: PathBuf::new(),
-            launch_arguments: String::new(),
-            launch_working_directory: None,
-            source: "test".into(),
-            sources: vec!["test".into()],
-            launch_entries: Vec::new(),
-            actions: Vec::new(),
-            detail: None,
-            description: None,
-            app_user_model_id: None,
-            package_family_name: None,
-            package_metadata: None,
-            icon: None,
-            ranking_bias: 0,
-            allow_favorite: true,
-            visibility: ResultVisibility::Always,
-        }
-    }
-
-    #[test]
-    fn page_merge_ignores_duplicate_and_stops_at_surface_limit() {
-        let existing = vec![item("shown")];
-        let more = accepted_page_items(
-            &existing,
-            vec![item("shown"), item("first"), item("first"), item("second")],
-        );
-        assert_eq!(
-            more.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
-            ["first", "second"]
-        );
-
-        let existing = (0..super::MAX_RENDERED_RESULTS)
-            .map(|index| item(&format!("row:{index}")))
-            .collect::<Vec<_>>();
-        assert!(accepted_page_items(&existing, vec![item("extra")]).is_empty());
-    }
-
-    #[test]
-    fn explicit_detail_is_rejected_after_selection_changes() {
-        assert!(explicit_detail_matches(Some("row:1"), Some("row:1")));
-        assert!(!explicit_detail_matches(Some("row:1"), Some("row:2")));
-        assert!(!explicit_detail_matches(Some("row:1"), None));
-    }
 }

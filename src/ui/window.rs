@@ -77,6 +77,26 @@ fn launcher_window_icon() -> Option<slint::winit_030::winit::window::Icon> {
     slint::winit_030::winit::window::Icon::from_rgba(image.into_raw(), width, height).ok()
 }
 
+pub(super) fn install_native_background<C: ComponentHandle + 'static>(
+    weak: slint::Weak<C>,
+    color: fn(&C) -> slint::Color,
+) {
+    #[cfg(windows)]
+    {
+        use slint::winit_030::WinitWindowAccessor;
+        let _ = slint::spawn_local(async move {
+            let Some(component) = weak.upgrade() else {
+                return;
+            };
+            if component.window().winit_window().await.is_ok() {
+                platform::set_window_background(component.window(), color(&component));
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = (weak, color);
+}
+
 pub(super) fn toggle_palette(
     window: &Launcher,
     platform: Arc<dyn platform::PlatformIntegration>,
@@ -85,6 +105,7 @@ pub(super) fn toggle_palette(
     if visible.fetch_xor(true, Ordering::AcqRel) {
         let _ = window.hide();
     } else {
+        platform::set_window_background(window.window(), window.get_native_background_color());
         platform.disable_window_transitions(window.window());
         if window.get_compact_search()
             && window.get_root_query_empty()
@@ -101,6 +122,7 @@ pub(super) fn toggle_palette(
             native_window.set_size(slint::LogicalSize::new(logical_size.width, target_height));
         }
         let _ = window.show();
+        window.window().request_redraw();
         platform.activate_palette(window.window());
         let weak = window.as_weak();
         Timer::single_shot(PALETTE_POSITION_DELAY, move || {

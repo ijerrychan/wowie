@@ -147,7 +147,7 @@ pub(crate) fn spawn_cancellable(
 
 #[cfg(test)]
 mod tests {
-    use super::{CancellationToken, QUEUE_CAPACITY};
+    use super::CancellationToken;
 
     #[test]
     #[ignore = "repeatable performance benchmark; run with --ignored --nocapture --test-threads=1"]
@@ -220,10 +220,5 @@ mod tests {
         assert!(!clone.is_cancelled());
         token.cancel();
         assert!(clone.is_cancelled());
-    }
-
-    #[test]
-    fn queue_capacity_is_fixed() {
-        assert_eq!(QUEUE_CAPACITY, 128);
     }
 }

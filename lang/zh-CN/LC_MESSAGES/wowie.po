@@ -36,6 +36,10 @@ msgid "No results"
 msgstr "无结果"
 
 msgctxt "Launcher"
+msgid "Searching..."
+msgstr "正在搜索..."
+
+msgctxt "Launcher"
 msgid "All"
 msgstr "全部"
 
@@ -2937,3 +2941,31 @@ msgstr "wgpocpl.cpl"
 msgctxt "Windows Settings"
 msgid "wscui.cpl"
 msgstr "wscui.cpl"
+
+msgctxt "Settings"
+msgid "File search backend"
+msgstr "文件搜索后端"
+
+msgctxt "Settings"
+msgid "File Search"
+msgstr "文件搜索"
+
+msgctxt "Settings"
+msgid "Automatic prefers Everything and falls back to the Windows Search index. Choose a backend to force it."
+msgstr "自动模式优先使用 Everything；不可用时回退到 Windows Search 索引。也可手动指定后端。"
+
+msgctxt "Settings"
+msgid "Automatic"
+msgstr "自动"
+
+msgctxt "Settings"
+msgid "Windows Search index"
+msgstr "Windows 文件索引"
+
+msgctxt "Settings"
+msgid "Run at sign-in"
+msgstr "登录 Windows 时启动"
+
+msgctxt "Settings"
+msgid "Start Wowie when you sign in to Windows."
+msgstr "登录 Windows 时启动 Wowie。"

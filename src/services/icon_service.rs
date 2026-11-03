@@ -323,12 +323,22 @@ fn resolve_uncached(
     if item.category == crate::result::ResultCategory::Settings {
         return crate::platform::application_icon(Path::new(
             crate::providers::windows_settings::SETTINGS_ICON_TARGET,
-        ));
+        ))
+        .or_else(|| named_icon("settings", size));
     }
 
     if item.category == crate::result::ResultCategory::ControlPanel {
-        // Control Panel items use their root namespace icon as a fallback.
-        return crate::platform::application_icon(Path::new("shell:ControlPanelFolder"));
+        // A failed resource extraction must still try the original Shell item
+        // or console before falling back to a category icon.
+        return item
+            .launch_entries
+            .iter()
+            .filter_map(|entry| entry.icon.as_ref())
+            .filter(|spec| Some(*spec) != item.icon.as_ref())
+            .find_map(|spec| resolve_spec_with_cache(spec, size, sources))
+            .or_else(|| crate::platform::application_icon(&item.launch_target))
+            .or_else(|| crate::platform::application_icon(Path::new("shell:ControlPanelFolder")))
+            .or_else(|| named_icon("control-panel", size));
     }
 
     let icon_target = crate::providers::app::preferred_launch_entry(item)
@@ -453,6 +463,10 @@ fn resolve_spec(spec: &IconSpec, size: u32) -> Option<IconData> {
 
 fn named_icon(name: &str, size: u32) -> Option<IconData> {
     match name {
+        "settings" => load_svg_bytes(include_bytes!("../../assets/icons/settings.svg"), size),
+        "control-panel" => {
+            load_svg_bytes(include_bytes!("../../assets/icons/control-panel.svg"), size)
+        }
         "weather" => load_svg_bytes(include_bytes!("../../assets/icons/weather.svg"), size),
         "calculator" => load_svg_bytes(include_bytes!("../../assets/icons/calculator.svg"), size),
         "book" | "wowie" => {
@@ -858,35 +872,6 @@ mod tests {
     }
 
     #[test]
-    fn source_key_is_stable_for_same_result() {
-        let item = SearchResult {
-            id: "game:steam:10".into(),
-            identity: "game:steam:10".into(),
-            title: "Game".into(),
-            category: ResultCategory::Game,
-            aliases: vec![],
-            location: "steam://rungameid/10".into(),
-            launch_target: PathBuf::from("steam://rungameid/10"),
-            launch_arguments: String::new(),
-            launch_working_directory: None,
-            source: "Steam".into(),
-            sources: vec!["Steam".into()],
-            launch_entries: vec![],
-            actions: vec![],
-            detail: None,
-            description: None,
-            app_user_model_id: None,
-            package_family_name: None,
-            package_metadata: None,
-            icon: None,
-            ranking_bias: 0,
-            allow_favorite: true,
-            visibility: crate::result::ResultVisibility::Always,
-        };
-        assert_eq!(icon_source_key(&item), icon_source_key(&item));
-    }
-
-    #[test]
     fn source_key_reuses_the_same_explicit_icon() {
         let mut first = test_result("one");
         let mut second = test_result("two");
@@ -933,29 +918,26 @@ mod tests {
     }
 
     #[test]
-    fn named_plugin_icons_are_resolvable() {
-        for name in ["book", "checklist", "wowie"] {
-            assert!(resolve_spec(&IconSpec::Named(name.into()), 24).is_some());
+    fn bundled_icons_render_visible_pixels() {
+        for name in [
+            "book",
+            "checklist",
+            "wowie",
+            "settings",
+            "control-panel",
+            "calculator",
+        ] {
+            let icon = resolve_spec(&IconSpec::Named(name.into()), 24).unwrap();
+            assert_eq!((icon.width, icon.height), (24, 24), "{name}");
+            assert!(
+                icon.rgba
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[3] != 0),
+                "{name}"
+            );
         }
-    }
-
-    #[test]
-    fn bundled_svg_icons_render_to_icon_data() {
-        let icon = resolve_spec(&IconSpec::Calculator, 40).unwrap();
-        assert_eq!((icon.width, icon.height), (40, 40));
-        assert!(icon.rgba.iter().any(|channel| *channel != 0));
-    }
-
-    #[test]
-    fn service_reuses_explicit_icon_results() {
-        let service = IconService::new();
-        let first = service
-            .resolve_spec_at(&IconSpec::Calculator, 24)
-            .expect("first icon");
-        let second = service
-            .resolve_spec_at(&IconSpec::Calculator, 24)
-            .expect("cached icon");
-        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]

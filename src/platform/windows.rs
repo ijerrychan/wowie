@@ -30,20 +30,30 @@ use windows_sys::Win32::{
         },
         WindowsAndMessaging::{
             DispatchMessageW, GetForegroundWindow, GetSystemMetrics, PeekMessageW,
-            SetForegroundWindow, ShowWindow, TranslateMessage, MSG, PM_REMOVE, SW_SHOW, WM_HOTKEY,
+            SetForegroundWindow, TranslateMessage, MSG, PM_REMOVE, WM_HOTKEY,
         },
     },
 };
 
 mod com;
+mod file_search;
 mod icons;
 mod settings;
 mod shell;
 mod shortcuts;
+mod startup;
 mod tray;
 mod watchers;
+mod window_background;
+
+pub(super) fn set_window_background(window: &slint::Window, color: slint::Color) {
+    if let Some(hwnd) = hwnd_from_window(window) {
+        window_background::set_background(hwnd, color);
+    }
+}
 
 use com::{wide_path, ComScope, WinRtMtaScope, WinRtScope};
+pub(crate) use file_search::query_file_index;
 pub(crate) use icons::{application_icon, default_open_icon, indexed_application_icon};
 pub(crate) use settings::SettingsAvailability;
 pub(crate) use shell::discover_control_panel_items;
@@ -55,6 +65,7 @@ use shell::{
 use shell::{collect_apps_folder, collect_packaged_apps};
 pub(crate) use shell::{windows_build_number, windows_setting_capability_available};
 pub(crate) use shortcuts::resolve_shortcut;
+pub(crate) use startup::set_run_at_sign_in;
 #[cfg(test)]
 use watchers::DirectoryChangeWatch;
 pub(crate) use watchers::{
@@ -566,7 +577,6 @@ impl PlatformIntegration for WindowsPlatform {
             return;
         };
         unsafe {
-            ShowWindow(hwnd, SW_SHOW);
             if SetForegroundWindow(hwnd) == 0 {
                 eprintln!("could not bring launcher window to foreground");
             }
@@ -941,32 +951,6 @@ mod tests {
         shutdown.stop_and_join();
     }
 
-    fn process_cpu_time_100ns() -> u64 {
-        use windows_sys::Win32::{
-            Foundation::FILETIME,
-            System::Threading::{GetCurrentProcess, GetProcessTimes},
-        };
-        let mut created = FILETIME::default();
-        let mut exited = FILETIME::default();
-        let mut kernel = FILETIME::default();
-        let mut user = FILETIME::default();
-        assert_ne!(
-            unsafe {
-                GetProcessTimes(
-                    GetCurrentProcess(),
-                    &mut created,
-                    &mut exited,
-                    &mut kernel,
-                    &mut user,
-                )
-            },
-            0
-        );
-        let ticks =
-            |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
-        ticks(kernel) + ticks(user)
-    }
-
     #[test]
     fn custom_directory_notification_covers_deep_changes() {
         let root = std::env::temp_dir().join(format!(
@@ -979,25 +963,11 @@ mod tests {
         ));
         let deep = root.join("one").join("two").join("three");
         std::fs::create_dir_all(&deep).unwrap();
-        for index in 0..1000 {
-            std::fs::write(root.join(format!("file-{index}.txt")), b"x").unwrap();
-        }
-        let scan_started = std::time::Instant::now();
-        let _fingerprint = crate::utils::filesystem_fingerprint(std::slice::from_ref(&root));
-        let scan_elapsed = scan_started.elapsed();
         let watch = DirectoryChangeWatch::open(&root).unwrap();
-        let cpu_before = process_cpu_time_100ns();
-        assert_eq!(unsafe { WaitForSingleObject(watch.handle, 1000) }, 258);
-        let idle_cpu_ms = (process_cpu_time_100ns() - cpu_before) / 10_000;
-        let changed_at = std::time::Instant::now();
+        // Check idle and signaled behavior without a bulk scan or CPU sample.
+        assert_eq!(unsafe { WaitForSingleObject(watch.handle, 0) }, 258);
         std::fs::write(deep.join("changed.txt"), b"new").unwrap();
         assert_eq!(unsafe { WaitForSingleObject(watch.handle, 5000) }, 0);
-        eprintln!(
-            "[provider] 1000-file fingerprint_ms={} idle_1s_cpu_ms={} deep_change_notification_ms={}",
-            scan_elapsed.as_millis(),
-            idle_cpu_ms,
-            changed_at.elapsed().as_millis()
-        );
         drop(watch);
         std::fs::remove_dir_all(root).unwrap();
     }

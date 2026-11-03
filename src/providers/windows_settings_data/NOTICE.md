@@ -1,13 +1,22 @@
 # PowerToys Command Palette Windows Settings data
 
 The catalog, schema, neutral RESX and localized resource strings come from
-Microsoft PowerToys **Command Palette**, latest stable release at import time:
+Microsoft PowerToys **Command Palette**. Current catalog snapshot:
+
+- Release: [v0.102.3001](https://github.com/microsoft/PowerToys/releases/tag/v0.102.3001).
+- Revision: `a00b2bce7403f0a48efe5cbb6671074e01f27824`.
+- Checked/updated: 2026-11-01; 306 catalog entries.
+- Catalog, schema, English RESX and license match the previous snapshot;
+  only provenance needed updating. Their downloaded byte hashes are recorded
+  in `SOURCE.json` under `catalog`.
+
+The verified original localization import is retained separately:
 
 - Release: [v0.101.2362.0](https://github.com/microsoft/PowerToys/releases/tag/v0.101.2362.0), published 2026-08-25.
 - Revision: `389b1a3827b2cf577723288df15437490ef0663a`.
 - Source: [Microsoft.CmdPal.Ext.WindowsSettings](https://github.com/microsoft/PowerToys/tree/389b1a3827b2cf577723288df15437490ef0663a/src/modules/cmdpal/ext/Microsoft.CmdPal.Ext.WindowsSettings).
 - Imported: 2026-10-07. License: MIT, see `PowerToys-LICENSE`.
-- Machine-readable provenance: `SOURCE.json`.
+- Machine-readable localization provenance: `SOURCE.json` / `localizations`.
 
 `WindowsSettings.json` contains 306 candidate entries. English resources are
 copied from upstream `Properties/Resources.resx`. Published translations are
@@ -27,7 +36,21 @@ There are no Wowie-authored Chinese labels or Microsoft Learn overrides.
 Search aliases retain both supported languages. For example, upstream's
 Simplified Chinese Wi-Fi title is `WLAN`.
 
-To refresh, obtain the source directory and matching official release binary,
+For an automatic source-only refresh, run:
+
+```powershell
+python -B tools/update_windows_settings.py --ref latest --check
+pwsh -NoProfile -File tools/build.ps1 -UpdateWindowsSettings
+```
+
+The optional build step resolves the latest stable tag to a commit, validates
+the catalog and reuses localized keys only if their English source is unchanged.
+New/changed used resource keys stop the update without substituting translations.
+Plain Cargo builds use the checked-in snapshot and do not access GitHub.
+`--check` exits 0 when current, 1 when changes are available, 2 on failure.
+Without `--ref`, the updater re-fetches the pinned commit rather than latest.
+
+When translations need refreshing, obtain the source directory and matching official release binary,
 verify each locale stream (offsets change between releases), then run:
 
 ```powershell
@@ -43,13 +66,22 @@ Classic installed Control Panel applets remain discovered through Shell.
 Dynamic task strings follow the Windows display language, as upstream does;
 changing Wowie's UI language does not translate those OS-provided strings.
 
-The candidate catalog is not proof of local availability. Wowie additionally
-checks installed Settings XML policy IDs (or complete URI literals in the
-installed SystemSettings.dll when XML provides no usable IDs), OS build,
-edition, hardware prerequisites and SettingsPageVisibility policies. Unknown
-prerequisites exclude conditional pages. MMC entries require actual System32
-files. Discovery reads bytes only; it does not load the Settings DLL. Local
-metadata does not guarantee that every dynamically gated feature is enabled.
+The catalog supplies candidate pages, filtered by OS build, edition, explicit
+hardware exclusions and SettingsPageVisibility policies. The Settings host
+must be installed. Undocumented Settings XML and SystemSettings.dll strings
+are not complete page lists and are deliberately not used as whitelists.
+Unknown build/device probes do not establish incompatibility and therefore
+do not remove candidates; dynamically gated pages can still redirect to a
+parent page. MMC entries require actual System32 files, and their icon DLL
+and index come from each console's VisualAttributes metadata. Applets and
+tasks keep captured absolute PIDLs as icon sources. Missing native icons
+fall back to bundled category SVGs. No Settings DLL code is loaded for page
+discovery. Duplicate destinations merge aliases while retaining the first
+record's identity, with Shell records taking precedence over catalog records.
+
+See [Windows settings maintenance](../../../docs/Windows设置索引.md) for
+the official discovery paths, build-time update command, offline source mode,
+translation boundary and focused verification commands.
 
 Availability corrections use Microsoft's [Settings URI reference](https://learn.microsoft.com/en-us/windows/apps/develop/launch/launch-settings),
 [Windows 11 24H2 removed features](https://learn.microsoft.com/en-us/windows/whats-new/whats-new-windows-11-version-24h2)

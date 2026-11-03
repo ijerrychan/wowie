@@ -1,10 +1,23 @@
 {
-  "release": "v0.101.2362.0",
-  "revision": "389b1a3827b2cf577723288df15437490ef0663a",
-  "binary_sha256": "3273fd73729db468ef0cd23c7026a12f09db953ecb1c62e6e19eaac3f1f624b0",
-  "locale_stream_offsets": {
-    "zh-CN": 21295979
+  "catalog": {
+    "release": "v0.102.3001",
+    "revision": "a00b2bce7403f0a48efe5cbb6671074e01f27824",
+    "catalog_count": 306,
+    "neutral_resource_count": 543,
+    "files_sha256": {
+      "WindowsSettings.json": "b66daecda79a8675d13052a4eba24fffdc6f79042500436d601ab4d51ed217cc",
+      "WindowsSettings.schema.json": "3448b14a95eb3e5f71503de1b50540ba719da44c62abb4145f5f57f3b1ec26c0",
+      "Resources.en.resx": "9550853c9c831320124b832f2c32287946faf4210345a0d01849264bfdd9c102",
+      "PowerToys-LICENSE": "1eb3cbe7f022addbfc6d65cb2e39aca5b24333942ed843aa10c03befd71ee225"
+    }
   },
-  "neutral_resource_count": 543,
-  "catalog_count": 306
+  "localizations": {
+    "release": "v0.101.2362.0",
+    "revision": "389b1a3827b2cf577723288df15437490ef0663a",
+    "binary_sha256": "3273fd73729db468ef0cd23c7026a12f09db953ecb1c62e6e19eaac3f1f624b0",
+    "locale_stream_offsets": {
+      "zh-CN": 21295979
+    },
+    "neutral_resource_count": 543
+  }
 }

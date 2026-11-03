@@ -63,8 +63,26 @@ pub(super) fn register_settings_callbacks(
             let Some(mut config) = load_editable_config(&settings_for_change) else {
                 return;
             };
+            let previous_run_at_sign_in = config.run_at_sign_in;
             let setting_result = settings::apply(&mut config, &plugin_settings, &id, &value)
-                .and_then(|()| config.save());
+                .and_then(|()| {
+                    if id.as_str() == "run_at_sign_in" {
+                        platform::set_run_at_sign_in(config.run_at_sign_in)?;
+                    }
+                    if let Err(error) = config.save() {
+                        if id.as_str() == "run_at_sign_in" {
+                            if let Err(rollback_error) =
+                                platform::set_run_at_sign_in(previous_run_at_sign_in)
+                            {
+                                eprintln!(
+                                    "could not roll back Windows sign-in startup setting: {rollback_error:#}"
+                                );
+                            }
+                        }
+                        return Err(error);
+                    }
+                    Ok(())
+                });
             if let Err(error) = setting_result {
                 if let Some(settings) = settings_for_change.upgrade() {
                     settings.set_status_message(error.to_string().into());

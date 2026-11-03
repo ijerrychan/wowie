@@ -19,6 +19,7 @@ use nucleo_matcher::{Config as MatcherConfig, Matcher, Utf32Str};
 use rayon::prelude::*;
 use serde::{de, de::DeserializeOwned, Deserialize, Deserializer};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashSet},
     fs,
     fs::OpenOptions,
@@ -67,11 +68,14 @@ const SESSION_PLUGIN_QUERY_BUDGET: Duration = Duration::from_millis(750);
 const QUERY_HOOK_INSTRUCTION_INTERVAL: u32 = 10_000;
 const QUERY_CANCELLED: &str = "plugin query cancelled";
 const QUERY_TIMED_OUT: &str = "plugin query timed out";
-const MAX_EVERYTHING_IPC_RESULTS: usize = 256;
+const MAX_FILE_SEARCH_RESULTS: usize = 256;
 const MAX_PLUGIN_FUZZY_CANDIDATES: usize = 20_000;
 const MAX_PLUGIN_FUZZY_FIELDS: usize = 8;
 const MAX_PLUGIN_FUZZY_TEXT_BYTES: usize = 4096;
 const MAX_PLUGIN_FUZZY_QUERY_BYTES: usize = 4096;
+const BUILTIN_FILE_SEARCH_ID: &str = "everything";
+const BUILTIN_FILE_SEARCH_MANIFEST: &str = include_str!("../plugins/everything/manifest.json");
+const BUILTIN_FILE_SEARCH_SOURCE: &str = include_str!("../plugins/everything/main.lua");
 
 struct PluginFuzzyScratch {
     matcher: Matcher,
@@ -138,6 +142,8 @@ pub struct PluginPreference {
     pub value_type: String,
     #[serde(default)]
     pub options: Vec<String>,
+    #[serde(default)]
+    pub option_labels: Vec<String>,
     #[serde(default)]
     pub default: serde_json::Value,
 }
@@ -242,7 +248,8 @@ pub struct PluginStatus {
 struct QueryCancellation {
     epoch: Arc<AtomicU64>,
     expected_epoch: u64,
-    budget: Duration,
+    budget: Option<Duration>,
+    started_at: Option<Instant>,
 }
 
 struct PluginQueryOptions<'a> {
@@ -256,13 +263,49 @@ struct PluginQueryOptions<'a> {
 }
 
 impl QueryCancellation {
-    fn new(epoch: &Arc<AtomicU64>, expected_epoch: u64, budget: Duration) -> Self {
+    fn new(epoch: &Arc<AtomicU64>, expected_epoch: u64, budget: Option<Duration>) -> Self {
         Self {
             epoch: Arc::clone(epoch),
             expected_epoch,
             budget,
+            started_at: None,
         }
     }
+
+    fn abort_reason(&self) -> Option<&'static str> {
+        if self.epoch.load(Ordering::Acquire) != self.expected_epoch {
+            Some(QUERY_CANCELLED)
+        } else if self.budget.is_some_and(|budget| {
+            self.started_at
+                .is_some_and(|started_at| started_at.elapsed() >= budget)
+        }) {
+            Some(QUERY_TIMED_OUT)
+        } else {
+            None
+        }
+    }
+}
+
+thread_local! {
+    static ACTIVE_QUERY_CANCELLATION: RefCell<Option<QueryCancellation>> = const { RefCell::new(None) };
+}
+
+fn active_query_abort_reason() -> Option<&'static str> {
+    ACTIVE_QUERY_CANCELLATION.with(|active| {
+        active
+            .borrow()
+            .as_ref()
+            .and_then(QueryCancellation::abort_reason)
+    })
+}
+
+#[cfg(windows)]
+fn active_query_allow_unbounded_wait() {
+    ACTIVE_QUERY_CANCELLATION.with(|active| {
+        if let Some(cancellation) = active.borrow_mut().as_mut() {
+            cancellation.budget = None;
+        }
+    });
 }
 
 struct EmbeddedPlugin {
@@ -618,6 +661,50 @@ impl EmbeddedPlugin {
                 Ok(result)
             })?,
         )?;
+        let file_search_allowed = has_plugin_permission(permissions, "file_search");
+        wowie.set(
+            "file_search_backend",
+            lua.create_function(move |_, mode: Option<String>| {
+                require_plugin_permission(file_search_allowed, "file_search")?;
+                Ok(file_search_backend(mode.as_deref().unwrap_or("auto")))
+            })?,
+        )?;
+        let file_search_allowed = has_plugin_permission(permissions, "file_search");
+        wowie.set(
+            "file_search",
+            lua.create_function(
+                move |lua,
+                      (query, offset, limit, mode): (
+                    String,
+                    Option<u64>,
+                    Option<u64>,
+                    Option<String>,
+                )| {
+                    require_plugin_permission(file_search_allowed, "file_search")?;
+                    let offset = offset.unwrap_or_default().min(usize::MAX as u64) as usize;
+                    let limit =
+                        limit.unwrap_or(30).clamp(1, MAX_FILE_SEARCH_RESULTS as u64) as usize;
+                    let rows = query_file_search(
+                        &query,
+                        offset,
+                        limit,
+                        mode.as_deref().unwrap_or("auto"),
+                        &active_query_abort_reason,
+                    )
+                    .map_err(mlua::Error::external)?;
+                    let result = lua.create_table()?;
+                    for (index, (name, path)) in rows.into_iter().enumerate() {
+                        let item = lua.create_table()?;
+                        item.set("name", name)?;
+                        item.set("path", path)?;
+                        result.set(index + 1, item)?;
+                    }
+                    Ok(result)
+                },
+            )?,
+        )?;
+        // Preserve the original plugin API for third-party plugins that
+        // explicitly request Everything and depend on its query syntax.
         let everything_allowed = has_plugin_permission(permissions, "everything");
         wowie.set(
             "everything_search",
@@ -625,10 +712,8 @@ impl EmbeddedPlugin {
                 move |lua, (query, offset, limit): (String, Option<u64>, Option<u64>)| {
                     require_plugin_permission(everything_allowed, "everything")?;
                     let offset = offset.unwrap_or_default().min(usize::MAX as u64) as usize;
-                    let limit = limit
-                        .unwrap_or(30)
-                        .clamp(1, MAX_EVERYTHING_IPC_RESULTS as u64)
-                        as usize;
+                    let limit =
+                        limit.unwrap_or(30).clamp(1, MAX_FILE_SEARCH_RESULTS as u64) as usize;
                     let rows =
                         query_everything(&query, offset, limit).map_err(mlua::Error::external)?;
                     let result = lua.create_table()?;
@@ -755,27 +840,25 @@ impl EmbeddedPlugin {
         request: &serde_json::Value,
         cancellation: Option<QueryCancellation>,
     ) -> Result<String> {
-        let Some(cancellation) = cancellation else {
-            return self.call("query", request, None, None);
+        let previous = ACTIVE_QUERY_CANCELLATION.with(|active| active.replace(None));
+        let result = if let Some(mut cancellation) = cancellation {
+            let started_at = Instant::now();
+            cancellation.started_at = Some(started_at);
+            ACTIVE_QUERY_CANCELLATION.with(|active| *active.borrow_mut() = Some(cancellation));
+            self.lua.set_hook(
+                HookTriggers::new().every_nth_instruction(QUERY_HOOK_INSTRUCTION_INTERVAL),
+                move |_lua, _debug| match active_query_abort_reason() {
+                    Some(reason) => Err(mlua::Error::runtime(reason)),
+                    None => Ok(VmState::Continue),
+                },
+            );
+            let result = self.call("query", request, None, None);
+            self.lua.remove_hook();
+            result
+        } else {
+            self.call("query", request, None, None)
         };
-
-        let deadline = Instant::now() + cancellation.budget;
-        let expected_epoch = cancellation.expected_epoch;
-        let epoch = cancellation.epoch;
-        self.lua.set_hook(
-            HookTriggers::new().every_nth_instruction(QUERY_HOOK_INSTRUCTION_INTERVAL),
-            move |_lua, _debug| {
-                if epoch.load(Ordering::Acquire) != expected_epoch {
-                    Err(mlua::Error::runtime(QUERY_CANCELLED))
-                } else if Instant::now() >= deadline {
-                    Err(mlua::Error::runtime(QUERY_TIMED_OUT))
-                } else {
-                    Ok(VmState::Continue)
-                }
-            },
-        );
-        let result = self.call("query", request, None, None);
-        self.lua.remove_hook();
+        ACTIVE_QUERY_CANCELLATION.with(|active| *active.borrow_mut() = previous);
         result
     }
 }
@@ -891,6 +974,65 @@ fn query_everything(
         let _ = (query, offset, max_results);
         Ok(Vec::new())
     }
+}
+
+fn query_file_search(
+    query: &str,
+    offset: usize,
+    max_results: usize,
+    backend: &str,
+    abort_reason: &dyn Fn() -> Option<&'static str>,
+) -> Result<Vec<(String, String)>> {
+    #[cfg(windows)]
+    {
+        if let Some(reason) = abort_reason() {
+            anyhow::bail!(reason);
+        }
+        match backend {
+            "everything" if !everything_ipc_available() => Ok(Vec::new()),
+            "everything" => query_everything(query, offset, max_results),
+            "windows-index" => {
+                active_query_allow_unbounded_wait();
+                crate::platform::query_file_index(query, offset, max_results, abort_reason)
+            }
+            _ => match query_everything(query, offset, max_results) {
+                Ok(rows) => Ok(rows),
+                Err(_) => {
+                    active_query_allow_unbounded_wait();
+                    crate::platform::query_file_index(query, offset, max_results, abort_reason)
+                }
+            },
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (query, offset, max_results, backend, abort_reason);
+        Ok(Vec::new())
+    }
+}
+
+fn file_search_backend(backend: &str) -> &'static str {
+    #[cfg(windows)]
+    {
+        let everything_available = everything_ipc_available();
+        match backend {
+            "windows-index" => "windows-index",
+            "everything" if everything_available => "everything",
+            "everything" => "everything-unavailable",
+            _ if everything_available => "everything",
+            _ => "windows-index",
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = backend;
+        "unsupported"
+    }
+}
+
+#[cfg(windows)]
+fn everything_ipc_available() -> bool {
+    everything_ipc::wm::EverythingClient::new().is_ok()
 }
 
 fn everything_icon_target() -> Option<String> {
@@ -1041,6 +1183,77 @@ fn configured_action_word_overrides(
         .collect()
 }
 
+fn build_installed_plugin(
+    root: PathBuf,
+    manifest: PluginManifest,
+    locale: &str,
+    plugin_configs: &BTreeMap<String, PluginConfig>,
+    embedded_source: Option<&str>,
+) -> InstalledPlugin {
+    let settings =
+        merge_preference_defaults(plugin_config_for(&manifest.id, plugin_configs), &manifest);
+    let action_word_overrides = Arc::new(RwLock::new(configured_action_word_overrides(
+        &manifest, &settings,
+    )));
+    let status = Arc::new(Mutex::new(PluginRuntimeStatus {
+        state: if settings.enabled {
+            "ready".into()
+        } else {
+            "disabled".into()
+        },
+        last_method: None,
+        last_error: None,
+        failure_count: 0,
+        last_query_ms: 0,
+        last_query_results: 0,
+        query_truncations: 0,
+    }));
+    let embedded_result = match embedded_source {
+        Some(source) => EmbeddedPlugin::from_source(
+            source,
+            &manifest.entry_point,
+            locale,
+            &manifest.default_locale,
+            &settings.preferences,
+            &manifest.permissions,
+            Some(plugin_storage_dir(&manifest.id)),
+        ),
+        None => EmbeddedPlugin::from_file(&root, &manifest, locale, &settings.preferences),
+    };
+    let embedded = match embedded_result {
+        Ok(plugin) => Some(Arc::new(Mutex::new(plugin))),
+        Err(error) => {
+            if let Ok(mut status) = status.lock() {
+                status.state = "error".into();
+                status.last_method = Some("initialize".into());
+                status.last_error = Some(error.to_string());
+                status.failure_count = 1;
+            }
+            eprintln!("[plugin:{}] embedded start failed: {error:#}", manifest.id);
+            None
+        }
+    };
+    // Cache handler availability during discovery. Checking the Lua VM on
+    // every selection can block the UI while a plugin query makes a request.
+    let has_detail_handler = embedded
+        .as_ref()
+        .and_then(|plugin| plugin.lock().ok())
+        .and_then(|plugin| plugin.has_handler("detail").ok())
+        .unwrap_or(false);
+
+    InstalledPlugin {
+        root,
+        manifest,
+        embedded,
+        has_detail_handler,
+        enabled: Arc::new(AtomicBool::new(settings.enabled)),
+        weight: Arc::new(AtomicI32::new(settings.weight)),
+        preferences: Arc::new(Mutex::new(settings.preferences)),
+        action_word_overrides,
+        status,
+    }
+}
+
 fn command_action_words(plugin: &InstalledPlugin, command: &PluginCommand) -> Vec<String> {
     if command.customizable_action_words {
         if let Ok(overrides) = plugin.action_word_overrides.read() {
@@ -1116,76 +1329,32 @@ impl PluginManager {
                 };
                 match serde_json::from_str::<PluginManifest>(&text) {
                     Ok(manifest) => {
-                        let settings = merge_preference_defaults(
-                            plugin_config_for(&manifest.id, plugin_configs),
-                            &manifest,
-                        );
-                        let action_word_overrides = Arc::new(RwLock::new(
-                            configured_action_word_overrides(&manifest, &settings),
-                        ));
-                        let status = Arc::new(Mutex::new(PluginRuntimeStatus {
-                            state: if settings.enabled {
-                                "ready".into()
-                            } else {
-                                "disabled".into()
-                            },
-                            last_method: None,
-                            last_error: None,
-                            failure_count: 0,
-                            last_query_ms: 0,
-                            last_query_results: 0,
-                            query_truncations: 0,
-                        }));
-                        let embedded = match EmbeddedPlugin::from_file(
-                            &dir,
-                            &manifest,
-                            &locale,
-                            &settings.preferences,
-                        ) {
-                            Ok(plugin) => Some(Arc::new(Mutex::new(plugin))),
-                            Err(error) => {
-                                if let Ok(mut status) = status.lock() {
-                                    status.state = "error".into();
-                                    status.last_method = Some("initialize".into());
-                                    status.last_error = Some(error.to_string());
-                                    status.failure_count = 1;
-                                }
-                                eprintln!(
-                                    "[plugin:{}] embedded start failed: {error:#}",
-                                    manifest.id
-                                );
-                                None
-                            }
-                        };
-                        // Cache handler availability during discovery. Checking
-                        // the Lua VM on every selection can block the UI while
-                        // a plugin query is making a network request.
-                        let has_detail_handler = embedded
-                            .as_ref()
-                            .map(|plugin| {
-                                let Ok(plugin) = plugin.lock() else {
-                                    return false;
-                                };
-                                plugin.has_handler("detail").unwrap_or(false)
-                            })
-                            .unwrap_or(false);
-                        plugins.push(InstalledPlugin {
-                            root: dir,
+                        if manifest.id.eq_ignore_ascii_case(BUILTIN_FILE_SEARCH_ID) {
+                            continue;
+                        }
+                        plugins.push(build_installed_plugin(
+                            dir,
                             manifest,
-                            embedded,
-                            has_detail_handler,
-                            enabled: Arc::new(AtomicBool::new(settings.enabled)),
-                            weight: Arc::new(AtomicI32::new(settings.weight)),
-                            preferences: Arc::new(Mutex::new(settings.preferences)),
-                            action_word_overrides,
-                            status,
-                        });
+                            &locale,
+                            plugin_configs,
+                            None,
+                        ));
                     }
                     Err(error) => {
                         eprintln!("[plugin] invalid manifest {:?}: {error}", manifest_path)
                     }
                 }
             }
+        }
+        match serde_json::from_str::<PluginManifest>(BUILTIN_FILE_SEARCH_MANIFEST) {
+            Ok(manifest) => plugins.push(build_installed_plugin(
+                PathBuf::from("plugins/everything"),
+                manifest,
+                &locale,
+                plugin_configs,
+                Some(BUILTIN_FILE_SEARCH_SOURCE),
+            )),
+            Err(error) => eprintln!("[plugin] invalid built-in file search manifest: {error}"),
         }
         plugins.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
         if !plugins.is_empty() {
@@ -1206,6 +1375,10 @@ impl PluginManager {
 
     fn begin_query(&self) -> u64 {
         self.query_epoch.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    pub(crate) fn cancel_active_queries(&self) {
+        self.query_epoch.fetch_add(1, Ordering::AcqRel);
     }
 
     fn query_is_current(&self, epoch: u64) -> bool {
@@ -1336,9 +1509,9 @@ impl PluginManager {
         let (plugin_query, command_id) = action_word_query(plugin, query);
         let started = Instant::now();
         let query_budget = if command_id.is_some() {
-            SESSION_PLUGIN_QUERY_BUDGET
+            Some(SESSION_PLUGIN_QUERY_BUDGET)
         } else {
-            ROOT_PLUGIN_QUERY_BUDGET
+            Some(ROOT_PLUGIN_QUERY_BUDGET)
         };
         match query_plugin(
             plugin,
@@ -1458,7 +1631,7 @@ impl PluginManager {
                 cancellation: Some(QueryCancellation::new(
                     &self.query_epoch,
                     epoch,
-                    SESSION_PLUGIN_QUERY_BUDGET,
+                    Some(SESSION_PLUGIN_QUERY_BUDGET),
                 )),
             },
         ) {
@@ -1520,7 +1693,7 @@ impl PluginManager {
                 cancellation: Some(QueryCancellation::new(
                     &self.query_epoch,
                     epoch,
-                    SESSION_PLUGIN_QUERY_BUDGET,
+                    Some(SESSION_PLUGIN_QUERY_BUDGET),
                 )),
             },
         ) {
@@ -2728,10 +2901,34 @@ mod tests {
         let error = plugin
             .call_query(
                 &serde_json::json!({"query": "stale"}),
-                Some(QueryCancellation::new(&epoch, 1, Duration::from_secs(1))),
+                Some(QueryCancellation::new(
+                    &epoch,
+                    1,
+                    Some(Duration::from_secs(1)),
+                )),
             )
             .unwrap_err();
         assert!(error.to_string().contains(QUERY_CANCELLED));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_index_wait_removes_deadline_but_keeps_epoch_cancellation() {
+        let epoch = Arc::new(AtomicU64::new(1));
+        let mut cancellation = QueryCancellation::new(&epoch, 1, Some(Duration::ZERO));
+        cancellation.started_at = Some(Instant::now());
+        let previous = ACTIVE_QUERY_CANCELLATION.with(|active| active.replace(Some(cancellation)));
+
+        let timed_out = active_query_abort_reason();
+        active_query_allow_unbounded_wait();
+        let unbounded = active_query_abort_reason();
+        epoch.fetch_add(1, Ordering::AcqRel);
+        let cancelled = active_query_abort_reason();
+
+        ACTIVE_QUERY_CANCELLATION.with(|active| active.replace(previous));
+        assert_eq!(timed_out, Some(QUERY_TIMED_OUT));
+        assert_eq!(unbounded, None);
+        assert_eq!(cancelled, Some(QUERY_CANCELLED));
     }
 
     #[test]
@@ -2762,10 +2959,12 @@ mod tests {
         )
         .expect("Everything should provide its custom empty page");
         assert!(empty_state.detail.is_none());
-        assert!(empty_state
-            .description
-            .unwrap_or_default()
-            .contains("Everything syntax"));
+        let description = empty_state.description.unwrap_or_default();
+        assert!(
+            description.contains("Everything syntax")
+                || description.contains("Windows Search index")
+                || description.contains("available on Windows")
+        );
 
         assert!(manager.search_engine("eng").is_none());
         let translation_session = manager.search_engine("tmt ").unwrap();

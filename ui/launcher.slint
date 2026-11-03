@@ -101,6 +101,7 @@ export component Launcher inherits Window {
     background: root.native-window-frame ? root.canvas : transparent;
 
     in property <bool> native-window-frame: false;
+    out property <color> native-background-color: root.canvas;
     in-out property <int> window-width: 900;
     in property <string> ui-font-family: "";
     in property <length> ui-font-size: 14px;
@@ -195,6 +196,7 @@ export component Launcher inherits Window {
     out property <length> effective-window-height: root.compact-results-hidden ? root.compact-window-height : root.result-window-height;
     private property <length> compact-window-height: 2 * root.window-inset + 2 * root.empty-state-padding + root.search-row-height;
     private property <bool> compact-results-hidden: root.compact-search && root.root-query-empty && !root.shortcut-session-active && !root.empty-query-results-visible;
+    private property <bool> search-loading: root.shortcut-session-active && root.query-text != "" && !root.query-results-ready;
     private property <length> operation-hint-height: 24px;
     private property <length> context-menu-gap: 6px;
     private property <length> no-results-height: 160px;
@@ -505,10 +507,14 @@ export component Launcher inherits Window {
                 clip: true;
 
                 results-list := ListView {
-                    visible: !root.compact-results-hidden;
+                    visible: !root.compact-results-hidden && !root.search-loading;
                     x: 0px; y: 0px;
                     width: parent.width - root.detail-progress * (parent.width * root.detail-panel-share + root.result-column-gap - root.detail-panel-alignment-shift);
-                    height: parent.height;
+                    // Slint still instantiates an invisible ListView. A zero-height
+                    // viewport can repeatedly discard/recreate its boundary row
+                    // after the model or scroll offset changes. Keep one row of
+                    // internal viewport while the results-area clips the compact UI.
+                    height: max(root.result-row-height, parent.height);
                 for row[index] in root.results : result-row := Rectangle {
                     x: root.result-row-inset;
                     width: results-list.visible-width - 2 * root.result-row-inset;
@@ -570,7 +576,7 @@ export component Launcher inherits Window {
                 detail-panel := Rectangle {
                     private property <length> panel-width: root.detail-panel-width;
                     private property <length> panel-height: max(0px, parent.height - root.detail-panel-bottom-inset);
-                    visible: root.detail-panel-active;
+                    visible: root.detail-panel-active && !root.search-loading;
                     x: results-list.width + root.result-column-gap - root.result-row-inset;
                     y: (1.0 - root.detail-progress) * 24px;
                     width: self.panel-width * max(0.0, root.detail-progress);
@@ -664,6 +670,24 @@ export component Launcher inherits Window {
                         }
                     }
                 }
+                if root.search-loading : Rectangle {
+                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    background: transparent;
+                    Text {
+                        x: 0px; y: max(0px, (parent.height - 56px) / 2);
+                        width: parent.width; height: 24px;
+                        text: "⏳";
+                        color: root.text-secondary; font-size: 1.4286rem;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 0px; y: max(0px, (parent.height - 56px) / 2 + 30px);
+                        width: parent.width; height: 22px;
+                        text: @tr("Searching...");
+                        color: root.text-secondary; font-size: 0.9286rem;
+                        horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+                    }
+                }
                 if (root.results.length == 0 && (search-field.text != "" || root.shortcut-session-active) && root.query-results-ready && !root.detail-visible) : Rectangle {
                     x: 0px;
                     y: max(0px, (parent.height - root.no-results-height) / 2);
@@ -713,6 +737,7 @@ export component ContextMenu inherits Window {
     background: root.native-window-frame ? root.canvas : transparent;
 
     in property <bool> native-window-frame: false;
+    out property <color> native-background-color: root.canvas;
     in property <bool> dark-mode: true;
     in property <color> accent-color: #0067c0;
     in property <[ContextActionRow]> actions;

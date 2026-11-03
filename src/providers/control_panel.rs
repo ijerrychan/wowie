@@ -4,10 +4,13 @@ use crate::platform::source_ids;
 use crate::result::{IconSpec, LaunchEntry, ResultCategory, SearchResult};
 
 pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
-    let mut results = crate::platform::discover_control_panel_items()
+    #[cfg(windows)]
+    let availability = crate::platform::SettingsAvailability::discover();
+    let results = crate::platform::discover_control_panel_items()
         .into_iter()
         .map(|item| {
             let shell_target = item.launch_target;
+            let icon = Some(IconSpec::System(item.icon_target));
             let mut result = SearchResult {
                 id: item.identity.clone(),
                 identity: item.identity,
@@ -30,7 +33,7 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
                     target: shell_target.clone(),
                     arguments: String::new(),
                     working_directory: None,
-                    icon: None,
+                    icon: icon.clone(),
                 }],
                 actions: Vec::new(),
                 detail: None,
@@ -38,36 +41,28 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
                 app_user_model_id: None,
                 package_family_name: None,
                 package_metadata: None,
-                // Keep the Shell item as the icon source even when its launch
-                // destination has moved to the Settings app.
-                icon: Some(IconSpec::System(shell_target)),
+                // Use the captured Shell identity rather than re-parsing its
+                // display/launch name to obtain the native icon.
+                icon,
                 ranking_bias: 0,
                 allow_favorite: true,
                 visibility: crate::result::ResultVisibility::Always,
             };
             crate::providers::windows_settings::enrich_shell_result(&mut result);
-            crate::providers::windows_settings::apply_compatible_destination(&mut result);
+            crate::providers::windows_settings::apply_compatible_destination(
+                &mut result,
+                #[cfg(windows)]
+                &availability,
+            );
             result
         })
         .collect::<Vec<_>>();
 
     #[cfg(windows)]
-    {
-        let mut existing_settings_targets = results
-            .iter()
-            .filter(|item| item.category == crate::result::ResultCategory::Settings)
-            .map(|item| item.launch_target.to_string_lossy().to_ascii_lowercase())
-            .collect::<std::collections::HashSet<_>>();
-        for item in crate::providers::windows_settings::powertoys_results() {
-            if item.category == ResultCategory::Settings
-                && !existing_settings_targets
-                    .insert(item.launch_target.to_string_lossy().to_ascii_lowercase())
-            {
-                continue;
-            }
-            results.push(item);
-        }
-    }
-
-    results
+    let results = results
+        .into_iter()
+        .chain(crate::providers::windows_settings::powertoys_results(
+            &availability,
+        ));
+    crate::providers::windows_settings::merge_results(results)
 }

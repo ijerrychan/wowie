@@ -470,7 +470,9 @@ pub(super) fn refresh_application_location(item: &mut SearchResult) {
     else {
         return;
     };
-    item.icon = icon;
+    // Older indexed entries can carry an icon only on the result. Selecting
+    // an entry without icon metadata must not erase that known fallback.
+    item.icon = icon.or_else(|| item.icon.clone());
     item.location = target.display().to_string();
 
     // Keep the default launch tied to the selected entry. For a shortcut,

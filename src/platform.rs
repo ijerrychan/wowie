@@ -20,6 +20,21 @@ mod windows;
 pub(crate) use windows::SettingsAvailability;
 
 #[cfg(windows)]
+pub(crate) use windows::query_file_index;
+
+pub(crate) fn set_run_at_sign_in(enabled: bool) -> Result<()> {
+    #[cfg(windows)]
+    {
+        windows::set_run_at_sign_in(enabled)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = enabled;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
 pub(crate) fn windows_build_number() -> Option<u32> {
     windows::windows_build_number()
 }
@@ -464,6 +479,14 @@ pub trait PlatformIntegration: Send + Sync {
     fn disable_window_transitions(&self, window: &slint::Window);
 }
 
+/// Match the native fallback surface to the Slint canvas before showing or resizing.
+pub(crate) fn set_window_background(window: &slint::Window, color: slint::Color) {
+    #[cfg(windows)]
+    windows::set_window_background(window, color);
+    #[cfg(not(windows))]
+    let _ = (window, color);
+}
+
 /// Open the system folder picker owned by the settings window.
 pub fn pick_folder(owner: &slint::Window) -> Result<Option<PathBuf>> {
     #[cfg(windows)]
@@ -548,6 +571,8 @@ pub struct ControlPanelItem {
     pub aliases: Vec<String>,
     pub area: Option<String>,
     pub launch_target: std::path::PathBuf,
+    /// Captured absolute Shell PIDL; independent of the launch destination.
+    pub icon_target: std::path::PathBuf,
 }
 
 /// A small, renderer-neutral icon payload. Pixels are kept off the Slint UI

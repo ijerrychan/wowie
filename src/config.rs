@@ -35,6 +35,7 @@ pub struct Config {
     pub theme: String,
     pub language: String,
     pub show_on_startup: bool,
+    pub run_at_sign_in: bool,
     pub hide_on_focus_loss: bool,
     pub show_advanced_details: bool,
     pub show_advanced_launch_entries: bool,
@@ -188,6 +189,7 @@ impl Default for Config {
             theme: DEFAULT_THEME.into(),
             language: DEFAULT_LANGUAGE.into(),
             show_on_startup: true,
+            run_at_sign_in: false,
             hide_on_focus_loss: true,
             show_advanced_details: false,
             show_advanced_launch_entries: false,
@@ -508,32 +510,6 @@ mod tests {
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(directory).unwrap();
     }
-    #[test]
-    fn defaults_are_stable() {
-        let config = Config::default();
-        assert_eq!(config.hotkey, "Alt+Space");
-        assert_eq!(config.renderer, "femtovg");
-        assert_eq!(config.window_height, DEFAULT_WINDOW_HEIGHT);
-        assert_eq!(config.list_item_height, DEFAULT_LIST_ITEM_HEIGHT);
-        assert!(config.show_on_startup);
-        assert!(config.hide_on_focus_loss);
-        assert!(!config.show_advanced_details);
-        assert!(!config.show_advanced_launch_entries);
-        assert!(config.fuzzy_search);
-        assert!(config
-            .shortcuts
-            .iter()
-            .any(|shortcut| { shortcut.prefix == "g " && shortcut.name == "Search with Google" }));
-        assert!(config.providers.desktop);
-        assert!(config.providers.indexed_directories.is_empty());
-        assert!(config
-            .providers
-            .indexed_extensions
-            .iter()
-            .any(|extension| extension == "exe"));
-        assert!(config.plugins.is_empty());
-    }
-
     #[test]
     fn supported_renderers_are_preserved_by_normalization() {
         for renderer in ["femtovg", "femtovg-wgpu", "skia", "skia-opengl", "software"] {

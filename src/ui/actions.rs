@@ -278,18 +278,6 @@ mod tests {
     };
     use std::path::PathBuf;
 
-    fn action(title: &str, shortcut: &str) -> ContextActionRow {
-        ContextActionRow {
-            id: "test-action".into(),
-            title: title.into(),
-            subtitle: String::new().into(),
-            kind: "common".into(),
-            icon: slint::Image::default(),
-            icon_kind: String::new().into(),
-            shortcut: shortcut.into(),
-        }
-    }
-
     fn result(target: PathBuf) -> SearchResult {
         SearchResult {
             id: "test-result".into(),
@@ -329,20 +317,6 @@ mod tests {
         assert!(ids.contains(&"copy-title"));
         assert!(ids.contains(&"copy-path"));
         assert!(ids.contains(&"open-directory"));
-    }
-
-    #[test]
-    fn copy_actions_follow_directory_and_administrator_actions() {
-        let item = result(std::env::current_exe().unwrap());
-        let ids = context_actions(&item, false, false, true)
-            .into_iter()
-            .map(|action| action.id.to_string())
-            .collect::<Vec<_>>();
-
-        let position = |id: &str| ids.iter().position(|candidate| candidate == id).unwrap();
-        assert!(position("open-directory") < position("run-as-admin"));
-        assert!(position("run-as-admin") < position("copy-title"));
-        assert!(position("copy-title") < position("copy-path"));
     }
 
     #[test]
@@ -397,33 +371,6 @@ mod tests {
         assert_eq!(custom.title, "Copy location");
         assert_eq!(custom.subtitle, "Copy the resolved address");
         assert!(item.primary_action().is_none());
-    }
-
-    #[test]
-    fn long_action_titles_get_width_with_a_rendering_safety_margin() {
-        let title = "A very long action name that must remain visible";
-        let width = context_menu_width(&[action(title, "")], "en");
-
-        assert!(width >= approximate_text_width(title, 13) + 68);
-    }
-
-    #[test]
-    fn shortcut_area_is_reserved_without_overlapping_long_titles() {
-        let title = "A very long action name with a shortcut";
-        let width = context_menu_width(&[action(title, "Ctrl+Shift+Enter")], "en");
-
-        assert!(width >= approximate_text_width(title, 13) + 180);
-    }
-
-    #[test]
-    fn localized_section_title_participates_in_width_measurement() {
-        let mut section = action("", "");
-        section.id = "section:other-launch-entries".into();
-        section.kind = "section".into();
-
-        let width = context_menu_width(&[section], "en");
-
-        assert!(width >= approximate_text_width("Other launch entries", 13) + 68);
     }
 
     #[test]

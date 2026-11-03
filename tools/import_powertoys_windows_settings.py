@@ -61,9 +61,8 @@ def po_string(value):
     return json.dumps(value, ensure_ascii=False)
 
 
-def write_po(path, resources):
+def render_po(text, resources):
     # Keep every unrelated project translation verbatim.
-    text = path.read_text(encoding="utf-8")
     generated_note = "# Generated from Microsoft Command Palette resources; see windows_settings_data/NOTICE.md.\n"
     text = text.replace(generated_note, "")
     lines = text.splitlines(keepends=True)
@@ -77,7 +76,11 @@ def write_po(path, resources):
     entries = [generated_note]
     for key, value in sorted(resources.items()):
         entries.append(f'msgctxt "Windows Settings"\nmsgid {po_string(key)}\nmsgstr {po_string(value)}\n\n')
-    path.write_text("".join(output).rstrip() + "\n\n" + "".join(entries).rstrip() + "\n", encoding="utf-8")
+    return "".join(output).rstrip() + "\n\n" + "".join(entries).rstrip() + "\n"
+
+
+def write_po(path, resources):
+    path.write_text(render_po(path.read_text(encoding="utf-8"), resources), encoding="utf-8")
 
 
 def main():
@@ -134,9 +137,18 @@ def main():
     for locale, strings in resources.items():
         (destination / f"Resources.{locale}.json").write_text(json.dumps(strings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         write_po(root / "lang" / locale / "LC_MESSAGES/wowie.po", {key: strings[key] for key in required})
-    provenance = {"release": args.version, "revision": args.revision,
-                  "binary_sha256": hashlib.sha256(binary).hexdigest(), "locale_stream_offsets": offsets,
-                  "neutral_resource_count": len(english), "catalog_count": len(catalog["Settings"])}
+    source_files = {
+        name: hashlib.sha256((destination / name).read_bytes()).hexdigest()
+        for name in ["WindowsSettings.json", "WindowsSettings.schema.json", "Resources.en.resx"]
+    }
+    provenance = {
+        "catalog": {"release": args.version, "revision": args.revision,
+                    "files_sha256": source_files, "catalog_count": len(catalog["Settings"]),
+                    "neutral_resource_count": len(english)},
+        "localizations": {"release": args.version, "revision": args.revision,
+                          "binary_sha256": hashlib.sha256(binary).hexdigest(),
+                          "locale_stream_offsets": offsets, "neutral_resource_count": len(english)},
+    }
     (destination / "SOURCE.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     print(f"Imported {len(catalog['Settings'])} Command Palette entries and {len(english)} original resources per locale.")
 

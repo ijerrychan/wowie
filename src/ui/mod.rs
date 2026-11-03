@@ -50,6 +50,48 @@ const SEARCH_PAGE_PREFETCH_DISTANCE: usize = 12;
 /// matches. SearchCore shares exactly the snapshot accepted by this surface.
 const MAX_RENDERED_RESULTS: usize = 256;
 
+fn apply_theme_to_windows(
+    dark_mode: bool,
+    platform: &dyn platform::PlatformIntegration,
+    launcher: Option<&Launcher>,
+    settings: Option<&SettingsWindow>,
+    context: Option<&ContextMenu>,
+) {
+    let accent = platform.system_accent_color();
+    let accent_color = || {
+        slint::Color::from_rgb_u8(
+            ((accent >> 16) & 0xff) as u8,
+            ((accent >> 8) & 0xff) as u8,
+            (accent & 0xff) as u8,
+        )
+    };
+
+    if let Some(launcher) = launcher {
+        launcher.set_dark_mode(dark_mode);
+        launcher.set_accent_color(accent_color());
+        launcher.set_accent_background(slint::Color::from_argb_u8(
+            if dark_mode { 0x42 } else { 0x28 },
+            ((accent >> 16) & 0xff) as u8,
+            ((accent >> 8) & 0xff) as u8,
+            (accent & 0xff) as u8,
+        ));
+        platform::set_window_background(launcher.window(), launcher.get_native_background_color());
+        launcher.window().request_redraw();
+    }
+    if let Some(settings) = settings {
+        settings.set_dark_mode(dark_mode);
+        settings.set_accent_color(accent_color());
+        platform::set_window_background(settings.window(), settings.get_native_background_color());
+        settings.window().request_redraw();
+    }
+    if let Some(context) = context {
+        context.set_dark_mode(dark_mode);
+        context.set_accent_color(accent_color());
+        platform::set_window_background(context.window(), context.get_native_background_color());
+        context.window().request_redraw();
+    }
+}
+
 mod search_coordinator;
 mod settings_callbacks;
 mod settings_reload;
@@ -63,7 +105,9 @@ fn open_settings_window(
     let (config, _) = config::Config::load();
     settings::refresh(settings, &config, plugin_settings, &config.language);
     settings.set_status_message(String::new().into());
+    platform::set_window_background(settings.window(), settings.get_native_background_color());
     let _ = settings.show();
+    settings.window().request_redraw();
     platform.activate_palette(settings.window());
     let weak = settings.as_weak();
     Timer::single_shot(PALETTE_POSITION_DELAY, move || {
@@ -81,6 +125,9 @@ fn open_settings_window(
 
 mod lifecycle;
 pub use lifecycle::run;
+
+#[cfg(test)]
+mod layout_tests;
 
 #[cfg(test)]
 mod tests {
