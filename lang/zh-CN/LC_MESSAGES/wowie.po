@@ -84,6 +84,10 @@ msgid "Other"
 msgstr "其他"
 
 msgctxt "Launcher"
+msgid "← → Filter     ↑ ↓ Results     Home/End First/Last     Enter/Space/Esc Search"
+msgstr "← → 切换分类     ↑ ↓ 返回结果     Home/End 首/末项     Enter/Space/Esc 返回搜索"
+
+msgctxt "Launcher"
 msgid "Execute Command"
 msgstr "执行命令"
 
@@ -124,6 +128,10 @@ msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  导航     Enter  打开     Esc  隐藏"
 
 msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Hide"
+msgstr "↑ ↓  导航     Tab 过滤     Enter  打开     Esc  隐藏"
+
+msgctxt "Launcher"
 msgid "↑ ↓ ← →  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓ ← →  导航     Enter  打开     Esc  隐藏"
 
@@ -140,6 +148,10 @@ msgid "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
 msgstr "↑ ↓  导航     Enter  打开     Ctrl+M  菜单     Esc  隐藏"
 
 msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Hide"
+msgstr "↑ ↓  导航     Tab 过滤     Enter  打开     Ctrl+M  菜单     Esc  隐藏"
+
+msgctxt "Launcher"
 msgid "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
 msgstr "↑ ↓ ← →  导航     Enter  打开     Ctrl+M  菜单     Esc  隐藏"
 
@@ -148,12 +160,20 @@ msgid "↑ ↓  Navigate     Enter  Open     Esc  Back"
 msgstr "↑ ↓  导航     Enter  打开     Esc  返回"
 
 msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Back"
+msgstr "↑ ↓  导航     Tab 过滤     Enter  打开     Esc  返回"
+
+msgctxt "Launcher"
 msgid "↑ ↓ ← →  Navigate     Enter  Open     Esc  Back"
 msgstr "↑ ↓ ← →  导航     Enter  打开     Esc  返回"
 
 msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"
 msgstr "↑ ↓  导航     Enter  打开     Ctrl+M  菜单     Esc  返回"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Back"
+msgstr "↑ ↓  导航     Tab 过滤     Enter  打开     Ctrl+M  菜单     Esc  返回"
 
 msgctxt "Launcher"
 msgid "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"

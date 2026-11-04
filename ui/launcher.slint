@@ -142,6 +142,7 @@ export component Launcher inherits Window {
     in property <[CategoryFilter]> category-filters;
     in property <string> selected-category-filter: "all";
     in property <int> selected-category-index: 0;
+    private property <bool> category-filter-keyboard-active: false;
     in-out property <string> query-text: "";
     in-out property <bool> query-results-ready: false;
     in-out property <int> query-history-restore-id: 0;
@@ -302,6 +303,11 @@ export component Launcher inherits Window {
         root.ensure-selected-visible();
         root.selection-changed(root.selected-index);
     }
+    changed category-filters => {
+        if (root.category-filters.length == 0 && root.category-filter-keyboard-active) {
+            search-field.focus();
+        }
+    }
     changed first-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
     changed last-visible-index => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
     changed detail-panel-active => {
@@ -441,61 +447,141 @@ export component Launcher inherits Window {
             if (root.category-filters.length > 0 && !root.compact-results-hidden) : Rectangle {
                 height: root.category-filter-height;
                 background: transparent;
-                category-flickable := Flickable {
+                // Keep category arrow navigation scoped so the search field's
+                // caret and result navigation retain their existing keys.
+                category-filter-focus := FocusScope {
                     width: parent.width;
                     height: parent.height;
-                    content-width: max(self.width, root.category-filters.length * root.category-filter-step);
-                    content-height: self.height;
-                    Rectangle {
-                        x: root.selected-category-index * root.category-filter-step;
-                        y: (parent.height - root.category-button-height) / 2;
-                        width: root.category-button-width;
-                        height: root.category-button-height;
-                        border-radius: 7px;
-                        background: root.dark-mode ? #424242 : #e2e5eb;
-                        animate x { duration: 180ms; easing: ease-in-out; }
+                    filters: root.category-filters;
+                    selected-index: root.selected-category-index;
+                    in property <[CategoryFilter]> filters;
+                    in property <int> selected-index;
+                    focus-on-tab-navigation: true;
+                    focus-on-click: false;
+                    focus-gained => { root.category-filter-keyboard-active = true; }
+                    focus-lost => {
+                        root.category-filter-keyboard-active = false;
+                        if (root.category-filters.length == 0 || root.compact-results-hidden) {
+                            search-field.focus();
+                        }
                     }
-                    for filter[index] in root.category-filters : Rectangle {
-                        x: index * root.category-filter-step;
-                        y: 0px;
-                        width: root.category-button-width;
+                    changed filters => { self.ensure-selected-category-visible(); }
+                    changed selected-index => { self.ensure-selected-category-visible(); }
+                    function select-category-at(index: int) {
+                        if (index < 0 || index >= self.filters.length) { return; }
+                        root.category-filter-selected(self.filters[index].key);
+                        self.ensure-selected-category-visible();
+                    }
+                    function move-category-selection(delta: int) {
+                        if (self.filters.length == 0) { return; }
+                        let next = min(max(self.selected-index + delta, 0), self.filters.length - 1);
+                        self.select-category-at(next);
+                    }
+                    function ensure-selected-category-visible() {
+                        if (self.filters.length == 0 || root.compact-results-hidden) { return; }
+                        let left = self.selected-index * root.category-filter-step;
+                        let right = left + root.category-button-width;
+                        let visible-left = -category-flickable.content-x;
+                        let visible-right = visible-left + category-flickable.width;
+                        if (left < visible-left) {
+                            category-flickable.content-x = min(0px, max(category-flickable.width - category-flickable.content-width, -left));
+                        } else if (right > visible-right) {
+                            category-flickable.content-x = min(0px, max(category-flickable.width - category-flickable.content-width, category-flickable.width - right));
+                        }
+                    }
+                    key-pressed(event) => {
+                        let plain-key = !event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta;
+                        if (plain-key && event.text == Key.LeftArrow) {
+                            self.move-category-selection(-1);
+                            accept
+                        } else if (plain-key && event.text == Key.RightArrow) {
+                            self.move-category-selection(1);
+                            accept
+                        } else if (plain-key && event.text == Key.Home) {
+                            self.select-category-at(0);
+                            accept
+                        } else if (plain-key && event.text == Key.End) {
+                            self.select-category-at(self.filters.length - 1);
+                            accept
+                        } else if (plain-key && (event.text == Key.Return || event.text == Key.Space)) {
+                            self.select-category-at(self.selected-index);
+                            search-field.focus();
+                            accept
+                        } else if (plain-key && (event.text == Key.UpArrow || event.text == Key.DownArrow)) {
+                            search-field.focus();
+                            if (event.text == Key.DownArrow) {
+                                root.move-selection-down();
+                            } else {
+                                root.move-selection-up();
+                            }
+                            accept
+                        } else if (plain-key && event.text == Key.Escape) {
+                            search-field.focus();
+                            accept
+                        } else {
+                            reject
+                        }
+                    }
+                    category-flickable := Flickable {
+                        width: parent.width;
                         height: parent.height;
-                        border-radius: 7px;
-                        background: transparent;
+                        content-width: max(self.width, category-filter-focus.filters.length * root.category-filter-step);
+                        content-height: self.height;
                         Rectangle {
-                            x: 0px;
+                            x: root.selected-category-index * root.category-filter-step;
                             y: (parent.height - root.category-button-height) / 2;
-                            width: parent.width;
+                            width: root.category-button-width;
                             height: root.category-button-height;
                             border-radius: 7px;
-                            border-color: root.selected-category-filter == filter.key ? transparent : (root.dark-mode ? #393939 : #e2e5eb);
-                            border-width: root.selected-category-filter == filter.key ? 0px : 1px;
-                            background: root.selected-category-filter != filter.key && filter-touch.has-hover ? root.surface-hover : transparent;
+                            background: root.dark-mode ? #424242 : #e2e5eb;
+                            animate x { duration: 180ms; easing: ease-in-out; }
                         }
-                        filter-touch := TouchArea {
-                            width: parent.width;
+                        for filter[index] in category-filter-focus.filters : Rectangle {
+                            x: index * root.category-filter-step;
+                            y: 0px;
+                            width: root.category-button-width;
                             height: parent.height;
-                            mouse-cursor: pointer;
-                            clicked => { root.category-filter-selected(filter.key); search-field.focus(); }
-                            scroll-event(event) => {
-                                let delta = event.delta-x != 0px ? event.delta-x : event.delta-y;
-                                let previous = category-flickable.content-x;
-                                let next = min(0px, max(category-flickable.width - category-flickable.content-width, previous - delta));
-                                if (next != previous) {
-                                    category-flickable.content-x = next;
-                                    EventResult.accept
-                                } else {
-                                    EventResult.reject
+                            border-radius: 7px;
+                            background: transparent;
+                            Rectangle {
+                                x: 0px;
+                                y: (parent.height - root.category-button-height) / 2;
+                                width: parent.width;
+                                height: root.category-button-height;
+                                border-radius: 7px;
+                                border-color: root.selected-category-filter == filter.key
+                                    ? (root.category-filter-keyboard-active ? (root.dark-mode ? #8ab4f8 : #005a9e) : transparent)
+                                    : (root.dark-mode ? #393939 : #e2e5eb);
+                                border-width: root.selected-category-filter == filter.key
+                                    ? (root.category-filter-keyboard-active ? 2px : 0px)
+                                    : 1px;
+                                background: root.selected-category-filter != filter.key && filter-touch.has-hover ? root.surface-hover : transparent;
+                            }
+                            filter-touch := TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+                                mouse-cursor: pointer;
+                                clicked => { root.category-filter-selected(filter.key); search-field.focus(); }
+                                scroll-event(event) => {
+                                    let delta = event.delta-x != 0px ? event.delta-x : event.delta-y;
+                                    let previous = category-flickable.content-x;
+                                    let next = min(0px, max(category-flickable.width - category-flickable.content-width, previous - delta));
+                                    if (next != previous) {
+                                        category-flickable.content-x = next;
+                                        EventResult.accept
+                                    } else {
+                                        EventResult.reject
+                                    }
                                 }
                             }
-                        }
-                        Text {
-                            x: 6px; width: parent.width - 12px; height: parent.height;
-                            text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "settings" ? @tr("Settings") : filter.key == "document" ? @tr("Document") : @tr("Other")) + "  " + filter.count;
-                            color: root.selected-category-filter == filter.key ? root.text-primary : root.text-secondary;
-                            font-size: 0.7857rem;
-                            font-weight: root.selected-category-filter == filter.key ? 600 : 400;
-                            horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+                            Text {
+                                x: 6px; width: parent.width - 12px; height: parent.height;
+                                text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "settings" ? @tr("Settings") : filter.key == "document" ? @tr("Document") : @tr("Other")) + "  " + filter.count;
+                                color: root.selected-category-filter == filter.key ? root.text-primary : root.text-secondary;
+                                font-size: 0.7857rem;
+                                font-weight: root.selected-category-filter == filter.key ? 600 : 400;
+                                horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+                            }
                         }
                     }
                 }
@@ -704,7 +790,7 @@ export component Launcher inherits Window {
             if (!root.compact-results-hidden) : Rectangle {
                 height: root.operation-hint-height; background: transparent;
                 Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: root.border; }
-                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Enter  Open     Esc  Hide")); color: root.text-tertiary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; }
+                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.category-filter-keyboard-active ? @tr("← → Filter     ↑ ↓ Results     Home/End First/Last     Enter/Space/Esc Search") : root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Hide")); color: root.text-tertiary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; }
             }
         }
         if (!root.compact-results-hidden) : Rectangle {

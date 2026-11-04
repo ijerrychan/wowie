@@ -80,6 +80,10 @@ msgid "Other"
 msgstr "Other"
 
 msgctxt "Launcher"
+msgid "← → Filter     ↑ ↓ Results     Home/End First/Last     Enter/Space/Esc Search"
+msgstr "← → Filter     ↑ ↓ Results     Home/End First/Last     Enter/Space/Esc Search"
+
+msgctxt "Launcher"
 msgid "Execute Command"
 msgstr "Execute Command"
 
@@ -120,6 +124,10 @@ msgid "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓  Navigate     Enter  Open     Esc  Hide"
 
 msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Hide"
+msgstr "↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Hide"
+
+msgctxt "Launcher"
 msgid "↑ ↓ ← →  Navigate     Enter  Open     Esc  Hide"
 msgstr "↑ ↓ ← →  Navigate     Enter  Open     Esc  Hide"
 
@@ -136,6 +144,10 @@ msgid "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
 msgstr "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
 
 msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Hide"
+msgstr "↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Hide"
+
+msgctxt "Launcher"
 msgid "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
 msgstr "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Hide"
 
@@ -144,12 +156,20 @@ msgid "↑ ↓  Navigate     Enter  Open     Esc  Back"
 msgstr "↑ ↓  Navigate     Enter  Open     Esc  Back"
 
 msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Back"
+msgstr "↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Back"
+
+msgctxt "Launcher"
 msgid "↑ ↓ ← →  Navigate     Enter  Open     Esc  Back"
 msgstr "↑ ↓ ← →  Navigate     Enter  Open     Esc  Back"
 
 msgctxt "Launcher"
 msgid "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"
 msgstr "↑ ↓  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"
+
+msgctxt "Launcher"
+msgid "↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Back"
+msgstr "↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Back"
 
 msgctxt "Launcher"
 msgid "↑ ↓ ← →  Navigate     Enter  Open     Ctrl+M  Context     Esc  Back"
