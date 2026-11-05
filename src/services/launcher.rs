@@ -4,6 +4,9 @@ use anyhow::Result;
 use std::os::windows::ffi::OsStrExt;
 
 pub fn launch(item: &SearchResult) -> Result<()> {
+    if let Some(crate::result::Action::SwitchWindow { hwnd, process_id }) = item.primary_action() {
+        return crate::platform::switch_window(*hwnd, *process_id);
+    }
     #[cfg(target_os = "windows")]
     {
         shell_execute(

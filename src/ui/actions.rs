@@ -382,4 +382,19 @@ mod tests {
         )));
         assert!(!is_supported_admin_target(std::path::Path::new("folder")));
     }
+
+    #[test]
+    fn window_like_empty_targets_do_not_offer_path_admin_or_favorite_actions() {
+        let item = result(PathBuf::new());
+        let actions = context_actions(&item, false, false, false);
+        let ids = actions
+            .iter()
+            .map(|action| action.id.as_str())
+            .collect::<Vec<_>>();
+        assert!(ids.contains(&"copy-title"));
+        assert!(!ids.contains(&"copy-path"));
+        assert!(!ids.contains(&"open-directory"));
+        assert!(!ids.contains(&"run-as-admin"));
+        assert!(!ids.contains(&"add-favorite"));
+    }
 }

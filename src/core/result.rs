@@ -4,6 +4,8 @@ pub enum Action {
     EnterSearchEngine { prefix: String },
     /// Launch using this specific discovered entry, including its arguments.
     Launch(LaunchEntry),
+    /// Activate a previously enumerated top-level window after validating its process.
+    SwitchWindow { hwnd: u64, process_id: u32 },
     /// An action implemented by a script plugin.
     Plugin {
         plugin_id: String,
@@ -69,7 +71,7 @@ impl Action {
 
     pub const fn domain(&self) -> ActionDomain {
         match self {
-            Self::Launch(_) => ActionDomain::System,
+            Self::Launch(_) | Self::SwitchWindow { .. } => ActionDomain::System,
             Self::Plugin { .. } => ActionDomain::Plugin,
             Self::EnterSearchEngine { .. }
             | Self::OpenDetail

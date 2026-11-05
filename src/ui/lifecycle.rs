@@ -1196,6 +1196,7 @@ pub fn run() -> Result<()> {
                 let visible = Arc::clone(&visible);
                 let action_generation = Arc::clone(&action_generation);
                 let action_in_flight = Arc::clone(&action_in_flight);
+                let error_language = Arc::clone(&detail_language);
                 crate::utils::background::spawn(move || {
                     let result = launcher::launch(&item);
                     if result.is_ok() {
@@ -1220,7 +1221,15 @@ pub fn run() -> Result<()> {
                             }
                             Err(error) => {
                                 eprintln!("launch failed: {error:#}");
-                                window.set_launch_error(error.to_string().into());
+                                let language = error_language
+                                    .lock()
+                                    .map(|language| language.clone())
+                                    .unwrap_or_else(|_| "system".to_owned());
+                                let message = error.to_string();
+                                window.set_launch_error(
+                                    i18n::tr_owned_in_context(&language, "Launcher", &message)
+                                        .into(),
+                                );
                                 let weak = window.as_weak();
                                 let generation = Arc::clone(&action_generation);
                                 Timer::single_shot(LAUNCH_ERROR_DURATION, move || {

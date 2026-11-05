@@ -44,6 +44,26 @@ msgid "Could not open application"
 msgstr "Could not open application"
 
 msgctxt "Launcher"
+msgid "window target is invalid"
+msgstr "This window is no longer available."
+
+msgctxt "Launcher"
+msgid "window is no longer available"
+msgstr "This window is no longer available."
+
+msgctxt "Launcher"
+msgid "window target changed; search again"
+msgstr "This window changed. Search again."
+
+msgctxt "Launcher"
+msgid "window is no longer eligible"
+msgstr "This window is no longer available."
+
+msgctxt "Launcher"
+msgid "Windows refused to activate the window"
+msgstr "Windows could not activate this window."
+
+msgctxt "Launcher"
 msgid "Game"
 msgstr "Game"
 

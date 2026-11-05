@@ -22,6 +22,37 @@ pub(crate) use windows::SettingsAvailability;
 #[cfg(windows)]
 pub(crate) use windows::query_file_index;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisibleWindow {
+    pub hwnd: u64,
+    pub process_id: u32,
+    pub title: String,
+    pub process_name: String,
+}
+
+pub fn visible_windows() -> Vec<VisibleWindow> {
+    #[cfg(windows)]
+    {
+        windows::visible_windows()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+pub fn switch_window(hwnd: u64, process_id: u32) -> Result<()> {
+    #[cfg(windows)]
+    {
+        windows::switch_window(hwnd, process_id)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (hwnd, process_id);
+        anyhow::bail!("window switching is unsupported on this platform")
+    }
+}
+
 pub(crate) fn set_run_at_sign_in(enabled: bool) -> Result<()> {
     #[cfg(windows)]
     {

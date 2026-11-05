@@ -45,6 +45,9 @@ mod startup;
 mod tray;
 mod watchers;
 mod window_background;
+mod window_switcher;
+
+pub(crate) use window_switcher::{switch_window, visible_windows};
 
 pub(super) fn set_window_background(window: &slint::Window, color: slint::Color) {
     if let Some(hwnd) = hwnd_from_window(window) {
