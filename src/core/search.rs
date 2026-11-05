@@ -256,6 +256,29 @@ impl SearchCore {
         context: &crate::page::SearchContext,
         query: &str,
     ) -> Vec<SearchResult> {
+        self.search_in_context_with_limit(context, query, None)
+    }
+
+    /// Search a context while retaining only the best `limit` results.
+    ///
+    /// The launcher uses this for its bounded result surface. Matching and
+    /// ranking still consider every candidate so this returns the same prefix
+    /// as an unrestricted search, without sorting or cloning every match.
+    pub fn search_in_context_limited(
+        &self,
+        context: &crate::page::SearchContext,
+        query: &str,
+        limit: usize,
+    ) -> Vec<SearchResult> {
+        self.search_in_context_with_limit(context, query, Some(limit))
+    }
+
+    fn search_in_context_with_limit(
+        &self,
+        context: &crate::page::SearchContext,
+        query: &str,
+        result_limit: Option<usize>,
+    ) -> Vec<SearchResult> {
         let input = query.to_owned();
         // An active engine receives the text currently shown in the input
         // field. The UI stores the selected engine separately, so the field
@@ -268,6 +291,7 @@ impl SearchCore {
         let mut matcher = Matcher::new(MatcherConfig::DEFAULT);
         let mut matcher_buffer = Vec::new();
         let mut needle_buffer = Vec::new();
+        let mut lowercase_buffer = String::new();
         let debug = std::env::var_os("WOWIE_SEARCH_DEBUG").is_some_and(|value| value != "0");
         if debug {
             eprintln!(
@@ -387,7 +411,7 @@ impl SearchCore {
             .lock()
             .map(|priorities| priorities.clone())
             .unwrap_or_default();
-        let mut ranked: Vec<(RankKey, &SearchResult)> = dynamic.iter().filter_map(|candidate| {
+        let mut ranked: Vec<RankedResult<'_>> = dynamic.iter().enumerate().filter_map(|(candidate_index, candidate)| {
                 let item = &candidate.item;
                 // Every provider contributes ordinary SearchResults. The
                 // central matcher is the single place that decides whether a
@@ -400,6 +424,7 @@ impl SearchCore {
                     &mut matcher,
                     &mut matcher_buffer,
                     &mut needle_buffer,
+                    &mut lowercase_buffer,
                 );
                 let alias_score = item
                     .aliases
@@ -412,6 +437,7 @@ impl SearchCore {
                             &mut matcher,
                             &mut matcher_buffer,
                             &mut needle_buffer,
+                            &mut lowercase_buffer,
                         )?;
                         Some(score)
                     })
@@ -468,22 +494,28 @@ impl SearchCore {
                             provider_bias: item.ranking_bias,
                         },
                         item,
+                        candidate_index,
                     )
                 })
             })
             .collect();
         let behavior_scores = self
             .ranker
-            .scores(ranked.iter().map(|(_, item)| item.id.as_str()), &query);
-        for ((key, _), behavior) in ranked.iter_mut().zip(behavior_scores) {
+            .scores(ranked.iter().map(|(_, item, _)| item.id.as_str()), &query);
+        for ((key, _, _), behavior) in ranked.iter_mut().zip(behavior_scores) {
             key.behavior = behavior;
         }
-        ranked.sort_by(|a, b| {
-            a.0.compare(&b.0)
-                .then_with(|| a.1.title.cmp(&b.1.title))
-                .then_with(|| a.1.id.cmp(&b.1.id))
-        });
-        let found: Vec<SearchResult> = ranked.into_iter().map(|(_, item)| item.clone()).collect();
+        if let Some(limit) = result_limit {
+            if ranked.len() > limit {
+                ranked.select_nth_unstable_by(limit, compare_ranked_results);
+                ranked.truncate(limit);
+            }
+        }
+        ranked.sort_by(compare_ranked_results);
+        let found: Vec<SearchResult> = ranked
+            .into_iter()
+            .map(|(_, item, _)| item.clone())
+            .collect();
         if debug {
             eprintln!("[search] final_results={}", found.len());
             for (index, item) in found.iter().enumerate() {
@@ -531,6 +563,19 @@ struct RankKey {
     behavior: i32,
     engine_bias: i32,
     provider_bias: i32,
+}
+
+type RankedResult<'a> = (RankKey, &'a SearchResult, usize);
+
+fn compare_ranked_results(left: &RankedResult<'_>, right: &RankedResult<'_>) -> std::cmp::Ordering {
+    left.0
+        .compare(&right.0)
+        .then_with(|| left.1.title.cmp(&right.1.title))
+        .then_with(|| left.1.id.cmp(&right.1.id))
+        // The previous stable sort preserved provider order for otherwise
+        // identical rows. Keep that tie-breaker when partial selection reorders
+        // the full candidate set.
+        .then_with(|| left.2.cmp(&right.2))
 }
 
 impl RankKey {
@@ -624,6 +669,7 @@ fn match_score(
     matcher: &mut Matcher,
     matcher_buffer: &mut Vec<char>,
     needle_buffer: &mut Vec<char>,
+    lowercase_buffer: &mut String,
 ) -> Option<MatchScore> {
     if query.is_empty() {
         return Some(MatchScore {
@@ -651,9 +697,14 @@ fn match_score(
                 quality: (1000 - title_len).max(1),
             });
         }
+        if !fuzzy_search {
+            return None;
+        }
     }
 
-    let text = title.to_lowercase();
+    lowercase_buffer.clear();
+    lowercase_buffer.extend(title.chars().flat_map(char::to_lowercase));
+    let text = lowercase_buffer.as_str();
     if text == query {
         return Some(MatchScore {
             class: 4,

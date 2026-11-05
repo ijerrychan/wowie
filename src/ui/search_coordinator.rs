@@ -450,11 +450,7 @@ pub(super) fn build_search_presentation(
         .cloned()
         .map(crate::page::SearchContext::Engine)
         .unwrap_or_else(|| engine.search_context(query));
-    let found = engine
-        .search_in_context(&search_context, query)
-        .into_iter()
-        .take(MAX_RENDERED_RESULTS)
-        .collect::<Vec<_>>();
+    let found = engine.search_in_context_limited(&search_context, query, MAX_RENDERED_RESULTS);
     let empty_state = found
         .is_empty()
         .then(|| engine.empty_state(&search_context, query))
