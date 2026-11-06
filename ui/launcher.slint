@@ -1,6 +1,6 @@
 import { VerticalBox, ListView } from "std-widgets.slint";
 
-export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, icon_kind: string, favorite: bool, shortcut_prefix: string, shortcut_prefix_width: int, presentation: string }
+export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, icon_kind: string, favorite: bool, shortcut_prefix: string, shortcut_prefix_width: int, presentation: string, category_kind: string }
 export struct CategoryFilter { key: string, count: int }
 export struct ContextActionRow { id: string, title: string, subtitle: string, kind: string, icon: image, icon_kind: string, shortcut: string }
 export struct DetailBlock { kind: string, label: string, value: string, color: string, secondary: string, icon: image, height: int }
@@ -12,6 +12,7 @@ component BuiltinIcon inherits Image {
     source: root.kind == "weather" ? @image-url("../assets/icons/weather.svg")
         : root.kind == "calculator" ? @image-url("../assets/icons/calculator.svg")
         : root.kind == "book" ? @image-url("../assets/icons/book-open.svg")
+        : root.kind == "window" ? @image-url("../assets/icons/window.svg")
         : root.kind == "checklist" ? @image-url("../assets/icons/list-checks.svg")
         : root.kind == "folder-open" ? @image-url("../assets/icons/folder-open-outline.svg")
         : root.kind == "shield-account" ? @image-url("../assets/icons/shield-account-outline.svg")
@@ -576,7 +577,7 @@ export component Launcher inherits Window {
                             }
                             Text {
                                 x: 6px; width: parent.width - 12px; height: parent.height;
-                                text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "settings" ? @tr("Settings") : filter.key == "document" ? @tr("Document") : @tr("Other")) + "  " + filter.count;
+                                text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "settings" ? @tr("Settings") : filter.key == "document" ? @tr("Document") : filter.key == "bookmark" ? @tr("Bookmark") : filter.key == "window" ? @tr("Window") : @tr("Other")) + "  " + filter.count;
                                 color: root.selected-category-filter == filter.key ? root.text-primary : root.text-secondary;
                                 font-size: 0.7857rem;
                                 font-weight: root.selected-category-filter == filter.key ? 600 : 400;
@@ -612,6 +613,7 @@ export component Launcher inherits Window {
                         private property <length> row-text-gap: 0px;
                         private property <length> row-text-height: row-title-height + row-text-gap + row-description-height;
                         private property <length> row-text-top: max(0px, (root.result-row-height - row-text-height) / 2);
+                        private property <length> category-badge-width: root.ui-font-size * (row.category_kind == "bookmark" ? 3.25 : 2.75);
                         background: index == root.selected-index ? root.surface-selected : item-area.has-hover ? root.surface-hover : transparent;
                         border-color: transparent;
                         border-width: 0px;
@@ -641,7 +643,11 @@ export component Launcher inherits Window {
                     if row.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row.icon; image-fit: contain; }
                     Rectangle {
                         x: 60px; y: 0px; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px - (row.favorite ? 22px : 0px) : parent.width - 60px - parent.shortcut-card-width - (row.favorite ? 40px : 0px); height: parent.height; background: transparent;
-                        Text { x: 0px; y: row-text-top; width: parent.width; height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 0.9286rem : 1.0000rem; font-weight: 500; vertical-alignment: center; overflow: elide; }
+                        Text { x: 0px; y: row-text-top; width: parent.width - (row.category_kind == "" ? 0px : category-badge-width + 4px); height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 0.9286rem : 1.0000rem; font-weight: 500; vertical-alignment: center; overflow: elide; }
+                        if row.category_kind != "" : Rectangle {
+                            x: parent.width - category-badge-width; y: row-text-top; width: category-badge-width; height: row-title-height;
+                            Text { width: parent.width; height: parent.height; text: row.category_kind == "window" ? @tr("Window") : @tr("Bookmark"); color: root.text-secondary; font-size: 0.6429rem; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
+                        }
                         Text { x: 0px; y: row-text-top + row-title-height + row-text-gap; width: parent.width - 4px; height: row-description-height; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "control-panel" ? @tr("Control Panel") : row.location_kind == "application" && row.location == "" ? @tr("Application") : row.location; color: root.text-secondary; font-size: row.presentation == "compact" ? 0.7143rem : 0.7857rem; vertical-alignment: center; overflow: elide; }
                     }
                     Rectangle {

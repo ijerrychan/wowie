@@ -116,4 +116,45 @@ fn launcher_layout_settles_when_reopened() {
             }
         }
     }
+
+    // Layout smoke for category labels in both translations at a narrow width
+    // and large base font. This checks that rendering settles; text fitting is
+    // handled by the labels' reserved width and elision behavior above.
+    window.set_ui_font_size(20.0);
+    window.set_list_item_height(52.0);
+    window.set_compact_search(false);
+    let badge_rows = Rc::new(VecModel::from(vec![
+        ResultRow {
+            id: "window".into(),
+            title: "A long open window title".into(),
+            category_kind: "window".into(),
+            ..Default::default()
+        },
+        ResultRow {
+            id: "bookmark".into(),
+            title: "A long bookmark title".into(),
+            category_kind: "bookmark".into(),
+            ..Default::default()
+        },
+    ]));
+    window.set_results(ModelRc::from(badge_rows));
+    for language in ["en", "zh-CN"] {
+        slint::select_bundled_translation(language).unwrap();
+        diagnostics.borrow_mut().clear();
+        native.set_size(slint::PhysicalSize::new(520, 350));
+        window.show().unwrap();
+        window.window().request_redraw();
+        native.draw_if_needed(|renderer| {
+            let mut pixels = vec![Rgb565Pixel::default(); 520 * 350];
+            renderer.render(&mut pixels, 520);
+        });
+        let messages = diagnostics.borrow();
+        assert!(
+            !messages
+                .iter()
+                .any(|message| message.contains("long callback/instantiation")),
+            "category badge layout did not settle for {language}: {messages:?}"
+        );
+        window.hide().unwrap();
+    }
 }

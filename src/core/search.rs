@@ -136,6 +136,11 @@ impl SearchCore {
         self.providers.cancel_active_queries();
     }
 
+    /// Generation of provider-owned dynamic content snapshots.
+    pub fn provider_content_generation(&self) -> u64 {
+        self.providers.content_generation()
+    }
+
     pub fn search_context(&self, query: &str) -> crate::page::SearchContext {
         self.providers.search_context(query)
     }
@@ -609,6 +614,8 @@ fn category_priority_key(category: crate::result::ResultCategory) -> &'static st
         ResultCategory::Application => "application",
         ResultCategory::Game => "game",
         ResultCategory::Website => "website",
+        ResultCategory::Bookmark => "bookmark",
+        ResultCategory::Window => "window",
         ResultCategory::Calculator => "calculator",
         ResultCategory::ControlPanel => "control_panel",
         ResultCategory::Settings => "settings",
@@ -724,7 +731,7 @@ fn match_score(
         });
     }
     if fuzzy_search {
-        let haystack = Utf32Str::new(&text, matcher_buffer);
+        let haystack = Utf32Str::new(text, matcher_buffer);
         let needle = Utf32Str::new(query, needle_buffer);
         if let Some(score) = matcher.fuzzy_match(haystack, needle) {
             return Some(MatchScore {

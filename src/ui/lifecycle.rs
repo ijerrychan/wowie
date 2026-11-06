@@ -1687,6 +1687,7 @@ pub fn run() -> Result<()> {
             provider.discover_initial();
             let mut next_shell_reconciliation_check =
                 std::time::Instant::now() + Duration::from_secs(60);
+            let mut provider_content_generation = engine.provider_content_generation();
             let mut initial_refresh = true;
             loop {
                 let mut changed = if initial_refresh {
@@ -1721,6 +1722,11 @@ pub fn run() -> Result<()> {
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 };
+                let current_provider_generation = engine.provider_content_generation();
+                if current_provider_generation != provider_content_generation {
+                    provider_content_generation = current_provider_generation;
+                    changed = true;
+                }
                 if config_events.try_recv().is_ok() {
                     let (updated, valid) = config::Config::load();
                     changed |= settings_reload::apply_if_valid(valid, || {

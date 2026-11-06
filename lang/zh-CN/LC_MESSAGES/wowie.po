@@ -100,6 +100,74 @@ msgid "Document"
 msgstr "文档"
 
 msgctxt "Launcher"
+msgid "Bookmark"
+msgstr "书签"
+
+msgctxt "Launcher"
+msgid "Window"
+msgstr "窗口"
+
+msgctxt "Launcher"
+msgid "Open windows"
+msgstr "打开的窗口"
+
+msgctxt "Launcher"
+msgid "Search open windows"
+msgstr "搜索打开的窗口"
+
+msgctxt "Launcher"
+msgid "Search and switch between open windows"
+msgstr "搜索并切换到已打开的窗口"
+
+msgctxt "Launcher"
+msgid "No open windows"
+msgstr "没有打开的窗口"
+
+msgctxt "Launcher"
+msgid "No matching windows"
+msgstr "没有匹配的窗口"
+
+msgctxt "Launcher"
+msgid "Open windows will appear here"
+msgstr "打开的窗口会显示在这里"
+
+msgctxt "Settings"
+msgid "Bookmarks"
+msgstr "书签"
+
+msgctxt "Settings"
+msgid "Windows"
+msgstr "窗口"
+
+msgctxt "Launcher"
+msgid "Browser bookmarks"
+msgstr "浏览器书签"
+
+msgctxt "Launcher"
+msgid "Search browser bookmarks"
+msgstr "搜索浏览器书签"
+
+msgctxt "Launcher"
+msgid "Loading browser bookmarks"
+msgstr "正在读取浏览器书签"
+
+msgctxt "Launcher"
+msgid "No browser bookmarks found"
+msgstr "没有找到浏览器书签"
+
+msgctxt "Launcher"
+msgid "Could not read browser bookmarks"
+msgstr "无法读取浏览器书签"
+
+msgctxt "Launcher"
+msgid "No matching browser bookmarks"
+msgstr "没有匹配的浏览器书签"
+
+msgctxt "Launcher"
+msgid "Bookmarks from your browsers"
+msgstr "来自浏览器的书签"
+
+msgctxt "Launcher"
 msgid "Other"
 msgstr "其他"
 

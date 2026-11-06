@@ -407,6 +407,8 @@ pub(crate) fn default_result_order() -> Vec<String> {
         "settings",
         "game",
         "document",
+        "bookmark",
+        "window",
         "other",
         "unclassified",
         "website",

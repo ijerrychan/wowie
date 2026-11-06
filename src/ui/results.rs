@@ -24,6 +24,7 @@ pub(super) struct ResultRowPayload {
     shortcut_prefix: String,
     shortcut_prefix_width: i32,
     presentation: String,
+    category_kind: String,
 }
 
 #[derive(Default)]
@@ -55,7 +56,7 @@ impl ResultFilterState {
     }
 
     pub(super) fn categories(&self) -> Vec<(&'static str, usize)> {
-        const ORDER: [&str; 8] = [
+        const ORDER: [&str; 10] = [
             "application",
             "game",
             "website",
@@ -63,9 +64,11 @@ impl ResultFilterState {
             "control_panel",
             "settings",
             "document",
+            "bookmark",
+            "window",
             "other",
         ];
-        let mut counts = [0_usize; 8];
+        let mut counts = [0_usize; 10];
         for item in self.all_items.iter() {
             let key = category_key(item.category);
             if let Some(index) = ORDER.iter().position(|candidate| *candidate == key) {
@@ -128,6 +131,8 @@ fn category_key(category: ResultCategory) -> &'static str {
         ResultCategory::ControlPanel => "control_panel",
         ResultCategory::Settings => "settings",
         ResultCategory::Document => "document",
+        ResultCategory::Bookmark => "bookmark",
+        ResultCategory::Window => "window",
         ResultCategory::Other => "other",
         ResultCategory::Unclassified => "other",
     }
@@ -163,6 +168,12 @@ impl ResultRowPayload {
             shortcut_prefix_width: shortcut_prefix_width(shortcut_prefix),
             shortcut_prefix: shortcut_prefix.into(),
             presentation: presentation_name(item.recommended_presentation()).into(),
+            category_kind: match item.category {
+                ResultCategory::Window => "window",
+                ResultCategory::Bookmark => "bookmark",
+                _ => "",
+            }
+            .into(),
         }
     }
 }
@@ -194,6 +205,7 @@ pub(super) fn matches_model(model: &ModelRc<ResultRow>, payloads: &[ResultRowPay
             && row.shortcut_prefix.as_str() == payload.shortcut_prefix
             && row.shortcut_prefix_width == payload.shortcut_prefix_width
             && row.presentation.as_str() == payload.presentation
+            && row.category_kind.as_str() == payload.category_kind
     })
 }
 
@@ -206,6 +218,7 @@ pub(super) fn static_icon_kind(icon: Option<&IconSpec>) -> &'static str {
         Some(IconSpec::Calculator) => "calculator",
         Some(IconSpec::Named(name)) => match name.as_str() {
             "book" | "wowie" => "book",
+            "window" => "window",
             "checklist" => "checklist",
             "folder-open" => "folder-open",
             "shield-account" => "shield-account",
@@ -220,6 +233,13 @@ pub(super) fn static_icon_kind(icon: Option<&IconSpec>) -> &'static str {
 }
 
 fn display_location(item: &SearchResult, show_advanced_details: bool) -> String {
+    if item.category == ResultCategory::Bookmark {
+        return if show_advanced_details {
+            item.launch_target.to_string_lossy().into_owned()
+        } else {
+            item.location.clone()
+        };
+    }
     if item.category == ResultCategory::Settings {
         return if show_advanced_details {
             item.launch_target.to_string_lossy().into_owned()
@@ -365,6 +385,7 @@ impl From<ResultRowPayload> for ResultRow {
             shortcut_prefix: payload.shortcut_prefix.into(),
             shortcut_prefix_width: payload.shortcut_prefix_width,
             presentation: payload.presentation.into(),
+            category_kind: payload.category_kind.into(),
         }
     }
 }
@@ -373,6 +394,7 @@ impl From<ResultRowPayload> for ResultRow {
 mod tests {
     use super::*;
     use crate::{platform::SourceId, result::ResultVisibility};
+    use std::path::PathBuf;
 
     fn item(id: &str, category: ResultCategory) -> SearchResult {
         SearchResult {
@@ -447,6 +469,66 @@ mod tests {
         );
         assert!(filter.filters().is_empty());
         assert_eq!(filter.selected, "all");
+    }
+
+    #[test]
+    fn bookmarks_and_windows_have_distinct_filters_and_row_badges() {
+        let items = Arc::new(vec![
+            item("bookmark", ResultCategory::Bookmark),
+            item("window", ResultCategory::Window),
+        ]);
+        let rows = items
+            .iter()
+            .map(|item| ResultRowPayload::from(item, false, None, false))
+            .collect();
+        let mut filter = ResultFilterState::default();
+        filter.replace(1, Arc::clone(&items), rows);
+        assert_eq!(filter.categories(), [("bookmark", 1), ("window", 1)]);
+        assert_eq!(filter.all_rows[0].category_kind, "bookmark");
+        assert_eq!(filter.all_rows[1].category_kind, "window");
+        assert!(filter.all_rows[0].shortcut_prefix.is_empty());
+        assert!(filter.all_rows[1].shortcut_prefix.is_empty());
+        filter.selected = "window".into();
+        assert_eq!(filter.visible().0[0].category, ResultCategory::Window);
+    }
+
+    #[test]
+    fn window_session_entry_uses_shortcut_hint_without_window_type_label() {
+        let entry = item("windows:entry", ResultCategory::Other);
+        let row = ResultRowPayload::from(&entry, false, Some("< "), false);
+        assert!(row.category_kind.is_empty());
+        assert_eq!(row.shortcut_prefix, "<");
+        let actual = ResultRowPayload::from(
+            &item("window:1:2", ResultCategory::Window),
+            false,
+            None,
+            false,
+        );
+        assert_eq!(actual.category_kind, "window");
+        assert!(actual.shortcut_prefix.is_empty());
+    }
+
+    #[test]
+    fn bookmark_subtitle_keeps_source_and_domain_until_advanced_details() {
+        let mut bookmark = item("bookmark", ResultCategory::Bookmark);
+        bookmark.location = "Firefox · docs.example.com".into();
+        bookmark.launch_target = PathBuf::from("https://docs.example.com/guide");
+        bookmark.launch_entries.push(crate::result::LaunchEntry {
+            source: SourceId::Shortcut,
+            path: PathBuf::new(),
+            target: bookmark.launch_target.clone(),
+            arguments: String::new(),
+            working_directory: None,
+            icon: None,
+        });
+        assert_eq!(
+            display_location(&bookmark, false),
+            "Firefox · docs.example.com"
+        );
+        assert_eq!(
+            display_location(&bookmark, true),
+            "https://docs.example.com/guide"
+        );
     }
 
     #[test]

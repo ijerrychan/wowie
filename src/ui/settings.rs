@@ -490,6 +490,8 @@ pub(super) fn entries(
             ("control_panel", "Control Panel results"),
             ("settings", "Settings results"),
             ("document", "Documents"),
+            ("bookmark", "Bookmarks"),
+            ("window", "Windows"),
             ("other", "Other results"),
             ("unclassified", "Unclassified results"),
         ]

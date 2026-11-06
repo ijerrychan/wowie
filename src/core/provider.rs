@@ -85,6 +85,9 @@ pub trait SearchEngineProvider: Send + Sync {
     /// are ordinary results; none is required to be a session entry.
     fn query_root(&self, query: &str) -> Vec<SearchResult>;
 
+    /// Attach the registry's shared generation counter for async content changes.
+    fn set_content_notifier(&mut self, _notifier: Arc<std::sync::atomic::AtomicU64>) {}
+
     /// Optional content for an empty result surface. This is presentation
     /// state, not a selectable result row, so engines can describe a session
     /// without manufacturing an intro item.
@@ -246,6 +249,7 @@ pub struct ProviderRegistry {
     plugins: PluginManager,
     engines: Vec<Mutex<Box<dyn SearchEngineProvider>>>,
     indexed: Arc<Mutex<Arc<Vec<SearchResult>>>>,
+    content_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ProviderRegistry {
@@ -256,6 +260,7 @@ impl ProviderRegistry {
             plugins,
             engines: Vec::new(),
             indexed,
+            content_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         registry.register_indexed_engines();
         registry
@@ -276,6 +281,7 @@ impl ProviderRegistry {
             plugins,
             engines: Vec::new(),
             indexed: Arc::new(Mutex::new(Arc::new(Vec::new()))),
+            content_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         registry.register_indexed_engines();
         registry.register_search_engine(plugin_engine);
@@ -283,11 +289,13 @@ impl ProviderRegistry {
         registry
     }
 
-    pub fn register_search_engine<P>(&mut self, engine: P)
+    pub fn register_search_engine<P>(&mut self, mut engine: P) -> Arc<std::sync::atomic::AtomicU64>
     where
         P: SearchEngineProvider + 'static,
     {
+        engine.set_content_notifier(Arc::clone(&self.content_generation));
         self.engines.push(Mutex::new(Box::new(engine)));
+        Arc::clone(&self.content_generation)
     }
 
     fn register_indexed_engines(&mut self) {
@@ -356,6 +364,11 @@ impl ProviderRegistry {
             }
         }
         results
+    }
+
+    pub fn content_generation(&self) -> u64 {
+        self.content_generation
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub fn cancel_active_queries(&self) {

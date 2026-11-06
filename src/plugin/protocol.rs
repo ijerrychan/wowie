@@ -637,6 +637,8 @@ pub(super) fn parse_plugin_category(value: &str) -> ResultCategory {
         "calculator" => ResultCategory::Calculator,
         "control_panel" | "control-panel" => ResultCategory::ControlPanel,
         "document" => ResultCategory::Document,
+        "bookmark" => ResultCategory::Bookmark,
+        "window" => ResultCategory::Window,
         "other" => ResultCategory::Other,
         _ => ResultCategory::Application,
     }

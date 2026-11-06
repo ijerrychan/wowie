@@ -28,6 +28,7 @@ pub struct VisibleWindow {
     pub process_id: u32,
     pub title: String,
     pub process_name: String,
+    pub process_path: Option<PathBuf>,
 }
 
 pub fn visible_windows() -> Vec<VisibleWindow> {

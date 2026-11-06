@@ -115,6 +115,8 @@ pub enum ResultCategory {
     ControlPanel,
     Settings,
     Document,
+    Bookmark,
+    Window,
     Other,
 }
 

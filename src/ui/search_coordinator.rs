@@ -450,10 +450,12 @@ pub(super) fn build_search_presentation(
         .cloned()
         .map(crate::page::SearchContext::Engine)
         .unwrap_or_else(|| engine.search_context(query));
-    let found = engine.search_in_context_limited(&search_context, query, MAX_RENDERED_RESULTS);
+    let search_query = routed_search_query(query, active_session, &search_context);
+    let found =
+        engine.search_in_context_limited(&search_context, search_query, MAX_RENDERED_RESULTS);
     let empty_state = found
         .is_empty()
-        .then(|| engine.empty_state(&search_context, query))
+        .then(|| engine.empty_state(&search_context, search_query))
         .flatten();
     let search_engine = search_context.session().cloned();
     // SearchCore gives an entered engine exclusive ownership of the result
@@ -496,6 +498,20 @@ pub(super) fn build_search_presentation(
         search_engine,
         empty_state,
     }
+}
+
+fn routed_search_query<'a>(
+    query: &'a str,
+    active_session: Option<&crate::page::SearchEngineSession>,
+    context: &'a crate::page::SearchContext,
+) -> &'a str {
+    if active_session.is_some() {
+        return query;
+    }
+    context
+        .session()
+        .map(|session| session.argument.as_str())
+        .unwrap_or(query)
 }
 
 pub(super) fn apply_empty_state(
@@ -581,4 +597,30 @@ pub(super) fn apply_search_engine(
             .unwrap_or_default()
             .into(),
     );
+}
+
+#[cfg(test)]
+mod routed_search_query_tests {
+    use super::*;
+    fn session() -> crate::page::SearchEngineSession {
+        crate::page::SearchEngineSession {
+            id: "bookmarks".into(),
+            title: "Bookmarks".into(),
+            placeholder: String::new(),
+            prefix: "bm ".into(),
+            argument: "rust".into(),
+            mode: crate::page::SearchEngineMode::Search,
+            state: Default::default(),
+        }
+    }
+    #[test]
+    fn prefix_query_is_routed_as_argument_but_entered_session_keeps_literal_input() {
+        let session = session();
+        let context = crate::page::SearchContext::Engine(session.clone());
+        assert_eq!(routed_search_query(" bm rust", None, &context), "rust");
+        assert_eq!(
+            routed_search_query("bm rust", Some(&session), &context),
+            "bm rust"
+        );
+    }
 }

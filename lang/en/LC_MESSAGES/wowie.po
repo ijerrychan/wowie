@@ -96,6 +96,74 @@ msgid "Document"
 msgstr "Document"
 
 msgctxt "Launcher"
+msgid "Bookmark"
+msgstr "Bookmark"
+
+msgctxt "Launcher"
+msgid "Window"
+msgstr "Window"
+
+msgctxt "Launcher"
+msgid "Open windows"
+msgstr "Open windows"
+
+msgctxt "Launcher"
+msgid "Search open windows"
+msgstr "Search open windows"
+
+msgctxt "Launcher"
+msgid "Search and switch between open windows"
+msgstr "Search and switch between open windows"
+
+msgctxt "Launcher"
+msgid "No open windows"
+msgstr "No open windows"
+
+msgctxt "Launcher"
+msgid "No matching windows"
+msgstr "No matching windows"
+
+msgctxt "Launcher"
+msgid "Open windows will appear here"
+msgstr "Open windows will appear here"
+
+msgctxt "Settings"
+msgid "Bookmarks"
+msgstr "Bookmarks"
+
+msgctxt "Settings"
+msgid "Windows"
+msgstr "Windows"
+
+msgctxt "Launcher"
+msgid "Browser bookmarks"
+msgstr "Browser bookmarks"
+
+msgctxt "Launcher"
+msgid "Search browser bookmarks"
+msgstr "Search browser bookmarks"
+
+msgctxt "Launcher"
+msgid "Loading browser bookmarks"
+msgstr "Loading browser bookmarks"
+
+msgctxt "Launcher"
+msgid "No browser bookmarks found"
+msgstr "No browser bookmarks found"
+
+msgctxt "Launcher"
+msgid "Could not read browser bookmarks"
+msgstr "Could not read browser bookmarks"
+
+msgctxt "Launcher"
+msgid "No matching browser bookmarks"
+msgstr "No matching browser bookmarks"
+
+msgctxt "Launcher"
+msgid "Bookmarks from your browsers"
+msgstr "Bookmarks from your browsers"
+
+msgctxt "Launcher"
 msgid "Other"
 msgstr "Other"
 

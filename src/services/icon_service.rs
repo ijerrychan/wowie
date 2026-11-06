@@ -341,6 +341,10 @@ fn resolve_uncached(
             .or_else(|| named_icon("control-panel", size));
     }
 
+    if item.category == crate::result::ResultCategory::Window {
+        return named_icon("window", size);
+    }
+
     let icon_target = crate::providers::app::preferred_launch_entry(item)
         .map(|entry| &entry.target)
         .unwrap_or(&item.launch_target);
@@ -472,6 +476,7 @@ fn named_icon(name: &str, size: u32) -> Option<IconData> {
         "book" | "wowie" => {
             load_svg_bytes(include_bytes!("../../assets/icons/book-open.svg"), size)
         }
+        "window" => load_svg_bytes(include_bytes!("../../assets/icons/window.svg"), size),
         "checklist" => load_svg_bytes(include_bytes!("../../assets/icons/list-checks.svg"), size),
         "folder-open" => load_svg_bytes(
             include_bytes!("../../assets/icons/folder-open-outline.svg"),
@@ -926,6 +931,7 @@ mod tests {
             "settings",
             "control-panel",
             "calculator",
+            "window",
         ] {
             let icon = resolve_spec(&IconSpec::Named(name.into()), 24).unwrap();
             assert_eq!((icon.width, icon.height), (24, 24), "{name}");

@@ -77,34 +77,37 @@ unsafe extern "system" fn collect(hwnd: HWND, data: LPARAM) -> i32 {
     {
         return 1;
     }
-    let process_name = process_name(pid);
+    let process_path = process_path(pid);
+    let process_name = process_path
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
     values.push(VisibleWindow {
         hwnd: hwnd as usize as u64,
         process_id: pid,
         title: String::from_utf16_lossy(&title[..length as usize]),
         process_name,
+        process_path,
     });
     1
 }
 
-fn process_name(pid: u32) -> String {
+fn process_path(pid: u32) -> Option<std::path::PathBuf> {
     unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if process.is_null() {
-            return String::new();
+            return None;
         }
         let mut path = [0u16; 1024];
         let mut length = path.len() as u32;
         let ok = QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length);
         windows_sys::Win32::Foundation::CloseHandle(process);
         if ok == 0 {
-            return String::new();
+            return None;
         }
-        std::path::PathBuf::from(String::from_utf16_lossy(&path[..length as usize]))
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned()
+        let path = std::path::PathBuf::from(String::from_utf16_lossy(&path[..length as usize]));
+        path.is_absolute().then_some(path)
     }
 }
 
