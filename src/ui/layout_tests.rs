@@ -164,6 +164,12 @@ fn launcher_layout_settles_when_reopened() {
                     }
                     .into(),
                     shortcut_prefix_width: 44,
+                    presentation: if index % 2 == 0 {
+                        "compact"
+                    } else {
+                        "detailed"
+                    }
+                    .into(),
                     section_kind: if is_header { section_kind } else { "" }.into(),
                     section_count,
                     section_more_key: if is_header { filter_key } else { "" }.into(),
@@ -176,6 +182,25 @@ fn launcher_layout_settles_when_reopened() {
     ));
 
     for count in [256, 500] {
+        // Cover the real viewport both with and without the category toolbar.
+        window.set_category_filters(ModelRc::from(Rc::new(VecModel::from(if count == 500 {
+            vec![
+                CategoryFilter {
+                    key: "all".into(),
+                    count: 500,
+                },
+                CategoryFilter {
+                    key: "search_tools".into(),
+                    count: 50,
+                },
+                CategoryFilter {
+                    key: "other".into(),
+                    count: 450,
+                },
+            ]
+        } else {
+            Vec::new()
+        }))));
         let rows = Rc::new(VecModel::from(
             (0..count)
                 .filter_map(|index| grouped_rows.row_data(index))
@@ -186,6 +211,8 @@ fn launcher_layout_settles_when_reopened() {
             slint::select_bundled_translation(language).unwrap();
             for scale in [1.0_f32, 1.25, 1.5] {
                 window.set_accent_background(slint::Color::from_rgb_u8(229, 0, 200));
+                // Exercise compact and detailed row heights across the DPI cases.
+                window.set_list_item_height(if scale == 1.25 { 35.0 } else { 65.0 });
                 window
                     .window()
                     .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
@@ -197,7 +224,17 @@ fn launcher_layout_settles_when_reopened() {
                 native.set_size(slint::PhysicalSize::new(width, height));
                 window.invoke_reset_result_scroll();
                 window.show().unwrap();
-                for selected in [0, count - 1] {
+                // Walk upward from the bottom, including both sides of every
+                // section boundary. Pixel coverage must include the entire row.
+                let upward_steps = (0..count).rev().filter(|index| {
+                    // Sample consecutive steps around each header and the tail;
+                    // avoid thousands of redundant software-rendered frames.
+                    *index >= count - 8
+                        || groups
+                            .iter()
+                            .any(|(start, _, _, _)| index.abs_diff(*start) <= 2)
+                });
+                for selected in [0, count - 1].into_iter().chain(upward_steps) {
                     window.set_selected_index(selected as i32);
                     assert_eq!(window.get_selected_index(), selected as i32);
                     window.window().request_redraw();
@@ -215,7 +252,8 @@ fn launcher_layout_settles_when_reopened() {
                                 > width as usize / 3
                         })
                         .count();
-                    let minimum_selected_height = (52.0 * scale * 0.75).ceil() as usize;
+                    let minimum_selected_height =
+                        (window.get_list_item_height() * scale).floor() as usize - 2;
                     assert!(
                         selected_color_rows >= minimum_selected_height,
                         "selected row was not visible: count={count}, language={language}, scale={scale}, selected={selected}, colored_rows={selected_color_rows}, expected_at_least={minimum_selected_height}"

@@ -1,4 +1,4 @@
-import { VerticalBox, ListView } from "std-widgets.slint";
+import { VerticalBox, ScrollView } from "std-widgets.slint";
 
 export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, icon_kind: string, favorite: bool, shortcut_prefix: string, shortcut_prefix_width: int, presentation: string, category_kind: string, section_kind: string, section_count: int, section_more_key: string, headers_before: int, is_best_match: bool }
 export struct CategoryFilter { key: string, count: int }
@@ -280,9 +280,9 @@ export component Launcher inherits Window {
 
     public function ensure-selected-visible() {
         if (root.selected-index < 0 || root.selected-index >= root.results.length) { return; }
-        let row = root.results[root.selected-index];
-        let row-top = root.selected-index * root.result-row-height + row.headers_before * root.section-header-height;
-        let row-bottom = row-top + (row.section_kind != "" ? root.section-header-height : 0px) + root.result-row-height;
+        let row-data = root.results[root.selected-index];
+        let row-top = root.selected-index * root.result-row-height + row-data.headers_before * root.section-header-height;
+        let row-bottom = row-top + (row-data.section_kind != "" ? root.section-header-height : 0px) + root.result-row-height;
         if (row-top + results-list.content-y < 0px) {
             results-list.content-y = min(0px, max(results-list.visible-height - results-list.content-height, -row-top));
         }
@@ -344,7 +344,7 @@ export component Launcher inherits Window {
         }
     }
     // The host coalesces range notifications on the next event-loop turn, so
-    // layout and selection changes cannot synchronously rebuild the ListView.
+    // layout and selection changes cannot synchronously rebuild the result model.
     changed available-results-height => { root.visible-range-changed(root.first-visible-index, root.last-visible-index); }
 
     Rectangle {
@@ -604,7 +604,7 @@ export component Launcher inherits Window {
                             }
                             Text {
                                 x: 6px; width: parent.width - 12px; height: parent.height;
-                                text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "settings" ? @tr("Settings") : filter.key == "document" ? @tr("Document") : filter.key == "bookmark" ? @tr("Bookmark") : filter.key == "window" ? @tr("Window") : @tr("Other")) + "  " + filter.count;
+                                text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "settings" ? @tr("Settings") : filter.key == "document" ? @tr("Document") : filter.key == "bookmark" ? @tr("Bookmark") : filter.key == "window" ? @tr("Window") : filter.key == "search_tools" ? @tr("Search tools") : @tr("Other")) + "  " + filter.count;
                                 color: root.selected-category-filter == filter.key ? root.text-primary : root.text-secondary;
                                 font-size: 0.7857rem;
                                 font-weight: root.selected-category-filter == filter.key ? 600 : 400;
@@ -620,24 +620,26 @@ export component Launcher inherits Window {
                 background: transparent;
                 clip: true;
 
-                results-list := ListView {
+                results-list := ScrollView {
                     visible: !root.compact-results-hidden && !root.search-loading;
                     x: 0px; y: 0px;
                     width: parent.width - root.detail-progress * (parent.width * root.detail-panel-share + root.result-column-gap - root.detail-panel-alignment-shift);
-                    // Keep the scroll extent exact; the virtual repeater estimates from visible rows.
+                    // Position the bounded visible slice using exact prefix geometry.
+                    // ListView estimates off-screen variable row heights, which shifts
+                    // grouped rows away from ensure-selected-visible's coordinates.
                     content-height: root.results.length * root.result-row-height + root.total-section-headers * root.section-header-height;
-                    // Slint still instantiates an invisible ListView. A zero-height
-                    // viewport can repeatedly discard/recreate its boundary row
-                    // after the model or scroll offset changes. Keep one row of
-                    // internal viewport while the results-area clips the compact UI.
-                    height: max(root.result-row-height, parent.height);
-                for row[index] in root.results : result-row := Rectangle {
+                    content-width: self.visible-width;
+                    height: parent.height;
+                for offset in max(0, root.last-visible-index - root.first-visible-index) : result-row := Rectangle {
+                    private property <int> index: root.first-visible-index + offset;
+                    private property <ResultRow> row-data: root.results[index];
                     x: root.result-row-inset;
+                    y: index * root.result-row-height + row-data.headers_before * root.section-header-height;
                     width: results-list.visible-width - 2 * root.result-row-inset;
-                    height: root.result-row-height + (row.section_kind != "" ? root.section-header-height : 0px);
+                    height: root.result-row-height + (row-data.section_kind != "" ? root.section-header-height : 0px);
                     background: transparent;
 
-                    if row.section_kind != "" : Rectangle {
+                    if row-data.section_kind != "" : Rectangle {
                         x: 0px; y: 0px;
                         width: parent.width;
                         height: root.section-header-height;
@@ -649,26 +651,26 @@ export component Launcher inherits Window {
                         }
                         Text {
                             x: 8px; y: 1px;
-                            width: parent.width - (row.section_more_key != "" ? 106px : 16px);
+                            width: parent.width - (row-data.section_more_key != "" ? 106px : 16px);
                             height: parent.height - 1px;
-                            text: root.result-section-title(row.section_kind) + (row.section_kind == "best_match" ? "" : "  " + row.section_count);
+                            text: root.result-section-title(row-data.section_kind) + (row-data.section_kind == "best_match" ? "" : "  " + row-data.section_count);
                             color: root.text-secondary;
                             font-size: 0.7857rem;
                             font-weight: 600;
                             vertical-alignment: center;
                             overflow: elide;
                         }
-                        if row.section_more_key != "" : Text {
+                        if row-data.section_more_key != "" : Text {
                             x: parent.width - 94px; y: 1px; width: 86px; height: parent.height - 1px;
                             text: @tr("See more"); color: root.accent;
                             font-size: 0.7857rem; horizontal-alignment: right; vertical-alignment: center;
                             overflow: elide;
                         }
-                        if row.section_more_key != "" : TouchArea {
+                        if row-data.section_more_key != "" : TouchArea {
                             x: parent.width - 100px; y: 0px; width: 100px; height: parent.height;
                             mouse-cursor: pointer;
                             clicked => {
-                                root.category-filter-selected(row.section_more_key);
+                                root.category-filter-selected(row-data.section_more_key);
                                 search-field.focus();
                             }
                         }
@@ -676,17 +678,17 @@ export component Launcher inherits Window {
 
                     Rectangle {
                         x: 0px;
-                        y: row.section_kind != "" ? root.section-header-height : 0px;
+                        y: row-data.section_kind != "" ? root.section-header-height : 0px;
                         width: parent.width;
                         height: root.result-row-height;
-                        private property <length> shortcut-card-width: row.shortcut_prefix_width * 1px;
-                        private property <length> row-icon-size: row.presentation == "compact" ? 20px : row.is_best_match ? root.result-icon-size + 4px : root.result-icon-size;
-                        private property <length> row-title-height: row.presentation == "compact" ? 16px : max(18px, root.ui-font-size * 1.2);
-                        private property <length> row-description-height: row.presentation == "compact" ? 14px : max(16px, root.ui-font-size);
+                        private property <length> shortcut-card-width: row-data.shortcut_prefix_width * 1px;
+                        private property <length> row-icon-size: row-data.presentation == "compact" ? 20px : row-data.is_best_match ? root.result-icon-size + 4px : root.result-icon-size;
+                        private property <length> row-title-height: row-data.presentation == "compact" ? 16px : max(18px, root.ui-font-size * 1.2);
+                        private property <length> row-description-height: row-data.presentation == "compact" ? 14px : max(16px, root.ui-font-size);
                         private property <length> row-text-gap: 0px;
                         private property <length> row-text-height: row-title-height + row-text-gap + row-description-height;
                         private property <length> row-text-top: max(0px, (root.result-row-height - row-text-height) / 2);
-                        private property <length> category-badge-width: root.ui-font-size * (row.category_kind == "bookmark" ? 3.25 : 2.75);
+                        private property <length> category-badge-width: root.ui-font-size * (row-data.category_kind == "bookmark" ? 3.25 : 2.75);
                         background: index == root.selected-index ? root.surface-selected : item-area.has-hover ? root.surface-hover : transparent;
                         border-color: transparent;
                         border-width: 0px;
@@ -712,26 +714,26 @@ export component Launcher inherits Window {
                                 }
                             }
                         }
-                        BuiltinIcon { visible: row.icon_kind != ""; x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; kind: row.icon_kind; }
-                        if row.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row.icon; image-fit: contain; }
+                        BuiltinIcon { visible: row-data.icon_kind != ""; x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; kind: row-data.icon_kind; }
+                        if row-data.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row-data.icon; image-fit: contain; }
                     Rectangle {
-                        x: 60px; y: 0px; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px - (row.favorite ? 22px : 0px) : parent.width - 60px - parent.shortcut-card-width - (row.favorite ? 40px : 0px); height: parent.height; background: transparent;
-                        Text { x: 0px; y: row-text-top; width: parent.width - (row.category_kind == "" ? 0px : category-badge-width + 4px); height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 0.9286rem : 1.0000rem; font-weight: row.is_best_match ? 700 : 500; vertical-alignment: center; overflow: elide; }
-                        if row.category_kind != "" : Rectangle {
+                        x: 60px; y: 0px; width: row-data.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px - (row-data.favorite ? 22px : 0px) : parent.width - 60px - parent.shortcut-card-width - (row-data.favorite ? 40px : 0px); height: parent.height; background: transparent;
+                        Text { x: 0px; y: row-text-top; width: parent.width - (row-data.category_kind == "" ? 0px : category-badge-width + 4px); height: row-title-height; text: row-data.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row-data.title; color: root.text-primary; font-size: row-data.presentation == "compact" ? 0.9286rem : 1.0000rem; font-weight: row-data.is_best_match ? 700 : 500; vertical-alignment: center; overflow: elide; }
+                        if row-data.category_kind != "" : Rectangle {
                             x: parent.width - category-badge-width; y: row-text-top; width: category-badge-width; height: row-title-height;
-                            Text { width: parent.width; height: parent.height; text: row.category_kind == "window" ? @tr("Window") : @tr("Bookmark"); color: root.text-secondary; font-size: 0.6429rem; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
+                            Text { width: parent.width; height: parent.height; text: row-data.category_kind == "window" ? @tr("Window") : @tr("Bookmark"); color: root.text-secondary; font-size: 0.6429rem; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
                         }
-                        Text { x: 0px; y: row-text-top + row-title-height + row-text-gap; width: parent.width - 4px; height: row-description-height; text: row.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row.location_kind == "control-panel" ? @tr("Control Panel") : row.location_kind == "application" && row.location == "" ? @tr("Application") : row.location; color: root.text-secondary; font-size: row.presentation == "compact" ? 0.7143rem : 0.7857rem; vertical-alignment: center; overflow: elide; }
+                        Text { x: 0px; y: row-text-top + row-title-height + row-text-gap; width: parent.width - 4px; height: row-description-height; text: row-data.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row-data.location_kind == "control-panel" ? @tr("Control Panel") : row-data.location_kind == "application" && row-data.location == "" ? @tr("Application") : row-data.location; color: root.text-secondary; font-size: row-data.presentation == "compact" ? 0.7143rem : 0.7857rem; vertical-alignment: center; overflow: elide; }
                     }
                     Rectangle {
                         x: parent.width - shortcut-card-width - 10px; y: (root.result-row-height - 24px) / 2; width: shortcut-card-width; height: 24px;
                         background: root.dark-mode ? #303030 : #eef0f4;
                         border-color: root.border; border-width: 1px; border-radius: 6px;
-                        visible: row.shortcut_prefix != "" && !root.detail-visible;
-                        Text { width: parent.width - 8px; height: parent.height; x: 4px; text: row.shortcut_prefix; color: root.text-secondary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+                        visible: row-data.shortcut_prefix != "" && !root.detail-visible;
+                        Text { width: parent.width - 8px; height: parent.height; x: 4px; text: row-data.shortcut_prefix; color: root.text-secondary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
                     }
-                    if row.favorite : BuiltinIcon {
-                        x: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 26px : parent.width - shortcut-card-width - 32px;
+                    if row-data.favorite : BuiltinIcon {
+                        x: row-data.shortcut_prefix == "" || root.detail-visible ? parent.width - 26px : parent.width - shortcut-card-width - 32px;
                         y: (root.result-row-height - 16px) / 2;
                         width: 16px; height: 16px; kind: "star";
                     }

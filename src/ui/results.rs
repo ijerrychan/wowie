@@ -84,7 +84,7 @@ impl ResultFilterState {
     }
 
     pub(super) fn categories(&self) -> Vec<(&'static str, usize)> {
-        const ORDER: [&str; 10] = [
+        const ORDER: [&str; 11] = [
             "application",
             "game",
             "website",
@@ -94,11 +94,12 @@ impl ResultFilterState {
             "document",
             "bookmark",
             "window",
+            "search_tools",
             "other",
         ];
-        let mut counts = [0_usize; 10];
+        let mut counts = [0_usize; 11];
         for item in self.all_items.iter() {
-            let key = category_key(item.category);
+            let key = effective_category_key(item);
             if let Some(index) = ORDER.iter().position(|candidate| *candidate == key) {
                 counts[index] += 1;
             }
@@ -119,7 +120,7 @@ impl ResultFilterState {
                 || categories[0]
                     .1
                     .saturating_sub(usize::from(best.is_some_and(|i| {
-                        category_key(self.all_items[i].category) == categories[0].0
+                        effective_category_key(&self.all_items[i]) == categories[0].0
                     })))
                     > 3);
         if categories.len() < 2 && !single_truncated {
@@ -180,10 +181,7 @@ impl ResultFilterState {
             .iter()
             .zip(&self.all_rows)
             .position(|(item, row)| {
-                !row.is_fallback
-                    && !item.actions.iter().any(|action| {
-                        matches!(action, crate::result::Action::EnterSearchEngine { .. })
-                    })
+                !row.is_fallback && effective_category_key(item) != "search_tools"
             })
     }
 
@@ -195,7 +193,7 @@ impl ResultFilterState {
                 .iter()
                 .zip(&self.all_rows)
                 .enumerate()
-                .filter(|(_, (item, _))| selected || category_key(item.category) == self.selected)
+                .filter(|(_, (item, _))| selected || effective_category_key(item) == self.selected)
                 .map(|(index, _)| PresentedRow {
                     index,
                     section: "",
@@ -211,7 +209,7 @@ impl ResultFilterState {
                 .all_items
                 .iter()
                 .enumerate()
-                .filter(|(_, item)| category_key(item.category) == self.selected)
+                .filter(|(_, item)| effective_category_key(item) == self.selected)
                 .map(|(i, _)| i)
                 .collect::<Vec<_>>();
             let n = matches.len();
@@ -241,22 +239,18 @@ impl ResultFilterState {
                 continue;
             }
             if self.mode == PresentationMode::RootEmpty {
-                let group = if row.favorite {
-                    0
-                } else if item
-                    .actions
-                    .iter()
-                    .any(|a| matches!(a, crate::result::Action::EnterSearchEngine { .. }))
-                {
+                let group = if effective_category_key(item) == "search_tools" {
                     1
+                } else if row.favorite {
+                    0
                 } else {
                     2
                 };
                 empty_groups[group].push(index);
-            } else if row.is_fallback {
+            } else if row.is_fallback && effective_category_key(item) != "search_tools" {
                 fallback.push(index);
             } else {
-                let key = category_key(item.category);
+                let key = effective_category_key(item);
                 if let Some((_, indices)) = groups.iter_mut().find(|(group, _)| *group == key) {
                     indices.push(index);
                 } else {
@@ -319,9 +313,21 @@ impl ResultFilterState {
     fn selected_key(&self) -> &'static str {
         self.all_items
             .iter()
-            .find(|item| category_key(item.category) == self.selected)
-            .map(|item| category_key(item.category))
+            .find(|item| effective_category_key(item) == self.selected)
+            .map(|item| effective_category_key(item))
             .unwrap_or("other")
+    }
+}
+
+fn effective_category_key(item: &SearchResult) -> &'static str {
+    if item
+        .actions
+        .iter()
+        .any(|action| matches!(action, crate::result::Action::EnterSearchEngine { .. }))
+    {
+        "search_tools"
+    } else {
+        category_key(item.category)
     }
 }
 
@@ -372,9 +378,9 @@ impl ResultRowPayload {
             shortcut_prefix_width: shortcut_prefix_width(shortcut_prefix),
             shortcut_prefix: shortcut_prefix.into(),
             presentation: presentation_name(item.recommended_presentation()).into(),
-            category_kind: match item.category {
-                ResultCategory::Window => "window",
-                ResultCategory::Bookmark => "bookmark",
+            category_kind: match effective_category_key(item) {
+                "window" => "window",
+                "bookmark" => "bookmark",
                 _ => "",
             }
             .into(),
@@ -693,6 +699,94 @@ mod tests {
     }
 
     #[test]
+    fn session_actions_define_exclusive_search_tools_in_every_mode() {
+        let mut entry = item("arbitrary-id", ResultCategory::Bookmark);
+        entry
+            .actions
+            .push(crate::result::Action::EnterSearchEngine {
+                prefix: "x ".into(),
+            });
+        let mut other_entry = item("fav-tool", ResultCategory::Other);
+        other_entry.actions = entry.actions.clone();
+        for mode in [
+            PresentationMode::RootSearch,
+            PresentationMode::RootEmpty,
+            PresentationMode::Engine,
+        ] {
+            let mut filter = root_filter(
+                vec![
+                    entry.clone(),
+                    item("normal-other", ResultCategory::Other),
+                    other_entry.clone(),
+                    item("session-bookmark", ResultCategory::Bookmark),
+                ],
+                mode,
+                &["arbitrary-id"],
+            );
+            assert_eq!(
+                filter.categories(),
+                [("bookmark", 1), ("search_tools", 2), ("other", 1)]
+            );
+            assert!(filter.all_rows[0].category_kind.is_empty());
+            let (_, rows) = filter.visible();
+            if mode != PresentationMode::Engine {
+                assert!(rows.iter().any(|row| row.section_kind == "search_tools"));
+            }
+            filter.selected = "search_tools".into();
+            let (shown, rows) = filter.visible();
+            assert_eq!(
+                shown
+                    .iter()
+                    .map(|item| item.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["arbitrary-id", "fav-tool"]
+            );
+            if mode != PresentationMode::Engine {
+                assert_eq!(rows[0].section_kind, "search_tools");
+            }
+            filter.selected = "other".into();
+            assert_eq!(filter.visible().0[0].id, "normal-other");
+            filter.selected = "bookmark".into();
+            assert_eq!(filter.visible().0[0].id, "session-bookmark");
+        }
+    }
+
+    #[test]
+    fn search_tools_more_filter_expands_all_entries_without_best_match() {
+        let items = (0..5)
+            .map(|index| {
+                let mut entry = item(&format!("entry-{index}"), ResultCategory::Other);
+                entry
+                    .actions
+                    .push(crate::result::Action::EnterSearchEngine {
+                        prefix: format!("{index} "),
+                    });
+                entry
+            })
+            .collect();
+        let mut filter = root_filter(items, PresentationMode::RootSearch, &[]);
+        assert_eq!(
+            filter
+                .filters()
+                .iter()
+                .map(|f| f.key.as_str())
+                .collect::<Vec<_>>(),
+            ["all", "search_tools"]
+        );
+        let (_, rows) = filter.visible();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].section_kind, "search_tools");
+        assert_eq!(rows[0].section_count, 5);
+        assert_eq!(rows[0].section_more_key, "search_tools");
+        assert!(rows.iter().all(|row| !row.is_best_match));
+        filter.selected = "search_tools".into();
+        let (_, rows) = filter.visible();
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].section_kind, "search_tools");
+        assert!(rows.iter().all(|row| row.section_more_key.is_empty()));
+    }
+
+    #[test]
     fn bookmarks_and_windows_have_distinct_filters_and_row_badges() {
         let items = Arc::new(vec![
             item("bookmark", ResultCategory::Bookmark),
@@ -891,7 +985,7 @@ mod tests {
             rows.iter()
                 .map(|row| row.section_kind.as_str())
                 .collect::<Vec<_>>(),
-            ["best_match", "other", "fallbacks", ""]
+            ["best_match", "search_tools", "fallbacks", ""]
         );
     }
 
