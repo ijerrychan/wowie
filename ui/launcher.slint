@@ -1,6 +1,6 @@
 import { VerticalBox, ListView } from "std-widgets.slint";
 
-export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, icon_kind: string, favorite: bool, shortcut_prefix: string, shortcut_prefix_width: int, presentation: string, category_kind: string }
+export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, icon_kind: string, favorite: bool, shortcut_prefix: string, shortcut_prefix_width: int, presentation: string, category_kind: string, section_kind: string, section_count: int, section_more_key: string, headers_before: int, is_best_match: bool }
 export struct CategoryFilter { key: string, count: int }
 export struct ContextActionRow { id: string, title: string, subtitle: string, kind: string, icon: image, icon_kind: string, shortcut: string }
 export struct DetailBlock { kind: string, label: string, value: string, color: string, secondary: string, icon: image, height: int }
@@ -191,6 +191,7 @@ export component Launcher inherits Window {
     private property <length> search-row-height: 40px;
     private property <length> result-row-height: root.list-item-height;
     private property <length> result-icon-size: 24px;
+    private property <length> section-header-height: 27px;
     private property <length> empty-state-padding: 8px;
     private property <length> content-bottom-padding: 4px;
     private property <length> minimum-results-window-height: 100px + 5 * root.result-row-height + (root.category-filters.length > 0 ? root.category-filter-height + 3 * root.category-layout-spacing - 2 * root.content-spacing : 0px);
@@ -264,7 +265,8 @@ export component Launcher inherits Window {
     private property <color> detail-surface: root.dark-mode ? #242424 : #fbfcfe;
     private property <color> detail-raised-surface: root.dark-mode ? #2b2b2b : #f1f3f6;
     private property <color> detail-code-surface: root.dark-mode ? #181818 : #f1f3f6;
-    private property <int> first-visible-index: max(0, round(-results-list.content-y / root.result-row-height));
+    private property <int> total-section-headers: root.results.length == 0 ? 0 : root.results[root.results.length - 1].headers_before + (root.results[root.results.length - 1].section_kind != "" ? 1 : 0);
+    private property <int> first-visible-index: max(0, round((-results-list.content-y - root.total-section-headers * root.section-header-height) / root.result-row-height) - 2);
     private property <bool> context-click-consumed: false;
     private property <int> last-visible-index: min(root.results.length, round((-results-list.content-y + results-list.visible-height) / root.result-row-height) + 1);
     private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
@@ -276,14 +278,21 @@ export component Launcher inherits Window {
     private property <color> text-tertiary: root.dark-mode ? #858585 : #797b82;
     private property <color> accent: root.accent-color;
 
-    function ensure-selected-visible() {
+    public function ensure-selected-visible() {
         if (root.selected-index < 0 || root.selected-index >= root.results.length) { return; }
-        if (root.selected-index * root.result-row-height + results-list.content-y < 0px) {
-            results-list.content-y = min(0px, max(results-list.visible-height - results-list.content-height, -root.selected-index * root.result-row-height));
+        let row = root.results[root.selected-index];
+        let row-top = root.selected-index * root.result-row-height + row.headers_before * root.section-header-height;
+        let row-bottom = row-top + (row.section_kind != "" ? root.section-header-height : 0px) + root.result-row-height;
+        if (row-top + results-list.content-y < 0px) {
+            results-list.content-y = min(0px, max(results-list.visible-height - results-list.content-height, -row-top));
         }
-        if (root.selected-index * root.result-row-height + root.result-row-height + results-list.content-y > results-list.visible-height) {
-            results-list.content-y = min(0px, max(results-list.visible-height - results-list.content-height, results-list.visible-height - (root.selected-index + 1) * root.result-row-height));
+        if (row-bottom + results-list.content-y > results-list.visible-height) {
+            results-list.content-y = min(0px, max(results-list.visible-height - results-list.content-height, results-list.visible-height - row-bottom));
         }
+    }
+
+    public function reset-result-scroll() {
+        results-list.content-y = 0px;
     }
 
     function move-selection-down() {
@@ -298,6 +307,24 @@ export component Launcher inherits Window {
     function move-selection-up() {
         if (root.results.length == 0) { return; }
         root.selected-index = max(root.selected-index - 1, 0);
+    }
+
+    function result-section-title(kind: string) -> string {
+        return kind == "best_match" ? @tr("Best match")
+            : kind == "favorites" ? @tr("Favorites")
+            : kind == "search_tools" ? @tr("Search tools")
+            : kind == "suggestions" ? @tr("Suggestions")
+            : kind == "fallbacks" ? @tr("Other results")
+            : kind == "application" ? @tr("Application")
+            : kind == "game" ? @tr("Game")
+            : kind == "website" ? @tr("Website")
+            : kind == "bookmark" ? @tr("Bookmark")
+            : kind == "window" ? @tr("Window")
+            : kind == "calculator" ? @tr("Calculator")
+            : kind == "control_panel" ? @tr("Control Panel")
+            : kind == "settings" ? @tr("Settings")
+            : kind == "document" ? @tr("Document")
+            : @tr("Other");
     }
 
     changed selected-index => {
@@ -597,6 +624,8 @@ export component Launcher inherits Window {
                     visible: !root.compact-results-hidden && !root.search-loading;
                     x: 0px; y: 0px;
                     width: parent.width - root.detail-progress * (parent.width * root.detail-panel-share + root.result-column-gap - root.detail-panel-alignment-shift);
+                    // Keep the scroll extent exact; the virtual repeater estimates from visible rows.
+                    content-height: root.results.length * root.result-row-height + root.total-section-headers * root.section-header-height;
                     // Slint still instantiates an invisible ListView. A zero-height
                     // viewport can repeatedly discard/recreate its boundary row
                     // after the model or scroll offset changes. Keep one row of
@@ -605,11 +634,55 @@ export component Launcher inherits Window {
                 for row[index] in root.results : result-row := Rectangle {
                     x: root.result-row-inset;
                     width: results-list.visible-width - 2 * root.result-row-inset;
+                    height: root.result-row-height + (row.section_kind != "" ? root.section-header-height : 0px);
+                    background: transparent;
+
+                    if row.section_kind != "" : Rectangle {
+                        x: 0px; y: 0px;
+                        width: parent.width;
+                        height: root.section-header-height;
+                        background: transparent;
+                        Rectangle {
+                            x: 8px; y: 0px; width: parent.width - 16px; height: 1px;
+                            background: root.border; opacity: 0.55;
+                            visible: index > 0;
+                        }
+                        Text {
+                            x: 8px; y: 1px;
+                            width: parent.width - (row.section_more_key != "" ? 106px : 16px);
+                            height: parent.height - 1px;
+                            text: root.result-section-title(row.section_kind) + (row.section_kind == "best_match" ? "" : "  " + row.section_count);
+                            color: root.text-secondary;
+                            font-size: 0.7857rem;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        if row.section_more_key != "" : Text {
+                            x: parent.width - 94px; y: 1px; width: 86px; height: parent.height - 1px;
+                            text: @tr("See more"); color: root.accent;
+                            font-size: 0.7857rem; horizontal-alignment: right; vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        if row.section_more_key != "" : TouchArea {
+                            x: parent.width - 100px; y: 0px; width: 100px; height: parent.height;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.category-filter-selected(row.section_more_key);
+                                search-field.focus();
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        x: 0px;
+                        y: row.section_kind != "" ? root.section-header-height : 0px;
+                        width: parent.width;
                         height: root.result-row-height;
                         private property <length> shortcut-card-width: row.shortcut_prefix_width * 1px;
-                        private property <length> row-icon-size: row.presentation == "compact" ? 20px : root.result-icon-size;
-                        private property <length> row-title-height: row.presentation == "compact" ? 16px : 18px;
-                        private property <length> row-description-height: row.presentation == "compact" ? 14px : 16px;
+                        private property <length> row-icon-size: row.presentation == "compact" ? 20px : row.is_best_match ? root.result-icon-size + 4px : root.result-icon-size;
+                        private property <length> row-title-height: row.presentation == "compact" ? 16px : max(18px, root.ui-font-size * 1.2);
+                        private property <length> row-description-height: row.presentation == "compact" ? 14px : max(16px, root.ui-font-size);
                         private property <length> row-text-gap: 0px;
                         private property <length> row-text-height: row-title-height + row-text-gap + row-description-height;
                         private property <length> row-text-top: max(0px, (root.result-row-height - row-text-height) / 2);
@@ -618,32 +691,32 @@ export component Launcher inherits Window {
                         border-color: transparent;
                         border-width: 0px;
                         border-radius: 8px;
-                    item-area := TouchArea {
-                        clicked => {
-                            if (root.context-click-consumed) {
-                                root.context-click-consumed = false;
-                            } else {
-                                root.launch-requested(index);
+                        item-area := TouchArea {
+                            clicked => {
+                                if (root.context-click-consumed) {
+                                    root.context-click-consumed = false;
+                                } else {
+                                    root.launch-requested(index);
+                                }
+                            }
+                            pointer-event(event) => {
+                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                    root.context-menu-requested(index, false);
+                                    EventResult.accept
+                                } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down && root.context-menu-open) {
+                                    root.context-click-consumed = true;
+                                    root.context-menu-dismissed();
+                                    EventResult.accept
+                                } else {
+                                    EventResult.reject
+                                }
                             }
                         }
-                        pointer-event(event) => {
-                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                                root.context-menu-requested(index, false);
-                                EventResult.accept
-                            } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down && root.context-menu-open) {
-                                root.context-click-consumed = true;
-                                root.context-menu-dismissed();
-                                EventResult.accept
-                            } else {
-                                EventResult.reject
-                            }
-                        }
-                    }
-                    BuiltinIcon { visible: row.icon_kind != ""; x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; kind: row.icon_kind; }
-                    if row.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row.icon; image-fit: contain; }
+                        BuiltinIcon { visible: row.icon_kind != ""; x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; kind: row.icon_kind; }
+                        if row.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row.icon; image-fit: contain; }
                     Rectangle {
                         x: 60px; y: 0px; width: row.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px - (row.favorite ? 22px : 0px) : parent.width - 60px - parent.shortcut-card-width - (row.favorite ? 40px : 0px); height: parent.height; background: transparent;
-                        Text { x: 0px; y: row-text-top; width: parent.width - (row.category_kind == "" ? 0px : category-badge-width + 4px); height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 0.9286rem : 1.0000rem; font-weight: 500; vertical-alignment: center; overflow: elide; }
+                        Text { x: 0px; y: row-text-top; width: parent.width - (row.category_kind == "" ? 0px : category-badge-width + 4px); height: row-title-height; text: row.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row.title; color: root.text-primary; font-size: row.presentation == "compact" ? 0.9286rem : 1.0000rem; font-weight: row.is_best_match ? 700 : 500; vertical-alignment: center; overflow: elide; }
                         if row.category_kind != "" : Rectangle {
                             x: parent.width - category-badge-width; y: row-text-top; width: category-badge-width; height: row-title-height;
                             Text { width: parent.width; height: parent.height; text: row.category_kind == "window" ? @tr("Window") : @tr("Bookmark"); color: root.text-secondary; font-size: 0.6429rem; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
@@ -662,6 +735,7 @@ export component Launcher inherits Window {
                         y: (root.result-row-height - 16px) / 2;
                         width: 16px; height: 16px; kind: "star";
                     }
+                }
                 }
                 }
 

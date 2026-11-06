@@ -25,6 +25,29 @@ pub(super) struct ResultRowPayload {
     shortcut_prefix_width: i32,
     presentation: String,
     category_kind: String,
+    pub(super) is_fallback: bool,
+    section_kind: String,
+    section_count: i32,
+    section_more_key: String,
+    headers_before: i32,
+    is_best_match: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PresentationMode {
+    RootSearch,
+    RootEmpty,
+    #[default]
+    Engine,
+}
+
+struct PresentedRow {
+    index: usize,
+    section: &'static str,
+    count: usize,
+    more: &'static str,
+    best: bool,
+    starts_section: bool,
 }
 
 #[derive(Default)]
@@ -33,6 +56,7 @@ pub(super) struct ResultFilterState {
     pub(super) all_items: Arc<Vec<SearchResult>>,
     pub(super) all_rows: Vec<ResultRowPayload>,
     pub(super) selected: String,
+    pub(super) mode: PresentationMode,
 }
 
 impl ResultFilterState {
@@ -41,10 +65,14 @@ impl ResultFilterState {
         query_id: u64,
         items: Arc<Vec<SearchResult>>,
         rows: Vec<ResultRowPayload>,
+        mode: Option<PresentationMode>,
     ) {
         self.query_id = query_id;
         self.all_items = items;
         self.all_rows = rows;
+        if let Some(mode) = mode {
+            self.mode = mode;
+        }
         if self.selected != "all"
             && !self
                 .categories()
@@ -84,7 +112,17 @@ impl ResultFilterState {
 
     pub(super) fn filters(&self) -> Vec<CategoryFilter> {
         let categories = self.categories();
-        if categories.len() < 2 {
+        let best = self.best_match_index();
+        let single_truncated = self.mode == PresentationMode::RootSearch
+            && categories.len() == 1
+            && (self.selected != "all"
+                || categories[0]
+                    .1
+                    .saturating_sub(usize::from(best.is_some_and(|i| {
+                        category_key(self.all_items[i].category) == categories[0].0
+                    })))
+                    > 3);
+        if categories.len() < 2 && !single_truncated {
             return Vec::new();
         }
         std::iter::once(CategoryFilter {
@@ -99,26 +137,191 @@ impl ResultFilterState {
     }
 
     pub(super) fn visible(&self) -> (Arc<Vec<SearchResult>>, Vec<ResultRowPayload>) {
-        if self.selected == "all" || self.selected.is_empty() {
-            return (Arc::clone(&self.all_items), self.all_rows.clone());
-        }
-        let mut items = Vec::new();
-        let mut rows = Vec::new();
-        for (item, row) in self.all_items.iter().zip(&self.all_rows) {
-            if category_key(item.category) == self.selected {
-                items.push(item.clone());
-                rows.push(row.clone());
+        let indices = self.presentation_indices();
+        let mut items = Vec::with_capacity(indices.len());
+        let mut rows = Vec::with_capacity(indices.len());
+        let mut headers = 0usize;
+        for presented in indices {
+            let mut row = self.all_rows[presented.index].clone();
+            row.section_kind = if presented.starts_section {
+                presented.section.into()
+            } else {
+                String::new()
+            };
+            row.section_count = if presented.starts_section {
+                presented.count as i32
+            } else {
+                0
+            };
+            row.section_more_key = if presented.starts_section {
+                presented.more.into()
+            } else {
+                String::new()
+            };
+            row.headers_before = headers as i32;
+            row.is_best_match = presented.best;
+            if presented.starts_section {
+                headers += 1;
             }
+            items.push(self.all_items[presented.index].clone());
+            rows.push(row);
         }
         (Arc::new(items), rows)
     }
 
     pub(super) fn first_visible_item(&self) -> Option<&SearchResult> {
-        self.all_items.iter().find(|item| {
-            self.selected == "all"
-                || self.selected.is_empty()
-                || category_key(item.category) == self.selected
-        })
+        self.presentation_indices()
+            .first()
+            .map(|row| &self.all_items[row.index])
+    }
+
+    fn best_match_index(&self) -> Option<usize> {
+        self.all_items
+            .iter()
+            .zip(&self.all_rows)
+            .position(|(item, row)| {
+                !row.is_fallback
+                    && !item.actions.iter().any(|action| {
+                        matches!(action, crate::result::Action::EnterSearchEngine { .. })
+                    })
+            })
+    }
+
+    fn presentation_indices(&self) -> Vec<PresentedRow> {
+        let selected = self.selected.is_empty() || self.selected == "all";
+        if self.mode == PresentationMode::Engine {
+            return self
+                .all_items
+                .iter()
+                .zip(&self.all_rows)
+                .enumerate()
+                .filter(|(_, (item, _))| selected || category_key(item.category) == self.selected)
+                .map(|(index, _)| PresentedRow {
+                    index,
+                    section: "",
+                    count: 0,
+                    more: "",
+                    best: false,
+                    starts_section: false,
+                })
+                .collect();
+        }
+        if !selected {
+            let matches = self
+                .all_items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| category_key(item.category) == self.selected)
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
+            let n = matches.len();
+            return matches
+                .into_iter()
+                .enumerate()
+                .map(|(j, index)| PresentedRow {
+                    index,
+                    section: self.selected_key(),
+                    count: n,
+                    more: "",
+                    best: false,
+                    starts_section: j == 0,
+                })
+                .collect();
+        }
+        let best = if self.mode == PresentationMode::RootSearch {
+            self.best_match_index()
+        } else {
+            None
+        };
+        let mut groups: Vec<(&'static str, Vec<usize>)> = Vec::new();
+        let mut fallback = Vec::new();
+        let mut empty_groups: [Vec<usize>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+        for (index, (item, row)) in self.all_items.iter().zip(&self.all_rows).enumerate() {
+            if Some(index) == best {
+                continue;
+            }
+            if self.mode == PresentationMode::RootEmpty {
+                let group = if row.favorite {
+                    0
+                } else if item
+                    .actions
+                    .iter()
+                    .any(|a| matches!(a, crate::result::Action::EnterSearchEngine { .. }))
+                {
+                    1
+                } else {
+                    2
+                };
+                empty_groups[group].push(index);
+            } else if row.is_fallback {
+                fallback.push(index);
+            } else {
+                let key = category_key(item.category);
+                if let Some((_, indices)) = groups.iter_mut().find(|(group, _)| *group == key) {
+                    indices.push(index);
+                } else {
+                    groups.push((key, vec![index]));
+                }
+            }
+        }
+        if self.mode == PresentationMode::RootEmpty {
+            for (key, indices) in ["favorites", "search_tools", "suggestions"]
+                .into_iter()
+                .zip(empty_groups)
+            {
+                if !indices.is_empty() {
+                    groups.push((key, indices));
+                }
+            }
+        }
+        let mut output = Vec::new();
+        if let Some(index) = best {
+            output.push(PresentedRow {
+                index,
+                section: "best_match",
+                count: 1,
+                more: "",
+                best: true,
+                starts_section: true,
+            });
+        }
+        for (key, indices) in groups {
+            let count = indices.len();
+            let cap = self.mode == PresentationMode::RootSearch;
+            let more = if cap && count > 3 { key } else { "" };
+            let take = if cap { count.min(3) } else { count };
+            for (n, index) in indices.into_iter().take(take).enumerate() {
+                output.push(PresentedRow {
+                    index,
+                    section: key,
+                    count,
+                    more: if n == 0 { more } else { "" },
+                    best: false,
+                    starts_section: n == 0,
+                });
+            }
+        }
+        if !fallback.is_empty() {
+            let count = fallback.len();
+            for (n, index) in fallback.into_iter().enumerate() {
+                output.push(PresentedRow {
+                    index,
+                    section: "fallbacks",
+                    count,
+                    more: "",
+                    best: false,
+                    starts_section: n == 0,
+                });
+            }
+        }
+        output
+    }
+    fn selected_key(&self) -> &'static str {
+        self.all_items
+            .iter()
+            .find(|item| category_key(item.category) == self.selected)
+            .map(|item| category_key(item.category))
+            .unwrap_or("other")
     }
 }
 
@@ -144,6 +347,7 @@ impl ResultRowPayload {
         show_advanced_details: bool,
         shortcut_hint: Option<&str>,
         favorite: bool,
+        is_fallback: bool,
     ) -> Self {
         let location = display_location(item, show_advanced_details);
         let shortcut_prefix = shortcut_hint.unwrap_or_default().trim_end();
@@ -174,6 +378,12 @@ impl ResultRowPayload {
                 _ => "",
             }
             .into(),
+            is_fallback,
+            section_kind: String::new(),
+            section_count: 0,
+            section_more_key: String::new(),
+            headers_before: 0,
+            is_best_match: false,
         }
     }
 }
@@ -206,6 +416,11 @@ pub(super) fn matches_model(model: &ModelRc<ResultRow>, payloads: &[ResultRowPay
             && row.shortcut_prefix_width == payload.shortcut_prefix_width
             && row.presentation.as_str() == payload.presentation
             && row.category_kind.as_str() == payload.category_kind
+            && row.section_kind.as_str() == payload.section_kind
+            && row.section_count == payload.section_count
+            && row.section_more_key.as_str() == payload.section_more_key
+            && row.headers_before == payload.headers_before
+            && row.is_best_match == payload.is_best_match
     })
 }
 
@@ -386,6 +601,11 @@ impl From<ResultRowPayload> for ResultRow {
             shortcut_prefix_width: payload.shortcut_prefix_width,
             presentation: payload.presentation.into(),
             category_kind: payload.category_kind.into(),
+            section_kind: payload.section_kind.into(),
+            section_count: payload.section_count,
+            section_more_key: payload.section_more_key.into(),
+            headers_before: payload.headers_before,
+            is_best_match: payload.is_best_match,
         }
     }
 }
@@ -432,10 +652,10 @@ mod tests {
         ]);
         let rows = items
             .iter()
-            .map(|item| ResultRowPayload::from(item, false, None, false))
+            .map(|item| ResultRowPayload::from(item, false, None, false, false))
             .collect();
         let mut filter = ResultFilterState::default();
-        filter.replace(1, items, rows);
+        filter.replace(1, items, rows, None);
         assert_eq!(
             filter
                 .filters()
@@ -464,8 +684,9 @@ mod tests {
             Arc::clone(&only_web),
             only_web
                 .iter()
-                .map(|item| ResultRowPayload::from(item, false, None, false))
+                .map(|item| ResultRowPayload::from(item, false, None, false, false))
                 .collect(),
+            None,
         );
         assert!(filter.filters().is_empty());
         assert_eq!(filter.selected, "all");
@@ -479,10 +700,10 @@ mod tests {
         ]);
         let rows = items
             .iter()
-            .map(|item| ResultRowPayload::from(item, false, None, false))
+            .map(|item| ResultRowPayload::from(item, false, None, false, false))
             .collect();
         let mut filter = ResultFilterState::default();
-        filter.replace(1, Arc::clone(&items), rows);
+        filter.replace(1, Arc::clone(&items), rows, None);
         assert_eq!(filter.categories(), [("bookmark", 1), ("window", 1)]);
         assert_eq!(filter.all_rows[0].category_kind, "bookmark");
         assert_eq!(filter.all_rows[1].category_kind, "window");
@@ -495,13 +716,14 @@ mod tests {
     #[test]
     fn window_session_entry_uses_shortcut_hint_without_window_type_label() {
         let entry = item("windows:entry", ResultCategory::Other);
-        let row = ResultRowPayload::from(&entry, false, Some("< "), false);
+        let row = ResultRowPayload::from(&entry, false, Some("< "), false, false);
         assert!(row.category_kind.is_empty());
         assert_eq!(row.shortcut_prefix, "<");
         let actual = ResultRowPayload::from(
             &item("window:1:2", ResultCategory::Window),
             false,
             None,
+            false,
             false,
         );
         assert_eq!(actual.category_kind, "window");
@@ -540,12 +762,260 @@ mod tests {
         ]);
         let rows = items
             .iter()
-            .map(|item| ResultRowPayload::from(item, false, None, false))
+            .map(|item| ResultRowPayload::from(item, false, None, false, false))
             .collect();
         let mut filter = ResultFilterState::default();
-        filter.replace(1, items, rows);
+        filter.replace(1, items, rows, None);
         assert_eq!(filter.categories(), [("application", 1), ("other", 2)]);
         filter.selected = "other".into();
         assert_eq!(filter.visible().0.len(), 2);
+    }
+
+    fn root_filter(
+        items: Vec<SearchResult>,
+        mode: PresentationMode,
+        fallback_ids: &[&str],
+    ) -> ResultFilterState {
+        let items = Arc::new(items);
+        let rows = items
+            .iter()
+            .map(|item| {
+                ResultRowPayload::from(
+                    item,
+                    false,
+                    None,
+                    item.id.starts_with("fav"),
+                    fallback_ids.contains(&item.id.as_str()),
+                )
+            })
+            .collect();
+        let mut filter = ResultFilterState::default();
+        filter.replace(1, items, rows, Some(mode));
+        filter
+    }
+
+    #[test]
+    fn root_search_groups_by_first_ranked_category_and_keeps_best_once() {
+        let items = vec![
+            item("best-web", ResultCategory::Website),
+            item("app-1", ResultCategory::Application),
+            item("app-2", ResultCategory::Application),
+            item("app-3", ResultCategory::Application),
+            item("app-4", ResultCategory::Application),
+            item("book-1", ResultCategory::Bookmark),
+            item("book-2", ResultCategory::Bookmark),
+            item("fallback", ResultCategory::Other),
+        ];
+        let filter = root_filter(items, PresentationMode::RootSearch, &["fallback"]);
+        let (shown, rows) = filter.visible();
+        assert_eq!(
+            shown.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            ["best-web", "app-1", "app-2", "app-3", "book-1", "book-2", "fallback"]
+        );
+        assert_eq!(
+            shown.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>()
+        );
+        assert_eq!(filter.first_visible_item().unwrap().id, shown[0].id);
+        assert_eq!(shown.iter().filter(|i| i.id == "best-web").count(), 1);
+        assert_eq!(
+            shown
+                .iter()
+                .zip(&rows)
+                .filter(|(_, r)| r.is_best_match)
+                .count(),
+            1
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|r| r.section_kind.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "best_match",
+                "application",
+                "",
+                "",
+                "bookmark",
+                "",
+                "fallbacks"
+            ]
+        );
+        assert_eq!(rows[1].section_count, 4);
+        assert_eq!(rows[1].section_more_key, "application");
+        assert_eq!(rows[2].section_more_key, "");
+        assert_eq!(rows[1].headers_before, 1);
+        assert_eq!(rows[0].headers_before, 0);
+        assert_eq!(rows[2].headers_before, 2);
+        assert_eq!(rows[3].headers_before, 2);
+        assert_eq!(rows[4].headers_before, 2);
+        assert_eq!(rows[5].headers_before, 3);
+        assert_eq!(rows[6].headers_before, 3);
+    }
+
+    #[test]
+    fn root_search_best_match_skips_fallbacks_and_engine_entries() {
+        let mut entry = item("engine-entry", ResultCategory::Other);
+        entry
+            .actions
+            .push(crate::result::Action::EnterSearchEngine {
+                prefix: "bm ".into(),
+            });
+        let filter = root_filter(
+            vec![
+                item("fallback-top", ResultCategory::Application),
+                entry,
+                item("real-bookmark", ResultCategory::Bookmark),
+                item("fallback-bottom", ResultCategory::Website),
+            ],
+            PresentationMode::RootSearch,
+            &["fallback-top", "fallback-bottom"],
+        );
+        let (shown, rows) = filter.visible();
+        assert_eq!(
+            shown.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            [
+                "real-bookmark",
+                "engine-entry",
+                "fallback-top",
+                "fallback-bottom"
+            ]
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.is_best_match)
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["real-bookmark"]
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.section_kind.as_str())
+                .collect::<Vec<_>>(),
+            ["best_match", "other", "fallbacks", ""]
+        );
+    }
+
+    #[test]
+    fn all_fallback_results_have_no_best_match() {
+        let filter = root_filter(
+            vec![
+                item("fallback-1", ResultCategory::Website),
+                item("fallback-2", ResultCategory::Other),
+            ],
+            PresentationMode::RootSearch,
+            &["fallback-1", "fallback-2"],
+        );
+        let (shown, rows) = filter.visible();
+        assert!(rows.iter().all(|row| !row.is_best_match));
+        assert_eq!(
+            shown
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["fallback-1", "fallback-2"]
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.section_kind.as_str())
+                .collect::<Vec<_>>(),
+            ["fallbacks", ""]
+        );
+    }
+
+    #[test]
+    fn capped_single_category_exposes_more_filter_and_filtered_view_is_uncapped() {
+        let items = (0..5)
+            .map(|n| item(&format!("app-{n}"), ResultCategory::Application))
+            .collect();
+        let mut filter = root_filter(items, PresentationMode::RootSearch, &[]);
+        assert_eq!(
+            filter
+                .filters()
+                .iter()
+                .map(|f| f.key.as_str())
+                .collect::<Vec<_>>(),
+            ["all", "application"]
+        );
+        assert_eq!(filter.visible().0.len(), 4);
+        assert_eq!(filter.visible().1[1].section_more_key, "application");
+        filter.selected = "application".into();
+        let (shown, rows) = filter.visible();
+        assert_eq!(shown.len(), 5);
+        assert!(!rows[0].is_best_match);
+        assert_eq!(rows[0].section_kind, "application");
+        assert!(rows[1..]
+            .iter()
+            .all(|r| r.section_kind.is_empty() && r.section_more_key.is_empty()));
+        assert_eq!(
+            filter
+                .filters()
+                .iter()
+                .map(|f| f.key.as_str())
+                .collect::<Vec<_>>(),
+            ["all", "application"]
+        );
+        filter.selected = "all".into();
+        assert_eq!(filter.visible().0.len(), 4);
+        assert_eq!(filter.first_visible_item().unwrap().id, "app-0");
+        filter.selected = "application".into();
+        let fewer = Arc::new(vec![
+            item("app-a", ResultCategory::Application),
+            item("app-b", ResultCategory::Application),
+        ]);
+        filter.replace(
+            2,
+            Arc::clone(&fewer),
+            fewer
+                .iter()
+                .map(|item| ResultRowPayload::from(item, false, None, false, false))
+                .collect(),
+            Some(PresentationMode::RootSearch),
+        );
+        assert_eq!(filter.selected, "application");
+        assert_eq!(
+            filter
+                .filters()
+                .iter()
+                .map(|f| f.key.as_str())
+                .collect::<Vec<_>>(),
+            ["all", "application"]
+        );
+    }
+
+    #[test]
+    fn empty_root_orders_favorites_tools_then_suggestions_without_cap() {
+        let suggestion = item("suggestion", ResultCategory::Application);
+        let mut tool = item("tool", ResultCategory::Other);
+        tool.actions.push(crate::result::Action::EnterSearchEngine {
+            prefix: "x ".into(),
+        });
+        let mut items = vec![tool, suggestion];
+        for n in 0..5 {
+            items.push(item(&format!("fav-{n}"), ResultCategory::Application));
+        }
+        let filter = root_filter(items, PresentationMode::RootEmpty, &[]);
+        let (shown, rows) = filter.visible();
+        assert_eq!(shown.len(), 7);
+        assert!(shown[0].id.starts_with("fav"));
+        assert_eq!(rows[0].section_kind, "favorites");
+        assert_eq!(rows[5].section_kind, "search_tools");
+        assert_eq!(rows[6].section_kind, "suggestions");
+        assert!(rows
+            .iter()
+            .all(|r| !r.is_best_match && r.section_more_key.is_empty()));
+    }
+
+    #[test]
+    fn engine_mode_preserves_page_order_without_sections_or_cap() {
+        let items = (0..6)
+            .map(|n| item(&format!("engine-{n}"), ResultCategory::Website))
+            .collect();
+        let filter = root_filter(items, PresentationMode::Engine, &[]);
+        let (shown, rows) = filter.visible();
+        assert_eq!(shown.len(), 6);
+        assert_eq!(shown[0].id, "engine-0");
+        assert!(rows
+            .iter()
+            .all(|r| r.section_kind.is_empty() && r.headers_before == 0 && !r.is_best_match));
     }
 }

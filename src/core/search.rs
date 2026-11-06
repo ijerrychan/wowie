@@ -160,6 +160,10 @@ impl SearchCore {
         self.ranker.is_favorite(item_id)
     }
 
+    pub fn is_fallback_result(&self, item: &SearchResult) -> bool {
+        self.providers.is_fallback_result(item)
+    }
+
     /// Add or remove a persistent favorite. Returns the new state, or `None`
     /// if persistence state is unavailable or the favorite limit was reached.
     pub fn toggle_favorite(

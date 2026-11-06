@@ -246,6 +246,7 @@ pub(super) struct SearchPresentation {
     pub(super) is_search_engine: bool,
     pub(super) search_engine: Option<crate::page::SearchEngineSession>,
     pub(super) empty_state: Option<SearchResult>,
+    pub(super) mode: results::PresentationMode,
 }
 
 #[derive(Clone, Copy)]
@@ -262,6 +263,7 @@ pub(super) struct ResultSnapshot {
     pub(super) expected_previous_len: Option<usize>,
     pub(super) selection: SelectionPolicy,
     pub(super) show_results: bool,
+    pub(super) mode: Option<results::PresentationMode>,
 }
 
 pub(super) struct SnapshotTargets<'a> {
@@ -294,7 +296,12 @@ pub(super) fn apply_result_snapshot(
         }) {
             return None;
         }
-        filter.replace(snapshot.query_id, snapshot.items, snapshot.rows);
+        filter.replace(
+            snapshot.query_id,
+            snapshot.items,
+            snapshot.rows,
+            snapshot.mode,
+        );
         apply_result_filter(
             window,
             targets.engine,
@@ -303,9 +310,18 @@ pub(super) fn apply_result_snapshot(
             targets.icon_requests,
         )
     };
-    if changed {
+    if matches!(snapshot.selection, SelectionPolicy::First) {
+        window.invoke_reset_result_scroll();
+    }
+    if changed || matches!(snapshot.selection, SelectionPolicy::First) {
         let selected_index = if matches!(snapshot.selection, SelectionPolicy::KeepIndex) {
             current_index
+        } else if matches!(snapshot.selection, SelectionPolicy::First) {
+            if snapshot.show_results && count > 0 {
+                0
+            } else {
+                -1
+            }
         } else if snapshot.show_results && count > 0 {
             selected_id
                 .and_then(|id| {
@@ -322,6 +338,7 @@ pub(super) fn apply_result_snapshot(
             -1
         };
         window.set_selected_index(selected_index);
+        window.invoke_ensure_selected_visible();
         window.invoke_selection_changed(selected_index);
     }
     Some((changed, count))
@@ -358,6 +375,7 @@ pub(super) fn apply_search_presentation(
         is_search_engine,
         search_engine,
         empty_state,
+        mode,
     } = presentation;
     apply_search_engine(window, search_engine.as_ref());
     apply_empty_state(window, empty_state.as_ref(), targets.icon_service);
@@ -375,6 +393,7 @@ pub(super) fn apply_search_presentation(
             expected_previous_len: None,
             selection,
             show_results,
+            mode: Some(mode),
         },
         SnapshotTargets {
             engine: targets.engine,
@@ -486,6 +505,7 @@ pub(super) fn build_search_presentation(
                 show_advanced_details,
                 shortcut_hint.as_deref(),
                 engine.is_favorite(&item.id),
+                engine.is_fallback_result(item),
             )
         })
         .collect();
@@ -497,6 +517,17 @@ pub(super) fn build_search_presentation(
         is_search_engine,
         search_engine,
         empty_state,
+        mode: presentation_mode(search_query, is_search_engine),
+    }
+}
+
+fn presentation_mode(query: &str, is_engine: bool) -> results::PresentationMode {
+    if is_engine {
+        results::PresentationMode::Engine
+    } else if query.trim().is_empty() {
+        results::PresentationMode::RootEmpty
+    } else {
+        results::PresentationMode::RootSearch
     }
 }
 

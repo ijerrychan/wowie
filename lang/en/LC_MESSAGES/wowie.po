@@ -96,6 +96,30 @@ msgid "Document"
 msgstr "Document"
 
 msgctxt "Launcher"
+msgid "Best match"
+msgstr "Best match"
+
+msgctxt "Launcher"
+msgid "Favorites"
+msgstr "Favorites"
+
+msgctxt "Launcher"
+msgid "Search tools"
+msgstr "Search tools"
+
+msgctxt "Launcher"
+msgid "Suggestions"
+msgstr "Suggestions"
+
+msgctxt "Launcher"
+msgid "Other results"
+msgstr "Other results"
+
+msgctxt "Launcher"
+msgid "See more"
+msgstr "See more"
+
+msgctxt "Launcher"
 msgid "Bookmark"
 msgstr "Bookmark"
 

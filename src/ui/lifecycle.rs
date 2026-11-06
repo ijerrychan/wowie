@@ -207,6 +207,7 @@ pub fn run() -> Result<()> {
                     .map(|index| index as i32)
                     .unwrap_or(if count > 0 { 0 } else { -1 });
                 window.set_selected_index(index);
+                window.invoke_ensure_selected_visible();
                 window.invoke_selection_changed(index);
                 schedule_visible_range_refresh(&window, count.min(8) as i32);
             }
@@ -362,6 +363,7 @@ pub fn run() -> Result<()> {
                                     show_advanced_details.load(Ordering::Acquire),
                                     shortcut_hint.as_deref(),
                                     engine.is_favorite(&item.id),
+                                    engine.is_fallback_result(item),
                                 )
                             }));
                             let selected_filter = filter.selected != "all";
@@ -376,6 +378,7 @@ pub fn run() -> Result<()> {
                                 expected_previous_len: Some(items.len()),
                                 selection: SelectionPolicy::KeepIndex,
                                 show_results: true,
+                                mode: None,
                             },
                             SnapshotTargets {
                                 engine: &engine,

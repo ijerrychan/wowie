@@ -100,6 +100,30 @@ msgid "Document"
 msgstr "文档"
 
 msgctxt "Launcher"
+msgid "Best match"
+msgstr "最佳匹配"
+
+msgctxt "Launcher"
+msgid "Favorites"
+msgstr "收藏"
+
+msgctxt "Launcher"
+msgid "Search tools"
+msgstr "搜索工具"
+
+msgctxt "Launcher"
+msgid "Suggestions"
+msgstr "建议"
+
+msgctxt "Launcher"
+msgid "Other results"
+msgstr "其他结果"
+
+msgctxt "Launcher"
+msgid "See more"
+msgstr "查看更多"
+
+msgctxt "Launcher"
 msgid "Bookmark"
 msgstr "书签"
 
