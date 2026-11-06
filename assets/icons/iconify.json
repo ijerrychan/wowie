@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "icons": [
+    { "file": "assets/icons/arrow-left-dark.svg", "icon": "mdi:chevron-left", "color": "#4b5563", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/chevron-left.svg?color=%234b5563" },
+    { "file": "assets/icons/arrow-left-light.svg", "icon": "mdi:chevron-left", "color": "#f3f4f6", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/chevron-left.svg?color=%23f3f4f6" },
+    { "file": "assets/icons/book-open.svg", "icon": "flat-color-icons:reading", "license": "MIT", "source": "https://api.iconify.design/flat-color-icons/reading.svg" },
+    { "file": "assets/icons/calculator.svg", "icon": "flat-color-icons:calculator", "license": "MIT", "source": "https://api.iconify.design/flat-color-icons/calculator.svg" },
+    { "file": "assets/icons/chevron-down.svg", "icon": "mdi:chevron-down", "color": "#929292", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/chevron-down.svg?color=%23929292" },
+    { "file": "assets/icons/chevron-right.svg", "icon": "mdi:chevron-right", "color": "#929292", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/chevron-right.svg?color=%23929292" },
+    { "file": "assets/icons/console-line.svg", "icon": "mdi:console-line", "color": "#8b7bff", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/console-line.svg?color=%238b7bff" },
+    { "file": "assets/icons/content-copy.svg", "icon": "mdi:content-copy", "color": "#78909c", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/content-copy.svg?color=%2378909c" },
+    { "file": "assets/icons/control-panel.svg", "icon": "mdi:view-dashboard-outline", "color": "#7089a5", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/view-dashboard-outline.svg?color=%237089a5" },
+    { "file": "assets/icons/folder-open-outline.svg", "icon": "mdi:folder-open-outline", "color": "#78909c", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/folder-open-outline.svg?color=%2378909c" },
+    { "file": "assets/icons/list-checks.svg", "icon": "flat-color-icons:todo-list", "license": "MIT", "source": "https://api.iconify.design/flat-color-icons/todo-list.svg" },
+    { "file": "assets/icons/magnify.svg", "icon": "mdi:magnify", "color": "#777777", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/magnify.svg?color=%23777777" },
+    { "file": "assets/icons/settings.svg", "icon": "mdi:cog-outline", "color": "#7089a5", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/cog-outline.svg?color=%237089a5" },
+    { "file": "assets/icons/shield-account-outline.svg", "icon": "mdi:shield-account-outline", "color": "#7986cb", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/shield-account-outline.svg?color=%237986cb" },
+    { "file": "assets/icons/star.svg", "icon": "mdi:star", "color": "#f5b942", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/star.svg?color=%23f5b942" },
+    { "file": "assets/icons/weather.svg", "icon": "fluent-emoji-flat:sun-behind-small-cloud", "license": "MIT", "source": "https://api.iconify.design/fluent-emoji-flat/sun-behind-small-cloud.svg" },
+    { "file": "assets/icons/window.svg", "icon": "mdi:window-maximize", "color": "#65758b", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/window-maximize.svg?color=%2365758b" },
+    { "file": "plugins/google-translate/icons/google-translate.svg", "icon": "simple-icons:googletranslate", "color": "#4285f4", "license": "CC0-1.0", "source": "https://api.iconify.design/simple-icons/googletranslate.svg?color=%234285f4" }
+  ]
+}

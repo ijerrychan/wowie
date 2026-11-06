@@ -1,13 +1,15 @@
-Bundled SVG icons are sourced from Iconify.
+All files listed in iconify.json are downloaded from the official Iconify API:
+https://api.iconify.design/
 
-- flat-color-icons:calculator, flat-color-icons:reading, and flat-color-icons:todo-list
-- fluent-emoji-flat:sun-behind-small-cloud
-- mdi:folder-open-outline, mdi:magnify, and mdi:shield-account-outline
+Per-icon source IDs and target paths are recorded in iconify.json. Licenses:
 
-Iconify source: https://iconify.design/
-Both source icon sets are licensed under the MIT License.
+- Apache-2.0: Material Design Icons (mdi)
+  https://github.com/Templarian/MaterialDesign
+- MIT: Flat Color Icons (flat-color-icons)
+  https://github.com/icons8/flat-color-icons
+- MIT: Fluent Emoji Flat (fluent-emoji-flat)
+  https://github.com/microsoft/fluentui-emoji
+- CC0-1.0: Simple Icons (simple-icons)
+  https://github.com/simple-icons/simple-icons
 
-Material Design Icons are licensed under Apache 2.0.
-
-Flat Color Icons: https://github.com/icons8/flat-color-icons
-Fluent Emoji: https://github.com/microsoft/fluentui-emoji
+Iconify project: https://iconify.design/
