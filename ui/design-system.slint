@@ -1,0 +1,44 @@
+// Shared neutral palette and geometry. Accent colors are resolved by the host
+// from the user's accent setting and the platform/theme.
+export global DesignTokens {
+    out property <color> light-canvas: #f5f5f7;
+    out property <color> light-surface: #ffffff;
+    out property <color> light-raised: #eeeef2;
+    out property <color> light-border: #e1e1e8;
+    out property <color> light-primary: #202025;
+    out property <color> light-secondary: #686873;
+    out property <color> light-tertiary: #777780;
+    out property <color> dark-canvas: #202024;
+    out property <color> dark-surface: #28282d;
+    out property <color> dark-raised: #323238;
+    out property <color> dark-border: #3c3c44;
+    out property <color> dark-primary: #f2f2f5;
+    out property <color> dark-secondary: #b1b1bc;
+    out property <color> dark-tertiary: #92929e;
+
+    // Corner radii. Keep every control on one of these three steps.
+    out property <length> radius-sm: 6px;
+    out property <length> radius-md: 8px;
+    out property <length> radius-lg: 12px;
+
+    // Motion tokens. Interaction feedback never exceeds 160ms.
+    out property <duration> motion-fast: 100ms;
+    out property <duration> motion-base: 140ms;
+    out property <duration> motion-slow: 160ms;
+
+    // Type scale relative to the window's configured base font size.
+    out property <relative-font-size> font-micro: 0.6429rem;
+    out property <relative-font-size> font-caption: 0.7143rem;
+    out property <relative-font-size> font-small: 0.7857rem;
+    out property <relative-font-size> font-label: 0.8571rem;
+    out property <relative-font-size> font-body: 0.9286rem;
+    out property <relative-font-size> font-base: 1.0000rem;
+    out property <relative-font-size> font-title: 1.0714rem;
+    out property <relative-font-size> font-input: 1.1429rem;
+    out property <relative-font-size> font-heading: 1.2143rem;
+    out property <relative-font-size> font-page-title: 1.2857rem;
+    out property <int> weight-regular: 400;
+    out property <int> weight-medium: 500;
+    out property <int> weight-semibold: 600;
+    out property <int> weight-bold: 700;
+}

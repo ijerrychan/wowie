@@ -1,4 +1,5 @@
-import { VerticalBox, ScrollView } from "std-widgets.slint";
+import { VerticalBox, ScrollView, Palette } from "std-widgets.slint";
+import { DesignTokens } from "design-system.slint";
 
 export struct ResultRow { id: string, title: string, location: string, location_kind: string, icon: image, icon_kind: string, favorite: bool, shortcut_prefix: string, shortcut_prefix_width: int, presentation: string, category_kind: string, section_kind: string, section_count: int, section_more_key: string, headers_before: int, is_best_match: bool }
 export struct CategoryFilter { key: string, count: int }
@@ -12,6 +13,7 @@ component BuiltinIcon inherits Image {
     source: root.kind == "weather" ? @image-url("../assets/icons/weather.svg")
         : root.kind == "calculator" ? @image-url("../assets/icons/calculator.svg")
         : root.kind == "book" ? @image-url("../assets/icons/book-open.svg")
+        : root.kind == "bookmark" ? @image-url("../assets/icons/bookmark-outline.svg")
         : root.kind == "window" ? @image-url("../assets/icons/window.svg")
         : root.kind == "checklist" ? @image-url("../assets/icons/list-checks.svg")
         : root.kind == "folder-open" ? @image-url("../assets/icons/folder-open-outline.svg")
@@ -31,6 +33,7 @@ component SearchGlyph inherits Rectangle {
     in property <string> previous-kind;
     in property <float> transition-progress: 1.0;
     in property <bool> transition-animation-enabled: true;
+    in property <bool> animations-enabled: true;
     background: transparent;
     clip: true;
 
@@ -38,9 +41,9 @@ component SearchGlyph inherits Rectangle {
     private property <float> outgoing-scale: max(0.0, 1.0 - root.animated-progress);
     private property <float> incoming-scale: 0.72 + root.animated-progress * 0.28;
     animate animated-progress {
-        duration: 180ms;
-        easing: ease-out-back;
-        enabled: root.transition-animation-enabled;
+        duration: DesignTokens.motion-slow;
+        easing: ease-out;
+        enabled: root.transition-animation-enabled && root.animations-enabled;
     }
 
     Rectangle {
@@ -103,6 +106,7 @@ export component Launcher inherits Window {
 
     in property <bool> native-window-frame: false;
     out property <color> native-background-color: root.canvas;
+    in property <bool> animations-enabled: true;
     in-out property <int> window-width: 900;
     in property <string> ui-font-family: "";
     in property <length> ui-font-size: 14px;
@@ -177,6 +181,8 @@ export component Launcher inherits Window {
     callback session-execute-requested;
     callback empty-state-activated;
 
+    init => { Palette.color-scheme = root.dark-mode ? dark : light; }
+    changed dark-mode => { Palette.color-scheme = root.dark-mode ? dark : light; }
     changed query-history-restore-id => {
         search-field.set-selection-offsets(root.query-history-cursor, root.query-history-cursor);
     }
@@ -239,15 +245,16 @@ export component Launcher inherits Window {
     // Keep the placeholder and the focused text at the same six-pixel inset.
     // Cursor visibility uses the same margin when the field receives focus.
     private property <length> search-input-scroll-x: 6px;
-    private property <duration> session-transition-duration: 150ms;
-    private property <duration> session-fade-duration: 100ms;
+    private property <duration> session-transition-duration: DesignTokens.motion-base;
+    private property <duration> session-fade-duration: DesignTokens.motion-fast;
     private property <length> search-row-layout-height: root.search-row-height;
     private property <length> available-results-height: root.compact-results-hidden ? 0px : max(0px, root.height - 2 * root.window-inset - root.empty-state-padding - root.content-bottom-padding - root.search-row-layout-height - root.category-layout-spacing - (root.category-filters.length > 0 ? root.category-filter-height + root.category-layout-spacing : 0px) - root.operation-hint-spacing - root.no-results-spacing);
     private property <bool> detail-visible: root.detail-panel-visible && (root.selected-index >= 0 || root.empty-state-detail-active);
     private property <float> detail-progress: root.detail-visible ? 1.0 : 0.0;
     animate detail-progress {
-        duration: 180ms;
-        easing: root.detail-visible ? ease-out-back : ease-in;
+        duration: DesignTokens.motion-slow;
+        easing: root.detail-visible ? ease-out : ease-in;
+        enabled: root.animations-enabled;
     }
     private property <length> detail-panel-width: (root.width - 2 * root.window-inset - 2 * root.content-padding) * root.detail-panel-share - root.detail-panel-alignment-shift;
     private property <bool> detail-panel-active: root.detail-visible || root.detail-progress > 0.0;
@@ -262,20 +269,20 @@ export component Launcher inherits Window {
     private property <length> detail-action-height: 28px;
     private property <length> detail-action-bottom: 78px;
     private property <length> detail-source-bottom: 42px;
-    private property <color> detail-surface: root.dark-mode ? #242424 : #fbfcfe;
-    private property <color> detail-raised-surface: root.dark-mode ? #2b2b2b : #f1f3f6;
-    private property <color> detail-code-surface: root.dark-mode ? #181818 : #f1f3f6;
+    private property <color> detail-surface: root.dark-mode ? DesignTokens.dark-surface : DesignTokens.light-surface;
+    private property <color> detail-raised-surface: root.dark-mode ? DesignTokens.dark-raised : DesignTokens.light-raised;
+    private property <color> detail-code-surface: root.dark-mode ? DesignTokens.dark-canvas : DesignTokens.light-raised;
     private property <int> total-section-headers: root.results.length == 0 ? 0 : root.results[root.results.length - 1].headers_before + (root.results[root.results.length - 1].section_kind != "" ? 1 : 0);
     private property <int> first-visible-index: max(0, round((-results-list.content-y - root.total-section-headers * root.section-header-height) / root.result-row-height) - 2);
     private property <bool> context-click-consumed: false;
     private property <int> last-visible-index: min(root.results.length, round((-results-list.content-y + results-list.visible-height) / root.result-row-height) + 1);
-    private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
-    private property <color> surface-hover: root.dark-mode ? #323232 : #f1f3f6;
+    private property <color> canvas: root.dark-mode ? DesignTokens.dark-canvas : DesignTokens.light-canvas;
+    private property <color> surface-hover: root.dark-mode ? DesignTokens.dark-raised : DesignTokens.light-raised;
     private property <color> surface-selected: root.accent-background;
-    private property <color> border: root.dark-mode ? #484848 : #d9dde5;
-    private property <color> text-primary: root.dark-mode ? #f5f5f5 : #1b1b1f;
-    private property <color> text-secondary: root.dark-mode ? #b6b6b6 : #5d5f66;
-    private property <color> text-tertiary: root.dark-mode ? #858585 : #797b82;
+    private property <color> border: root.dark-mode ? DesignTokens.dark-border : DesignTokens.light-border;
+    private property <color> text-primary: root.dark-mode ? DesignTokens.dark-primary : DesignTokens.light-primary;
+    private property <color> text-secondary: root.dark-mode ? DesignTokens.dark-secondary : DesignTokens.light-secondary;
+    private property <color> text-tertiary: root.dark-mode ? DesignTokens.dark-tertiary : DesignTokens.light-tertiary;
     private property <color> accent: root.accent-color;
 
     public function ensure-selected-visible() {
@@ -312,7 +319,7 @@ export component Launcher inherits Window {
     function result-section-title(kind: string) -> string {
         return kind == "best_match" ? @tr("Best match")
             : kind == "favorites" ? @tr("Favorites")
-            : kind == "search_tools" ? @tr("Search tools")
+            : kind == "command" ? @tr("Command")
             : kind == "suggestions" ? @tr("Suggestions")
             : kind == "fallbacks" ? @tr("Other results")
             : kind == "application" ? @tr("Application")
@@ -355,7 +362,7 @@ export component Launcher inherits Window {
         border-color: root.border;
         border-width: 1px;
         // Windows rounds the native frame, including its shadow.
-        border-radius: root.native-window-frame ? 0px : 12px;
+        border-radius: root.native-window-frame ? 0px : DesignTokens.radius-lg;
 
         VerticalBox {
             padding: root.content-padding;
@@ -367,22 +374,22 @@ export component Launcher inherits Window {
                 z: 0;
                 height: root.search-row-layout-height;
                 background: root.canvas;
-                border-radius: 8px;
+                border-radius: DesignTokens.radius-md;
 
                 back-button := Rectangle {
                     x: root.shortcut-session-active ? 0px : -root.session-back-width;
                     y: 0px; width: root.session-back-width; height: parent.height;
                     opacity: root.shortcut-session-active ? 1.0 : 0.0;
                     clip: true;
-                    animate x { duration: root.session-transition-duration; easing: ease-out-back; }
-                    animate opacity { duration: root.session-fade-duration; }
+                    animate x { duration: root.session-transition-duration; easing: ease-out; enabled: root.animations-enabled; }
+                    animate opacity { duration: root.session-fade-duration; enabled: root.animations-enabled; }
                     back-hit := TouchArea {
                         width: parent.width; height: parent.height;
                         clicked => { root.search-back-requested(); }
                     }
                     Rectangle {
                         x: 0px; y: max(0px, (parent.height - 28px) / 2); width: root.session-back-width; height: min(parent.height, 28px);
-                        border-radius: 7px;
+                        border-radius: DesignTokens.radius-md;
                         // Do not let the hover pill linger while this button
                         // slides out after returning from a search engine.
                         background: root.shortcut-session-active && back-hit.has-hover ? root.surface-hover : transparent;
@@ -392,28 +399,29 @@ export component Launcher inherits Window {
                 SearchGlyph {
                     x: root.shortcut-session-active ? root.session-icon-x : root.default-icon-x; y: (root.search-row-layout-height - root.result-icon-size) / 2;
                     width: root.result-icon-size; height: root.result-icon-size;
-                    animate x { duration: root.session-transition-duration; easing: ease-out-back; }
+                    animate x { duration: root.session-transition-duration; easing: ease-out; enabled: root.animations-enabled; }
                     source-image: root.search-icon; source-kind: root.search-icon-kind;
                     previous-image: root.search-icon-previous;
                     previous-kind: root.search-icon-previous-kind;
                     transition-progress: root.search-icon-transition-progress;
                     transition-animation-enabled: root.search-icon-animation-enabled;
+                    animations-enabled: root.animations-enabled;
                 }
                 Rectangle {
                     x: root.shortcut-session-active ? root.session-input-x : root.default-input-x; y: 0px; width: parent.width - (root.shortcut-session-active ? 70px : 58px); height: root.search-row-layout-height;
                     background: transparent;
                     clip: true;
-                    animate x { duration: root.session-transition-duration; easing: ease-out-back; }
-                    animate width { duration: root.session-transition-duration; easing: ease-out-back; }
+                    animate x { duration: root.session-transition-duration; easing: ease-out; enabled: root.animations-enabled; }
+                    animate width { duration: root.session-transition-duration; easing: ease-out; enabled: root.animations-enabled; }
                     Text {
                         x: root.search-input-scroll-x; y: 0px; width: parent.width - root.search-input-scroll-x; height: parent.height;
                         text: root.shortcut-session-active ? root.shortcut-session-placeholder : @tr("Search apps, files, settings, and more");
-                        color: root.text-tertiary; font-size: 1.1429rem; vertical-alignment: center;
+                        color: root.text-tertiary; font-size: DesignTokens.font-input; vertical-alignment: center;
                         visible: search-field.text == "";
                     }
                     search-field := TextInput {
                         x: root.search-input-scroll-x; y: 0px; width: max(parent.width, self.preferred-width); height: parent.height;
-                        color: root.text-primary; font-size: 1.1429rem; vertical-alignment: center; horizontal-alignment: left; single-line: true;
+                        color: root.text-primary; font-size: DesignTokens.font-input; vertical-alignment: center; horizontal-alignment: left; single-line: true;
                         selection-background-color: root.accent-color;
                         selection-foreground-color: #ffffff;
                         text <=> root.query-text;
@@ -560,26 +568,26 @@ export component Launcher inherits Window {
                             y: (parent.height - root.category-button-height) / 2;
                             width: root.category-button-width;
                             height: root.category-button-height;
-                            border-radius: 7px;
-                            background: root.dark-mode ? #424242 : #e2e5eb;
-                            animate x { duration: 180ms; easing: ease-in-out; }
+                            border-radius: DesignTokens.radius-md;
+                            background: root.surface-hover;
+                            animate x { duration: DesignTokens.motion-base; easing: ease-out; enabled: root.animations-enabled; }
                         }
                         for filter[index] in category-filter-focus.filters : Rectangle {
                             x: index * root.category-filter-step;
                             y: 0px;
                             width: root.category-button-width;
                             height: parent.height;
-                            border-radius: 7px;
+                            border-radius: DesignTokens.radius-md;
                             background: transparent;
                             Rectangle {
                                 x: 0px;
                                 y: (parent.height - root.category-button-height) / 2;
                                 width: parent.width;
                                 height: root.category-button-height;
-                                border-radius: 7px;
+                                border-radius: DesignTokens.radius-md;
                                 border-color: root.selected-category-filter == filter.key
                                     ? (root.category-filter-keyboard-active ? (root.dark-mode ? #8ab4f8 : #005a9e) : transparent)
-                                    : (root.dark-mode ? #393939 : #e2e5eb);
+                                    : root.border;
                                 border-width: root.selected-category-filter == filter.key
                                     ? (root.category-filter-keyboard-active ? 2px : 0px)
                                     : 1px;
@@ -604,10 +612,10 @@ export component Launcher inherits Window {
                             }
                             Text {
                                 x: 6px; width: parent.width - 12px; height: parent.height;
-                                text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "settings" ? @tr("Settings") : filter.key == "document" ? @tr("Document") : filter.key == "bookmark" ? @tr("Bookmark") : filter.key == "window" ? @tr("Window") : filter.key == "search_tools" ? @tr("Search tools") : @tr("Other")) + "  " + filter.count;
+                                text: (filter.key == "all" ? @tr("All") : filter.key == "application" ? @tr("Application") : filter.key == "game" ? @tr("Game") : filter.key == "website" ? @tr("Website") : filter.key == "calculator" ? @tr("Calculator") : filter.key == "control_panel" ? @tr("Control Panel") : filter.key == "settings" ? @tr("Settings") : filter.key == "document" ? @tr("Document") : filter.key == "bookmark" ? @tr("Bookmark") : filter.key == "window" ? @tr("Window") : filter.key == "command" ? @tr("Command") : @tr("Other")) + "  " + filter.count;
                                 color: root.selected-category-filter == filter.key ? root.text-primary : root.text-secondary;
-                                font-size: 0.7857rem;
-                                font-weight: root.selected-category-filter == filter.key ? 600 : 400;
+                                font-size: DesignTokens.font-small;
+                                font-weight: root.selected-category-filter == filter.key ? DesignTokens.weight-semibold : DesignTokens.weight-regular;
                                 horizontal-alignment: center; vertical-alignment: center; overflow: elide;
                             }
                         }
@@ -655,15 +663,15 @@ export component Launcher inherits Window {
                             height: parent.height - 1px;
                             text: root.result-section-title(row-data.section_kind) + (row-data.section_kind == "best_match" ? "" : "  " + row-data.section_count);
                             color: root.text-secondary;
-                            font-size: 0.7857rem;
-                            font-weight: 600;
+                            font-size: DesignTokens.font-small;
+                            font-weight: DesignTokens.weight-semibold;
                             vertical-alignment: center;
                             overflow: elide;
                         }
                         if row-data.section_more_key != "" : Text {
                             x: parent.width - 94px; y: 1px; width: 86px; height: parent.height - 1px;
                             text: @tr("See more"); color: root.accent;
-                            font-size: 0.7857rem; horizontal-alignment: right; vertical-alignment: center;
+                            font-size: DesignTokens.font-small; horizontal-alignment: right; vertical-alignment: center;
                             overflow: elide;
                         }
                         if row-data.section_more_key != "" : TouchArea {
@@ -688,11 +696,10 @@ export component Launcher inherits Window {
                         private property <length> row-text-gap: 0px;
                         private property <length> row-text-height: row-title-height + row-text-gap + row-description-height;
                         private property <length> row-text-top: max(0px, (root.result-row-height - row-text-height) / 2);
-                        private property <length> category-badge-width: root.ui-font-size * (row-data.category_kind == "bookmark" ? 3.25 : 2.75);
                         background: index == root.selected-index ? root.surface-selected : item-area.has-hover ? root.surface-hover : transparent;
                         border-color: transparent;
                         border-width: 0px;
-                        border-radius: 8px;
+                        border-radius: DesignTokens.radius-md;
                         item-area := TouchArea {
                             clicked => {
                                 if (root.context-click-consumed) {
@@ -718,19 +725,15 @@ export component Launcher inherits Window {
                         if row-data.icon_kind == "" : Image { x: 18px; y: (root.result-row-height - row-icon-size) / 2; width: row-icon-size; height: row-icon-size; source: row-data.icon; image-fit: contain; }
                     Rectangle {
                         x: 60px; y: 0px; width: row-data.shortcut_prefix == "" || root.detail-visible ? parent.width - 76px - (row-data.favorite ? 22px : 0px) : parent.width - 60px - parent.shortcut-card-width - (row-data.favorite ? 40px : 0px); height: parent.height; background: transparent;
-                        Text { x: 0px; y: row-text-top; width: parent.width - (row-data.category_kind == "" ? 0px : category-badge-width + 4px); height: row-title-height; text: row-data.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row-data.title; color: root.text-primary; font-size: row-data.presentation == "compact" ? 0.9286rem : 1.0000rem; font-weight: row-data.is_best_match ? 700 : 500; vertical-alignment: center; overflow: elide; }
-                        if row-data.category_kind != "" : Rectangle {
-                            x: parent.width - category-badge-width; y: row-text-top; width: category-badge-width; height: row-title-height;
-                            Text { width: parent.width; height: parent.height; text: row-data.category_kind == "window" ? @tr("Window") : @tr("Bookmark"); color: root.text-secondary; font-size: 0.6429rem; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
-                        }
-                        Text { x: 0px; y: row-text-top + row-title-height + row-text-gap; width: parent.width - 4px; height: row-description-height; text: row-data.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row-data.location_kind == "control-panel" ? @tr("Control Panel") : row-data.location_kind == "application" && row-data.location == "" ? @tr("Application") : row-data.location; color: root.text-secondary; font-size: row-data.presentation == "compact" ? 0.7143rem : 0.7857rem; vertical-alignment: center; overflow: elide; }
+                        Text { x: 0px; y: row-text-top; width: parent.width; height: row-title-height; text: row-data.id == root.last-action-id && root.last-action-result != "" ? root.last-action-result : row-data.title; color: root.text-primary; font-size: row-data.presentation == "compact" ? DesignTokens.font-body : DesignTokens.font-base; font-weight: row-data.is_best_match ? DesignTokens.weight-bold : DesignTokens.weight-medium; vertical-alignment: center; overflow: elide; }
+                        Text { x: 0px; y: row-text-top + row-title-height + row-text-gap; width: parent.width - 4px; height: row-description-height; text: row-data.id == root.last-action-id && root.last-action-subtitle != "" ? root.last-action-subtitle : row-data.location_kind == "control-panel" ? @tr("Control Panel") : row-data.location_kind == "application" && row-data.location == "" ? @tr("Application") : row-data.location; color: root.text-secondary; font-size: row-data.presentation == "compact" ? DesignTokens.font-caption : DesignTokens.font-small; vertical-alignment: center; overflow: elide; }
                     }
                     Rectangle {
                         x: parent.width - shortcut-card-width - 10px; y: (root.result-row-height - 24px) / 2; width: shortcut-card-width; height: 24px;
-                        background: root.dark-mode ? #303030 : #eef0f4;
-                        border-color: root.border; border-width: 1px; border-radius: 6px;
+                        background: root.detail-raised-surface;
+                        border-color: root.border; border-width: 1px; border-radius: DesignTokens.radius-sm;
                         visible: row-data.shortcut_prefix != "" && !root.detail-visible;
-                        Text { width: parent.width - 8px; height: parent.height; x: 4px; text: row-data.shortcut_prefix; color: root.text-secondary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+                        Text { width: parent.width - 8px; height: parent.height; x: 4px; text: row-data.shortcut_prefix; color: root.text-secondary; font-size: DesignTokens.font-small; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
                     }
                     if row-data.favorite : BuiltinIcon {
                         x: row-data.shortcut_prefix == "" || root.detail-visible ? parent.width - 26px : parent.width - shortcut-card-width - 32px;
@@ -750,7 +753,9 @@ export component Launcher inherits Window {
                     width: self.panel-width * max(0.0, root.detail-progress);
                     height: self.panel-height;
                     background: root.detail-surface;
-                    border-radius: 10px;
+                    border-color: root.border;
+                    border-width: 1px;
+                    border-radius: DesignTokens.radius-md;
                     clip: true;
 
                 Flickable {
@@ -766,8 +771,8 @@ export component Launcher inherits Window {
                             height: max(parent.height, root.detail-panel-content-height);
                             background: transparent;
 
-                            Text { x: root.detail-content-inset; y: root.detail-header-top; width: parent.width - 2 * root.detail-content-inset; height: 24px; text: root.detail-title; color: root.text-primary; font-size: 1.2143rem; font-weight: 600; overflow: elide; }
-                    Text { x: root.detail-content-inset; y: root.detail-subtitle-top; width: parent.width - 2 * root.detail-content-inset; height: 18px; text: root.detail-subtitle; color: root.text-secondary; font-size: 0.7857rem; overflow: elide; }
+                            Text { x: root.detail-content-inset; y: root.detail-header-top; width: parent.width - 2 * root.detail-content-inset; height: 24px; text: root.detail-title; color: root.text-primary; font-size: DesignTokens.font-heading; font-weight: DesignTokens.weight-semibold; overflow: elide; }
+                    Text { x: root.detail-content-inset; y: root.detail-subtitle-top; width: parent.width - 2 * root.detail-content-inset; height: 18px; text: root.detail-subtitle; color: root.text-secondary; font-size: DesignTokens.font-small; overflow: elide; }
                     VerticalBox {
                         x: root.detail-content-inset; y: root.detail-content-top; width: parent.width - 2 * root.detail-content-inset; height: parent.height - (root.detail-actions.length > 0 ? root.detail-content-footer-with-actions-height : root.detail-content-footer-height); spacing: root.detail-block-spacing;
                         for block in root.detail-blocks : Rectangle {
@@ -775,46 +780,46 @@ export component Launcher inherits Window {
                             background: transparent;
                             if (block.kind == "text" || block.kind == "text-copyable") : Rectangle {
                                 width: parent.width; height: parent.height;
-                                if (block.kind == "text-copyable") : TextInput { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 0.9286rem; vertical-alignment: top; single-line: false; wrap: word-wrap; read-only: true; selection-background-color: root.accent-color; selection-foreground-color: #ffffff; }
-                                if (block.kind == "text") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 0.9286rem; vertical-alignment: top; wrap: word-wrap; overflow: clip; }
+                                if (block.kind == "text-copyable") : TextInput { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: DesignTokens.font-body; vertical-alignment: top; single-line: false; wrap: word-wrap; read-only: true; selection-background-color: root.accent-color; selection-foreground-color: #ffffff; }
+                                if (block.kind == "text") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: DesignTokens.font-body; vertical-alignment: top; wrap: word-wrap; overflow: clip; }
                             }
                             if (block.kind == "markdown" || block.kind == "markdown-copyable") : Rectangle {
                                 width: parent.width; height: parent.height;
-                                if (block.kind == "markdown-copyable") : TextInput { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 0.9286rem; vertical-alignment: top; single-line: false; wrap: word-wrap; read-only: true; selection-background-color: root.accent-color; selection-foreground-color: #ffffff; }
-                                if (block.kind == "markdown") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: 0.9286rem; vertical-alignment: top; wrap: word-wrap; overflow: clip; }
+                                if (block.kind == "markdown-copyable") : TextInput { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: DesignTokens.font-body; vertical-alignment: top; single-line: false; wrap: word-wrap; read-only: true; selection-background-color: root.accent-color; selection-foreground-color: #ffffff; }
+                                if (block.kind == "markdown") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "primary" ? root.text-primary : block.color == "accent" ? root.accent : root.text-secondary; font-size: DesignTokens.font-body; vertical-alignment: top; wrap: word-wrap; overflow: clip; }
                             }
                             if (block.kind == "metric") : Rectangle {
-                                width: parent.width; height: parent.height; background: root.dark-mode ? #2b2b2b : #f1f3f6; border-radius: 8px;
-                                Text { x: 10px; y: 8px; width: parent.width - 20px; height: 14px; text: block.label; color: root.text-tertiary; font-size: 0.7143rem; }
-                                Text { x: 10px; y: 26px; width: parent.width - 20px; height: 18px; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 0.9286rem; font-weight: 600; overflow: elide; }
+                                width: parent.width; height: parent.height; background: root.detail-raised-surface; border-radius: DesignTokens.radius-md;
+                                Text { x: 10px; y: 8px; width: parent.width - 20px; height: 14px; text: block.label; color: root.text-tertiary; font-size: DesignTokens.font-caption; }
+                                Text { x: 10px; y: 26px; width: parent.width - 20px; height: 18px; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: DesignTokens.font-body; font-weight: DesignTokens.weight-semibold; overflow: elide; }
                             }
                             if (block.kind == "icon") : Image { width: parent.width; height: parent.height; source: block.icon; image-fit: contain; visible: block.icon.width > 0; }
                             if (block.kind == "icon") : Text { width: parent.width; height: parent.height; text: block.value; color: block.color == "accent" ? root.accent : root.text-primary; font-size: 2.2857rem; horizontal-alignment: center; vertical-alignment: center; visible: block.icon.width == 0; }
                             if (block.kind == "image") : Rectangle {
-                                width: parent.width; height: parent.height; background: root.detail-raised-surface; border-radius: 8px;
+                                width: parent.width; height: parent.height; background: root.detail-raised-surface; border-radius: DesignTokens.radius-md;
                                 Image { x: 8px; y: 8px; width: parent.width - 16px; height: parent.height - 16px; source: block.icon; image-fit: contain; visible: block.icon.width > 0; }
                                 Text { width: parent.width; height: parent.height; text: block.secondary == "" ? @tr("Preview unavailable") : block.secondary; color: root.text-secondary; horizontal-alignment: center; vertical-alignment: center; visible: block.icon.width == 0; overflow: elide; }
                             }
                             if (block.kind == "code") : Rectangle {
-                                width: parent.width; height: parent.height; background: root.detail-code-surface; border-radius: 8px;
-                                Text { x: 10px; y: 6px; width: parent.width - 20px; height: 14px; text: block.label; color: root.text-tertiary; font-size: 0.7143rem; visible: block.label != ""; }
-                                Text { x: 10px; y: block.label == "" ? 8px : 24px; width: parent.width - 20px; height: parent.height - (block.label == "" ? 16px : 30px); text: block.value; color: root.text-primary; font-size: 0.7857rem; overflow: clip; }
+                                width: parent.width; height: parent.height; background: root.detail-code-surface; border-radius: DesignTokens.radius-md;
+                                Text { x: 10px; y: 6px; width: parent.width - 20px; height: 14px; text: block.label; color: root.text-tertiary; font-size: DesignTokens.font-caption; visible: block.label != ""; }
+                                Text { x: 10px; y: block.label == "" ? 8px : 24px; width: parent.width - 20px; height: parent.height - (block.label == "" ? 16px : 30px); text: block.value; color: root.text-primary; font-size: DesignTokens.font-small; overflow: clip; }
                             }
                             if (block.kind == "table") : Rectangle {
-                                width: parent.width; height: parent.height; background: root.detail-raised-surface; border-radius: 8px;
-                                Text { x: 10px; y: 6px; width: parent.width - 20px; height: 16px; text: block.label; color: root.text-secondary; font-size: 0.7143rem; overflow: elide; }
-                                Text { x: 10px; y: 24px; width: parent.width - 20px; height: parent.height - 30px; text: block.value; color: root.text-primary; font-size: 0.7857rem; overflow: clip; }
+                                width: parent.width; height: parent.height; background: root.detail-raised-surface; border-radius: DesignTokens.radius-md;
+                                Text { x: 10px; y: 6px; width: parent.width - 20px; height: 16px; text: block.label; color: root.text-secondary; font-size: DesignTokens.font-caption; overflow: elide; }
+                                Text { x: 10px; y: 24px; width: parent.width - 20px; height: parent.height - 30px; text: block.value; color: root.text-primary; font-size: DesignTokens.font-small; overflow: clip; }
                             }
                             if (block.kind == "link") : Rectangle {
                                 width: parent.width; height: parent.height; background: transparent;
-                                Text { width: parent.width; height: parent.height; text: block.label + "  " + block.value; color: root.accent; font-size: 0.8571rem; vertical-alignment: center; overflow: elide; }
+                                Text { width: parent.width; height: parent.height; text: block.label + "  " + block.value; color: root.accent; font-size: DesignTokens.font-label; vertical-alignment: center; overflow: elide; }
                                 TouchArea { clicked => { root.detail-link-requested(block.value); } }
                             }
                             if (block.kind == "loading") : Text {
-                                width: parent.width; height: parent.height; text: "⏳  " + block.value; color: root.text-secondary; font-size: 0.8571rem; vertical-alignment: center; overflow: elide;
+                                width: parent.width; height: parent.height; text: "⏳  " + block.value; color: root.text-secondary; font-size: DesignTokens.font-label; vertical-alignment: center; overflow: elide;
                             }
                             if (block.kind == "error") : Text {
-                                width: parent.width; height: parent.height; text: "⚠  " + block.value; color: #d96c6c; font-size: 0.8571rem; vertical-alignment: center; overflow: elide;
+                                width: parent.width; height: parent.height; text: "⚠  " + block.value; color: #d96c6c; font-size: DesignTokens.font-label; vertical-alignment: center; overflow: elide;
                             }
                             if (block.kind == "separator") : Rectangle { y: 0px; width: parent.width; height: 1px; background: transparent; }
                             if (block.kind == "weather") : Text {
@@ -828,13 +833,13 @@ export component Launcher inherits Window {
                     for action[index] in root.detail-actions : Rectangle {
                         x: root.detail-content-inset + index * root.detail-action-step; y: parent.height - root.detail-action-bottom; width: root.detail-action-width; height: root.detail-action-height;
                         background: action-area.has-hover ? root.surface-hover : root.detail-raised-surface;
-                        border-color: root.border; border-width: 1px; border-radius: 7px;
+                        border-color: root.border; border-width: 1px; border-radius: DesignTokens.radius-md;
                         action-area := TouchArea { clicked => { root.detail-action-requested(index); } }
                         BuiltinIcon { x: 8px; y: 6px; width: 16px; height: 16px; kind: action.icon_kind; }
                         if action.icon_kind == "" : Image { x: 8px; y: 6px; width: 16px; height: 16px; source: action.icon; image-fit: contain; }
-                        Text { x: 28px; y: 0px; width: parent.width - 36px; height: parent.height; text: action.title; color: root.text-secondary; font-size: 0.7143rem; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+                        Text { x: 28px; y: 0px; width: parent.width - 36px; height: parent.height; text: action.title; color: root.text-secondary; font-size: DesignTokens.font-caption; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
                     }
-                    Text { x: root.detail-content-inset; y: parent.height - root.detail-source-bottom; width: parent.width - 2 * root.detail-content-inset; height: 18px; text: root.detail-source; color: root.text-tertiary; font-size: 0.7143rem; overflow: elide; }
+                    Text { x: root.detail-content-inset; y: parent.height - root.detail-source-bottom; width: parent.width - 2 * root.detail-content-inset; height: 18px; text: root.detail-source; color: root.text-tertiary; font-size: DesignTokens.font-caption; overflow: elide; }
                         }
                     }
                 }
@@ -852,7 +857,7 @@ export component Launcher inherits Window {
                         x: 0px; y: max(0px, (parent.height - 56px) / 2 + 30px);
                         width: parent.width; height: 22px;
                         text: @tr("Searching...");
-                        color: root.text-secondary; font-size: 0.9286rem;
+                        color: root.text-secondary; font-size: DesignTokens.font-body;
                         horizontal-alignment: center; vertical-alignment: center; overflow: elide;
                     }
                 }
@@ -864,15 +869,15 @@ export component Launcher inherits Window {
                     if root.empty-state-icon-kind != "" : BuiltinIcon { x: (parent.width - 44px) / 2; y: 0px; width: 44px; height: 44px; kind: root.empty-state-icon-kind; }
                     if root.empty-state-icon-kind == "" && root.empty-state-icon.width > 0 : Image { x: (parent.width - 44px) / 2; y: 0px; width: 44px; height: 44px; source: root.empty-state-icon; image-fit: contain; }
                     if root.empty-state-icon-kind == "" && root.empty-state-icon.width == 0 : BuiltinIcon { x: (parent.width - 36px) / 2; y: 4px; width: 36px; height: 36px; kind: "magnify"; }
-                    Text { x: 24px; y: 52px; width: parent.width - 48px; height: 40px; text: root.empty-state-title != "" ? root.empty-state-title : @tr("No results"); color: root.text-secondary; font-size: 1.0714rem; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; overflow: clip; }
-                    if root.empty-state-description != "" : Text { x: 24px; y: 98px; width: parent.width - 48px; height: 58px; text: root.empty-state-description; color: root.text-tertiary; font-size: 0.8571rem; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; overflow: clip; }
+                    Text { x: 24px; y: 52px; width: parent.width - 48px; height: 40px; text: root.empty-state-title != "" ? root.empty-state-title : @tr("No results"); color: root.text-secondary; font-size: DesignTokens.font-title; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; overflow: clip; }
+                    if root.empty-state-description != "" : Text { x: 24px; y: 98px; width: parent.width - 48px; height: 58px; text: root.empty-state-description; color: root.text-tertiary; font-size: DesignTokens.font-label; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; overflow: clip; }
                 }
             }
 
             if (!root.compact-results-hidden) : Rectangle {
                 height: root.operation-hint-height; background: transparent;
                 Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: root.border; }
-                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.category-filter-keyboard-active ? @tr("← → Filter     ↑ ↓ Results     Home/End First/Last     Enter/Space/Esc Search") : root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Hide")); color: root.text-tertiary; font-size: 0.7857rem; horizontal-alignment: center; vertical-alignment: center; }
+                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.category-filter-keyboard-active ? @tr("← → Filter     ↑ ↓ Results     Home/End First/Last     Enter/Space/Esc Search") : root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Hide")); color: root.text-tertiary; font-size: DesignTokens.font-small; horizontal-alignment: center; vertical-alignment: center; }
             }
         }
         if (!root.compact-results-hidden) : Rectangle {
@@ -880,14 +885,14 @@ export component Launcher inherits Window {
             y: root.empty-state-padding + root.search-row-layout-height + (root.category-filters.length > 0 ? root.category-layout-spacing / 2 : root.content-spacing / 2) - 0.5px;
             width: parent.width - 2 * root.content-padding;
             height: 1px;
-            background: root.dark-mode ? #343434 : #e5e7eb;
+            background: root.border;
         }
     }
     if (root.launch-error != "") : Rectangle {
         x: 18px; y: parent.height - 38px; width: parent.width - 36px; height: 26px;
         background: root.dark-mode ? #3b2525 : #fff0f0;
-        border-color: #b85c5c; border-width: 1px; border-radius: 6px;
-        Text { x: 8px; y: 0px; width: parent.width - 16px; height: parent.height; text: @tr("Could not open application") + ": " + root.launch-error; color: #d96c6c; font-size: 0.7857rem; vertical-alignment: center; overflow: elide; }
+        border-color: #b85c5c; border-width: 1px; border-radius: DesignTokens.radius-sm;
+        Text { x: 8px; y: 0px; width: parent.width - 16px; height: parent.height; text: @tr("Could not open application") + ": " + root.launch-error; color: #d96c6c; font-size: DesignTokens.font-small; vertical-alignment: center; overflow: elide; }
     }
 }
 
@@ -906,6 +911,7 @@ export component ContextMenu inherits Window {
 
     in property <bool> native-window-frame: false;
     out property <color> native-background-color: root.canvas;
+    in property <bool> animations-enabled: true;
     in property <bool> dark-mode: true;
     in property <color> accent-color: #0067c0;
     in property <[ContextActionRow]> actions;
@@ -914,12 +920,12 @@ export component ContextMenu inherits Window {
     callback dismissed;
     private property <int> selected-action-index: 0;
 
-    private property <color> canvas: root.dark-mode ? #202020 : #f8f9fb;
-    private property <color> hover: root.dark-mode ? #383838 : #eef1f5;
+    private property <color> canvas: root.dark-mode ? DesignTokens.dark-surface : DesignTokens.light-surface;
+    private property <color> hover: root.dark-mode ? DesignTokens.dark-raised : DesignTokens.light-raised;
     private property <length> menu-item-height: 32px;
-    private property <color> border: root.dark-mode ? #484848 : #d9dde5;
-    private property <color> text-primary: root.dark-mode ? #f5f5f5 : #1b1b1f;
-    private property <color> text-secondary: root.dark-mode ? #b6b6b6 : #5d5f66;
+    private property <color> border: root.dark-mode ? DesignTokens.dark-border : DesignTokens.light-border;
+    private property <color> text-primary: root.dark-mode ? DesignTokens.dark-primary : DesignTokens.light-primary;
+    private property <color> text-secondary: root.dark-mode ? DesignTokens.dark-secondary : DesignTokens.light-secondary;
 
     changed actions => {
         root.selected-action-index = root.keyboard-invoked
@@ -966,13 +972,13 @@ export component ContextMenu inherits Window {
             background: root.canvas;
             border-color: root.border;
             border-width: 1px;
-            border-radius: root.native-window-frame ? 0px : 8px;
+            border-radius: root.native-window-frame ? 0px : DesignTokens.radius-md;
 
             for action[index] in root.actions : Rectangle {
             x: 1px; y: 4px + index * root.menu-item-height;
             width: parent.width - 2px; height: root.menu-item-height;
             background: action.kind == "section" ? root.canvas : index == root.selected-action-index ? root.hover : action-area.has-hover ? root.hover : root.canvas;
-            border-radius: 6px;
+            border-radius: DesignTokens.radius-sm;
             action-area := TouchArea {
                 enabled: action.kind != "section";
                 pointer-event(event) => {
@@ -991,11 +997,11 @@ export component ContextMenu inherits Window {
                 height: action.subtitle == "" ? parent.height : 16px;
                 text: action.kind == "section" ? @tr("Other launch entries") : action.id == "add-favorite" ? @tr("Add to favorites") : action.id == "remove-favorite" ? @tr("Remove from favorites") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.id == "copy-title" ? @tr("Copy title") : action.id == "copy-path" ? @tr("Copy path") : action.id == "copy-url" ? @tr("Copy URL") : action.title;
                 color: action.kind == "section" ? root.text-secondary : root.text-primary;
-                font-size: action.kind == "section" ? 0.7857rem : 0.9286rem;
+                font-size: action.kind == "section" ? DesignTokens.font-small : DesignTokens.font-body;
                 vertical-alignment: center; overflow: elide;
             }
-            Text { x: 36px; y: 17px; width: action.shortcut == "" ? parent.width - 50px : parent.width - 162px; height: 12px; text: action.subtitle; color: root.text-secondary; font-size: 0.7143rem; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
-            Text { x: parent.width - 120px; y: 0px; width: 108px; height: parent.height; text: action.shortcut; color: root.text-secondary; font-size: 0.7143rem; horizontal-alignment: right; vertical-alignment: center; overflow: elide; visible: action.shortcut != ""; }
+            Text { x: 36px; y: 17px; width: action.shortcut == "" ? parent.width - 50px : parent.width - 162px; height: 12px; text: action.subtitle; color: root.text-secondary; font-size: DesignTokens.font-caption; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
+            Text { x: parent.width - 120px; y: 0px; width: 108px; height: parent.height; text: action.shortcut; color: root.text-secondary; font-size: DesignTokens.font-caption; horizontal-alignment: right; vertical-alignment: center; overflow: elide; visible: action.shortcut != ""; }
             }
         }
     }

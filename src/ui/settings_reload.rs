@@ -18,6 +18,7 @@ pub(super) struct SettingsReloadContext {
     pub(super) tray_updates: Sender<platform::TrayMenuLabels>,
     pub(super) follow_system_theme: Arc<AtomicBool>,
     pub(super) hide_on_focus_loss: Arc<AtomicBool>,
+    pub(super) animations_enabled: Arc<AtomicBool>,
     pub(super) custom_directories: Arc<Mutex<Vec<PathBuf>>>,
     pub(super) show_advanced_details: Arc<AtomicBool>,
     pub(super) show_advanced_launch_entries: Arc<AtomicBool>,
@@ -41,6 +42,8 @@ impl SettingsReloadContext {
             .store(updated.theme == "system", Ordering::Release);
         self.hide_on_focus_loss
             .store(updated.hide_on_focus_loss, Ordering::Release);
+        self.animations_enabled
+            .store(updated.animations_enabled, Ordering::Release);
         if let Ok(mut directories) = self.custom_directories.lock() {
             *directories = updated.providers.indexed_directories.clone();
         }
@@ -87,13 +90,15 @@ impl SettingsReloadContext {
             let context = context_window.upgrade();
             super::apply_theme_to_windows(
                 dark_mode,
+                &updated,
                 platform.as_ref(),
                 window.as_ref(),
                 settings.as_ref(),
                 context.as_ref(),
             );
+            let ui_font_family = settings::resolved_ui_font_family(&updated.font_family);
             if let Some(window) = window {
-                window.set_ui_font_family(updated.font_family.clone().into());
+                window.set_ui_font_family(ui_font_family.clone().into());
                 window.set_ui_font_size(updated.font_size as f32);
                 window.set_compact_search(updated.compact_search);
                 if updated.compact_search
@@ -113,11 +118,11 @@ impl SettingsReloadContext {
                 window.set_list_item_height(updated.list_item_height as f32);
             }
             if let Some(context) = context {
-                context.set_ui_font_family(updated.font_family.clone().into());
+                context.set_ui_font_family(ui_font_family.clone().into());
                 context.set_ui_font_size(updated.font_size as f32);
             }
             if let Some(settings) = settings {
-                settings.set_ui_font_family(updated.font_family.clone().into());
+                settings.set_ui_font_family(ui_font_family.into());
                 settings.set_ui_font_size(updated.font_size as f32);
                 settings::refresh(&settings, &updated, &plugin_settings, &updated.language);
             }

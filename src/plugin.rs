@@ -1831,6 +1831,11 @@ impl PluginManager {
             .iter()
             .find(|command| command.id == command_id)?;
         let action_words = command_action_words(plugin, command);
+        let locale = self
+            .locale
+            .lock()
+            .map(|locale| locale.clone())
+            .unwrap_or_else(|_| "system".into());
         let icon = plugin
             .embedded
             .as_ref()
@@ -1844,7 +1849,7 @@ impl PluginManager {
                     "method": "search_engine_icon",
                     "request_id": request_id,
                     "command_id": command_id,
-                    "locale": self.locale.lock().ok().map(|locale| locale.clone()).unwrap_or_else(|| "system".into()),
+                    "locale": locale,
                     "fallback_locale": plugin.manifest.default_locale,
                     "preferences": plugin_preferences(plugin),
                 });
@@ -1866,7 +1871,7 @@ impl PluginManager {
         Some(SearchResult {
             id: session.id.clone(),
             identity: session.id.clone(),
-            title: command.title.clone(),
+            title: crate::utils::i18n::tr_owned_in_context(&locale, "Launcher", &command.title),
             category: ResultCategory::Other,
             aliases: action_words.clone(),
             location: plugin.manifest.name.clone(),
@@ -2996,6 +3001,14 @@ mod tests {
             manager.shortcut_hint("plugin:google-translate:entry"),
             Some("gt ".into())
         );
+    }
+
+    #[test]
+    fn plugin_command_titles_follow_the_current_locale() {
+        let manager = PluginManager::discover_with_config("zh-CN", &Default::default());
+        let session = manager.search_engine("e ").expect("file search session");
+        assert_eq!(session.title, "文件搜索");
+        assert_eq!(session.placeholder, "文件搜索");
     }
 
     #[test]

@@ -156,6 +156,60 @@ impl SearchCore {
         self.providers.search_engine_result(session)
     }
 
+    /// Index of the first candidate with strong lexical evidence for `query`.
+    ///
+    /// Best match is deliberately stricter than ordinary matching: exact,
+    /// prefix and word-start evidence qualify, while a lone character buried
+    /// inside a word or a scattered fuzzy match does not. Fallback rows and
+    /// command/session entries never qualify. Weak matches are not removed
+    /// from the result list; this only decides whether any row may headline it.
+    pub fn best_match_index(&self, query: &str, items: &[SearchResult]) -> Option<usize> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return None;
+        }
+        let fuzzy_search = self.fuzzy_search.load(Ordering::Acquire);
+        let mut matcher = Matcher::new(MatcherConfig::DEFAULT);
+        let mut matcher_buffer = Vec::new();
+        let mut needle_buffer = Vec::new();
+        let mut lowercase_buffer = String::new();
+        let mut fuzzy_indices_buffer = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            if self.providers.is_fallback_result(item)
+                || item.effective_category() == crate::result::ResultCategory::Command
+            {
+                continue;
+            }
+            let mut score = |text: &str| {
+                match_score(
+                    &query,
+                    text,
+                    fuzzy_search,
+                    true,
+                    &mut matcher,
+                    &mut matcher_buffer,
+                    &mut needle_buffer,
+                    &mut lowercase_buffer,
+                    &mut fuzzy_indices_buffer,
+                )
+            };
+            let title_score = score(&item.title);
+            let alias_score = item
+                .aliases
+                .iter()
+                .filter_map(|alias| score(alias))
+                .max_by_key(|score| (score.class, score.quality));
+            if title_score
+                .into_iter()
+                .chain(alias_score)
+                .any(|score| score.strong)
+            {
+                return Some(index);
+            }
+        }
+        None
+    }
+
     pub fn is_favorite(&self, item_id: &str) -> bool {
         self.ranker.is_favorite(item_id)
     }
@@ -301,6 +355,7 @@ impl SearchCore {
         let mut matcher_buffer = Vec::new();
         let mut needle_buffer = Vec::new();
         let mut lowercase_buffer = String::new();
+        let mut fuzzy_indices_buffer = Vec::new();
         let debug = std::env::var_os("WOWIE_SEARCH_DEBUG").is_some_and(|value| value != "0");
         if debug {
             eprintln!(
@@ -430,10 +485,12 @@ impl SearchCore {
                     &query,
                     &item.title,
                     engine_fuzzy_search,
+                    false,
                     &mut matcher,
                     &mut matcher_buffer,
                     &mut needle_buffer,
                     &mut lowercase_buffer,
+                    &mut fuzzy_indices_buffer,
                 );
                 let alias_score = item
                     .aliases
@@ -443,10 +500,12 @@ impl SearchCore {
                             &query,
                             alias,
                             engine_fuzzy_search,
+                            false,
                             &mut matcher,
                             &mut matcher_buffer,
                             &mut needle_buffer,
                             &mut lowercase_buffer,
+                            &mut fuzzy_indices_buffer,
                         )?;
                         Some(score)
                     })
@@ -476,7 +535,11 @@ impl SearchCore {
                 // Generated fallback titles contain the query itself and must
                 // not compete with matches against actual indexed names.
                 (if fallback {
-                    Some(MatchScore { class: 0, quality: 0 })
+                    Some(MatchScore {
+                        class: 0,
+                        quality: 0,
+                        strong: false,
+                    })
                 } else {
                     score
                 })
@@ -554,10 +617,23 @@ impl SearchCore {
     }
 }
 
+/// Match classes are ordered from strongest to weakest evidence. They are
+/// intentionally separate from the fuzzy score: a class describes *why* the
+/// candidate matched, while `quality` only breaks ties inside that class.
+const MATCH_CLASS_EMPTY: u8 = 0;
+const MATCH_CLASS_FUZZY: u8 = 1;
+const MATCH_CLASS_CONTAINS: u8 = 2;
+const MATCH_CLASS_WORD_START: u8 = 3;
+const MATCH_CLASS_PREFIX: u8 = 4;
+const MATCH_CLASS_EXACT: u8 = 5;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MatchScore {
     class: u8,
     quality: i32,
+    /// Whether the evidence is strong enough to headline the result list.
+    /// This never removes a result; it only gates the best-match slot.
+    strong: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -620,6 +696,7 @@ fn category_priority_key(category: crate::result::ResultCategory) -> &'static st
         ResultCategory::Website => "website",
         ResultCategory::Bookmark => "bookmark",
         ResultCategory::Window => "window",
+        ResultCategory::Command => "command",
         ResultCategory::Calculator => "calculator",
         ResultCategory::ControlPanel => "control_panel",
         ResultCategory::Settings => "settings",
@@ -677,40 +754,64 @@ fn match_score(
     query: &str,
     title: &str,
     fuzzy_search: bool,
+    evaluate_evidence: bool,
     matcher: &mut Matcher,
     matcher_buffer: &mut Vec<char>,
     needle_buffer: &mut Vec<char>,
     lowercase_buffer: &mut String,
+    fuzzy_indices_buffer: &mut Vec<u32>,
 ) -> Option<MatchScore> {
     if query.is_empty() {
         return Some(MatchScore {
-            class: 0,
+            class: MATCH_CLASS_EMPTY,
             quality: 0,
+            strong: false,
         });
     }
+    let query_chars = query.chars().count();
     if query.is_ascii() && title.is_ascii() {
-        let title_len = title.chars().count() as i32;
         if ascii_eq_ignore_case(title, query) {
             return Some(MatchScore {
-                class: 4,
+                class: MATCH_CLASS_EXACT,
                 quality: 1000,
+                strong: true,
             });
         }
         if ascii_starts_with_ignore_case(title, query) {
             return Some(MatchScore {
-                class: 3,
-                quality: (1000 - title_len).max(1),
+                class: MATCH_CLASS_PREFIX,
+                quality: title_quality(title),
+                strong: true,
             });
         }
-        if ascii_contains_ignore_case(title, query) {
+        if let Some((_, at_word_start)) = ascii_contains_position(title, query) {
             return Some(MatchScore {
-                class: 2,
-                quality: (1000 - title_len).max(1),
+                class: if at_word_start {
+                    MATCH_CLASS_WORD_START
+                } else {
+                    MATCH_CLASS_CONTAINS
+                },
+                quality: title_quality(title),
+                // A single character buried at a word start is still weak
+                // evidence; leading characters are covered by prefix matches.
+                strong: at_word_start && query_chars >= 2,
             });
         }
         if !fuzzy_search {
             return None;
         }
+        // The matcher is case-insensitive, so the original ASCII title can be
+        // used directly without building a lowercase copy.
+        return fuzzy_match_score(
+            title,
+            query,
+            query_chars,
+            evaluate_evidence,
+            matcher,
+            matcher_buffer,
+            needle_buffer,
+            fuzzy_indices_buffer,
+        );
     }
 
     lowercase_buffer.clear();
@@ -718,33 +819,124 @@ fn match_score(
     let text = lowercase_buffer.as_str();
     if text == query {
         return Some(MatchScore {
-            class: 4,
+            class: MATCH_CLASS_EXACT,
             quality: 1000,
+            strong: true,
         });
     }
     if text.starts_with(query) {
         return Some(MatchScore {
-            class: 3,
-            quality: (1000 - text.chars().count() as i32).max(1),
+            class: MATCH_CLASS_PREFIX,
+            quality: title_quality(text),
+            strong: true,
         });
     }
-    if text.contains(query) {
+    // Scripts without spaces (CJK, kana, Hangul) do not expose word
+    // boundaries to a substring check. A phrase of at least two such
+    // characters is meaningful evidence in the same way a word start is.
+    let wide_phrase = cjk_char_count(query) >= 2;
+    if let Some((_, at_word_start)) = unicode_contains_position(text, query) {
         return Some(MatchScore {
-            class: 2,
-            quality: (1000 - text.chars().count() as i32).max(1),
+            class: if at_word_start || wide_phrase {
+                MATCH_CLASS_WORD_START
+            } else {
+                MATCH_CLASS_CONTAINS
+            },
+            quality: title_quality(text),
+            strong: wide_phrase || (at_word_start && query_chars >= 2),
         });
     }
-    if fuzzy_search {
-        let haystack = Utf32Str::new(text, matcher_buffer);
-        let needle = Utf32Str::new(query, needle_buffer);
-        if let Some(score) = matcher.fuzzy_match(haystack, needle) {
-            return Some(MatchScore {
-                class: 1,
-                quality: score as i32,
-            });
-        }
+    if !fuzzy_search {
+        return None;
     }
-    None
+    fuzzy_match_score(
+        text,
+        query,
+        query_chars,
+        evaluate_evidence,
+        matcher,
+        matcher_buffer,
+        needle_buffer,
+        fuzzy_indices_buffer,
+    )
+}
+
+fn title_quality(text: &str) -> i32 {
+    (1000 - text.chars().count() as i32).max(1)
+}
+
+fn fuzzy_match_score(
+    text: &str,
+    query: &str,
+    query_chars: usize,
+    evaluate_evidence: bool,
+    matcher: &mut Matcher,
+    matcher_buffer: &mut Vec<char>,
+    needle_buffer: &mut Vec<char>,
+    indices_buffer: &mut Vec<u32>,
+) -> Option<MatchScore> {
+    let haystack = Utf32Str::new(text, matcher_buffer);
+    let needle = Utf32Str::new(query, needle_buffer);
+    if !evaluate_evidence {
+        // Ranking only needs the class. Avoid the index-tracking matcher,
+        // which is more expensive, unless best-match evidence is requested.
+        let score = matcher.fuzzy_match(haystack, needle)?;
+        return Some(MatchScore {
+            class: MATCH_CLASS_FUZZY,
+            quality: score as i32,
+            strong: false,
+        });
+    }
+    indices_buffer.clear();
+    let score = matcher.fuzzy_indices(haystack, needle, indices_buffer)?;
+    Some(MatchScore {
+        class: MATCH_CLASS_FUZZY,
+        quality: score as i32,
+        // A scattered subsequence is the weakest possible evidence. Require a
+        // word acronym or an almost-contiguous single-word typo.
+        strong: query_chars >= 3 && fuzzy_match_is_strong(text, indices_buffer),
+    })
+}
+
+/// `indices` are ascending character positions returned by `fuzzy_indices`.
+fn fuzzy_match_is_strong(text: &str, indices: &[u32]) -> bool {
+    if indices.is_empty() {
+        return false;
+    }
+    let first = indices[0] as usize;
+    let last = indices[indices.len() - 1] as usize;
+    let mut acronym = true;
+    let mut previous_character = None;
+    let mut next = 0usize;
+    for (position, character) in text.chars().enumerate() {
+        while next < indices.len() && indices[next] as usize == position {
+            if previous_character.is_some_and(char::is_alphanumeric) {
+                acronym = false;
+            }
+            next += 1;
+        }
+        if next >= indices.len() {
+            break;
+        }
+        previous_character = Some(character);
+    }
+    if next < indices.len() {
+        return false;
+    }
+    if acronym {
+        return true;
+    }
+    // Accept a typo-level match that stays inside one word while skipping at
+    // most one character. Counting skipped characters (not gap runs) prevents
+    // a long span such as "aXXXXXXXXbc" from posing as a typo.
+    let span = last.saturating_sub(first) + 1;
+    let skipped = span.saturating_sub(indices.len());
+    skipped <= 1
+        && text
+            .chars()
+            .skip(first)
+            .take(span)
+            .all(|character| character.is_alphanumeric())
 }
 
 fn ascii_eq_ignore_case(left: &str, right: &str) -> bool {
@@ -756,10 +948,63 @@ fn ascii_starts_with_ignore_case(text: &str, prefix: &str) -> bool {
         && ascii_bytes_eq_ignore_case(&text.as_bytes()[..prefix.len()], prefix.as_bytes())
 }
 
-fn ascii_contains_ignore_case(text: &str, needle: &str) -> bool {
-    text.as_bytes()
-        .windows(needle.len())
-        .any(|window| ascii_bytes_eq_ignore_case(window, needle.as_bytes()))
+/// Locate the first occurrence of `needle`, preferring a word-start
+/// occurrence so `Reset settings` still provides word-start evidence for
+/// "set". Returns the byte offset and whether the chosen occurrence starts a
+/// word.
+fn ascii_contains_position(text: &str, needle: &str) -> Option<(usize, bool)> {
+    let haystack = text.as_bytes();
+    let needle = needle.as_bytes();
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    let mut first = None;
+    for index in 0..=haystack.len() - needle.len() {
+        if ascii_bytes_eq_ignore_case(&haystack[index..index + needle.len()], needle) {
+            if first.is_none() {
+                first = Some(index);
+            }
+            if index == 0 || !haystack[index - 1].is_ascii_alphanumeric() {
+                return Some((index, true));
+            }
+        }
+    }
+    first.map(|index| (index, false))
+}
+
+/// Character-level counterpart of [`ascii_contains_position`].
+fn unicode_contains_position(text: &str, needle: &str) -> Option<(usize, bool)> {
+    let mut first = None;
+    for (index, _) in text.match_indices(needle) {
+        if first.is_none() {
+            first = Some(index);
+        }
+        let at_word_start = index == 0
+            || text[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|previous| !previous.is_alphanumeric());
+        if at_word_start {
+            return Some((index, true));
+        }
+    }
+    first.map(|index| (index, false))
+}
+
+fn cjk_char_count(text: &str) -> usize {
+    text.chars().filter(|character| is_cjk(*character)).count()
+}
+
+fn is_cjk(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3040..=0x30FF     // Hiragana and Katakana
+            | 0x3400..=0x4DBF // CJK Extension A
+            | 0x4E00..=0x9FFF // CJK Unified Ideographs
+            | 0xAC00..=0xD7AF // Hangul syllables
+            | 0xF900..=0xFAFF // CJK Compatibility Ideographs
+            | 0x20000..=0x2FA1F // CJK Extensions B-F and compatibility supplement
+    )
 }
 
 fn ascii_bytes_eq_ignore_case(left: &[u8], right: &[u8]) -> bool {
@@ -1536,6 +1781,46 @@ mod tests {
     }
 
     #[test]
+    fn root_session_entries_share_the_command_category() {
+        let core = SearchCore::with_plugins_and_shortcuts(
+            Vec::new(),
+            PluginManager::discover_with_config("en", &std::collections::BTreeMap::new()),
+            Vec::new(),
+        );
+        core.replace_provider_language("en".into());
+
+        let roots = core.search("");
+        let entries = roots
+            .iter()
+            .filter(|item| item.is_session_entry())
+            .collect::<Vec<_>>();
+        assert!(entries
+            .iter()
+            .any(|item| item.id.starts_with("shortcut:") && item.title == "Execute Command"));
+        assert!(entries.iter().any(|item| item.id == "bookmarks:entry"));
+        assert!(entries.iter().any(|item| item.id == "windows:entry"));
+        for entry in entries {
+            assert_eq!(entry.effective_category(), ResultCategory::Command);
+        }
+        assert!(roots
+            .iter()
+            .filter(|item| !item.is_session_entry())
+            .all(|item| item.effective_category() == item.category));
+
+        // Entering the window session produces real window rows, not more
+        // command entries.
+        let context = core.search_context("< ");
+        let windows = core.search_in_context(&context, "");
+        assert!(windows.iter().all(|item| !item.is_session_entry()));
+        assert!(windows
+            .iter()
+            .all(|item| item.category == ResultCategory::Window));
+        assert!(windows
+            .iter()
+            .all(|item| item.effective_category() == ResultCategory::Window));
+    }
+
+    #[test]
     fn explicit_shortcut_prefix_is_available_before_an_argument() {
         let core = SearchCore::with_plugins_and_shortcuts(
             Vec::new(),
@@ -1581,6 +1866,122 @@ mod tests {
             ..first.clone()
         };
         assert_eq!(SearchCore::new(vec![first, second]).search("calc").len(), 2);
+    }
+
+    #[test]
+    fn weak_single_character_hits_stay_ordinary_rows() {
+        let item = result("calculator", "Calculator", ResultCategory::Application);
+        let core = SearchCore::new(vec![item.clone()]);
+        // The character only appears inside the word, never at its start.
+        assert_eq!(core.search("a").len(), 1);
+        assert_eq!(
+            core.best_match_index("a", std::slice::from_ref(&item)),
+            None
+        );
+    }
+
+    #[test]
+    fn exact_prefix_and_word_start_evidence_keeps_best_match() {
+        let core = SearchCore::new(Vec::new());
+        let exact = result("exact", "Calculator", ResultCategory::Application);
+        assert_eq!(
+            core.best_match_index("calculator", std::slice::from_ref(&exact)),
+            Some(0)
+        );
+        assert_eq!(
+            core.best_match_index("calc", std::slice::from_ref(&exact)),
+            Some(0)
+        );
+        // A single-character prefix is a reasonable query and stays strong.
+        assert_eq!(
+            core.best_match_index("c", std::slice::from_ref(&exact)),
+            Some(0)
+        );
+        let word = result("word", "My Calculator Tool", ResultCategory::Application);
+        assert_eq!(
+            core.best_match_index("calc", std::slice::from_ref(&word)),
+            Some(0)
+        );
+        // A lone character at an internal word start is not enough.
+        assert_eq!(
+            core.best_match_index("c", std::slice::from_ref(&word)),
+            None
+        );
+    }
+
+    #[test]
+    fn best_match_scans_past_an_earlier_weak_match() {
+        let weak = result("weak", "Xylophone", ResultCategory::Application);
+        let strong = result("strong", "Photo", ResultCategory::Application);
+        let core = SearchCore::new(Vec::new());
+        assert_eq!(core.best_match_index("pho", &[weak, strong]), Some(1));
+    }
+
+    #[test]
+    fn chinese_evidence_requires_a_phrase_or_prefix() {
+        let core = SearchCore::new(Vec::new());
+        let wechat = result("wechat", "微信电脑版", ResultCategory::Application);
+        assert_eq!(
+            core.best_match_index("微信", std::slice::from_ref(&wechat)),
+            Some(0)
+        );
+        // Two CJK characters are a meaningful phrase even without spaces.
+        assert_eq!(
+            core.best_match_index("电脑", std::slice::from_ref(&wechat)),
+            Some(0)
+        );
+        assert_eq!(
+            core.best_match_index("信", std::slice::from_ref(&wechat)),
+            None
+        );
+        let settings = result("settings", "Windows 设置", ResultCategory::Application);
+        assert_eq!(
+            core.best_match_index("设置", std::slice::from_ref(&settings)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn only_typo_level_fuzzy_matches_can_headline_the_list() {
+        let notepad = result("notepad", "Notepad", ResultCategory::Application);
+        let core = SearchCore::new(vec![notepad.clone()]);
+        let items = std::slice::from_ref(&notepad);
+        // A scattered subsequence is still a visible ordinary result.
+        assert_eq!(core.search("ntpd").len(), 1);
+        assert_eq!(core.best_match_index("ntpd", items), None);
+        // One skipped letter is typo-level evidence.
+        assert_eq!(core.best_match_index("notpad", items), Some(0));
+    }
+
+    #[test]
+    fn fuzzy_evidence_counts_skipped_characters_not_gap_runs() {
+        let core = SearchCore::new(Vec::new());
+        // One non-consecutive transition but eight skipped characters.
+        let spaced = result("spaced", "aXXXXXXXXbc", ResultCategory::Application);
+        assert_eq!(
+            core.best_match_index("abc", std::slice::from_ref(&spaced)),
+            None
+        );
+        // A real single-character typo still qualifies.
+        let notepad = result("notepad", "Notepad", ResultCategory::Application);
+        assert_eq!(
+            core.best_match_index("notpad", std::slice::from_ref(&notepad)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn aliases_supply_best_match_evidence() {
+        let core = SearchCore::new(Vec::new());
+        let mut item = result(
+            "tool",
+            "Unrelated display name",
+            ResultCategory::Application,
+        );
+        item.aliases = vec!["calc".into()];
+        let items = std::slice::from_ref(&item);
+        assert_eq!(core.best_match_index("calc", items), Some(0));
+        assert_eq!(core.best_match_index("ca", items), Some(0));
     }
 
     #[test]

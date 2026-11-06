@@ -64,7 +64,9 @@ fn main() {
         );
     }
 
-    let config = slint_build::CompilerConfiguration::new().with_bundled_translations("lang");
+    let config = slint_build::CompilerConfiguration::new()
+        .with_style("fluent".into())
+        .with_bundled_translations("lang");
     slint_build::compile_with_config("ui/settings.slint", config.clone())
         .expect("failed to compile settings UI");
     slint_build::compile_with_config("ui/launcher.slint", config)

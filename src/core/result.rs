@@ -117,6 +117,10 @@ pub enum ResultCategory {
     Document,
     Bookmark,
     Window,
+    /// A result whose primary action enters a search-engine session instead
+    /// of launching its target. This describes the interaction, not the
+    /// content the session will eventually produce.
+    Command,
     Other,
 }
 
@@ -234,6 +238,29 @@ impl SearchResult {
     /// are deliberately excluded from this lookup.
     pub fn primary_action(&self) -> Option<&Action> {
         self.actions.iter().find(|action| !action.is_context_menu())
+    }
+
+    /// Whether activating this result enters a search-engine session rather
+    /// than working on the result itself. Session entries are identified by
+    /// their primary action, so provider categories can keep describing the
+    /// underlying content.
+    pub fn is_session_entry(&self) -> bool {
+        matches!(
+            self.primary_action(),
+            Some(Action::EnterSearchEngine { .. })
+        )
+    }
+
+    /// Category used for root-search filtering and grouping. Every true
+    /// session entry belongs to one command category regardless of which
+    /// content it searches; results produced inside a session keep their
+    /// provider-supplied category.
+    pub fn effective_category(&self) -> ResultCategory {
+        if self.is_session_entry() {
+            ResultCategory::Command
+        } else {
+            self.category
+        }
     }
 }
 

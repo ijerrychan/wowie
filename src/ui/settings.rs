@@ -1,4 +1,6 @@
-use super::{SettingsCategory, SettingsEntry, SettingsShortcut, SettingsWindow};
+use super::{
+    ContextMenu, Launcher, SettingsCategory, SettingsEntry, SettingsShortcut, SettingsWindow,
+};
 use crate::{config, plugin::PluginSettingsDefinition, utils::i18n};
 use anyhow::{anyhow, Context, Result};
 use slint::{Model, ModelRc, VecModel};
@@ -56,6 +58,20 @@ fn definitions() -> Vec<Definition> {
             "Language used by Wowie and its built-in providers.",
             &languages,
         ),
+        field(
+            "animations_enabled",
+            "appearance",
+            "Interface animations",
+            "Animate details, menus, and session transitions. Disable for instant changes.",
+            "toggle",
+        ),
+        field(
+            "accent_color",
+            "appearance",
+            "Accent color",
+            "Leave empty for the default blue-violet, enter system to follow the system accent, or specify #RRGGBB.",
+            "text",
+        ),
         choice(
             "renderer",
             "appearance",
@@ -76,7 +92,7 @@ fn definitions() -> Vec<Definition> {
             "font_family",
             "appearance",
             "Font family",
-            "Choose an installed font family. Select System default to use the OS default.",
+            "Choose an installed font family. System default uses the platform UI font when available.",
             &[],
         ),
         number(
@@ -824,10 +840,70 @@ fn installed_font_families() -> &'static [String] {
 
 static FONT_FAMILIES: OnceLock<Vec<String>> = OnceLock::new();
 
-pub(super) fn preload_font_families(window: slint::Weak<SettingsWindow>) {
+/// Preferred native UI family per platform. macOS keeps Slint's system UI
+/// default because the system family name is not a stable public family.
+fn preferred_ui_font_family() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Segoe UI"
+    } else if cfg!(target_os = "linux") {
+        "Noto Sans"
+    } else {
+        ""
+    }
+}
+
+/// Resolve the family applied to the three windows. A user selection always
+/// wins. An empty selection uses the platform UI family only when the cached
+/// font database has finished loading and confirms it is installed. Until then
+/// the window keeps Slint's system default, so startup never scans fonts on the
+/// UI thread.
+pub(super) fn resolved_ui_font_family(configured: &str) -> String {
+    let configured = configured.trim();
+    if !configured.is_empty() {
+        return configured.to_owned();
+    }
+    let preferred = preferred_ui_font_family();
+    if preferred.is_empty() {
+        return String::new();
+    }
+    match FONT_FAMILIES.get() {
+        Some(families)
+            if families
+                .iter()
+                .any(|family| family.eq_ignore_ascii_case(preferred)) =>
+        {
+            preferred.to_owned()
+        }
+        _ => String::new(),
+    }
+}
+
+pub(super) fn preload_font_families(
+    window: slint::Weak<SettingsWindow>,
+    launcher: slint::Weak<Launcher>,
+    context: slint::Weak<ContextMenu>,
+) {
     std::thread::spawn(move || {
         FONT_FAMILIES.get_or_init(scan_font_families);
         let _ = slint::invoke_from_event_loop(move || {
+            // A late scan may upgrade an empty font selection to the verified
+            // platform UI family. Reload the config so an edit made while the
+            // scan was running still wins.
+            let (config, valid) = config::Config::load();
+            if valid {
+                let family = resolved_ui_font_family(&config.font_family);
+                if !family.is_empty() && family != config.font_family {
+                    if let Some(launcher) = launcher.upgrade() {
+                        launcher.set_ui_font_family(family.clone().into());
+                    }
+                    if let Some(context) = context.upgrade() {
+                        context.set_ui_font_family(family.clone().into());
+                    }
+                    if let Some(window) = window.upgrade() {
+                        window.set_ui_font_family(family.into());
+                    }
+                }
+            }
             let Some(window) = window.upgrade() else {
                 return;
             };
@@ -840,7 +916,6 @@ pub(super) fn preload_font_families(window: slint::Weak<SettingsWindow>) {
             let Some(model) = entries.as_any().downcast_ref::<VecModel<SettingsEntry>>() else {
                 return;
             };
-            let (config, _) = config::Config::load();
             for index in 0..model.row_count() {
                 if let Some(mut entry) = model.row_data(index) {
                     if entry.id == "font_family" {
@@ -1002,7 +1077,7 @@ pub(super) fn apply(
             let directories = &mut config.providers.indexed_directories;
             let index = index.parse::<usize>().context("invalid indexed folder")?;
             if index >= directories.len() {
-                return Err(anyhow!("indexed folder no longer exists"));
+                return Err(anyhow!("Indexed folder no longer exists"));
             }
             directories.remove(index);
         } else {
@@ -1050,6 +1125,8 @@ pub(super) fn apply(
         "hide_on_focus_loss" => config.hide_on_focus_loss = parse_bool(&value)?,
         "theme" => config.theme = value,
         "language" => config.language = value,
+        "animations_enabled" => config.animations_enabled = parse_bool(&value)?,
+        "accent_color" => set_accent_color(config, &value)?,
         "renderer" => config.renderer = value,
         "list_item_height" => config.list_item_height = parse_u32(&value, id)?,
         "font_family" => config.font_family = value.trim().to_owned(),
@@ -1089,7 +1166,7 @@ pub(super) fn apply(
 
 pub(super) fn set_directory(config: &mut config::Config, id: &str, path: PathBuf) -> Result<()> {
     if !path.is_dir() {
-        return Err(anyhow!("folder does not exist: {}", path.display()));
+        return Err(anyhow!("Folder does not exist: {}", path.display()));
     }
     let index = id
         .strip_prefix("providers.indexed_directories:")
@@ -1100,20 +1177,20 @@ pub(super) fn set_directory(config: &mut config::Config, id: &str, path: PathBuf
             .iter()
             .any(|existing| same_folder(existing, &path))
         {
-            return Err(anyhow!("folder is already indexed"));
+            return Err(anyhow!("Folder is already indexed"));
         }
         directories.push(path);
     } else {
         let index = index.parse::<usize>().context("invalid indexed folder")?;
         if index >= directories.len() {
-            return Err(anyhow!("indexed folder no longer exists"));
+            return Err(anyhow!("Indexed folder no longer exists"));
         }
         if directories
             .iter()
             .enumerate()
             .any(|(other, existing)| other != index && same_folder(existing, &path))
         {
-            return Err(anyhow!("folder is already indexed"));
+            return Err(anyhow!("Folder is already indexed"));
         }
         directories[index] = path;
     }
@@ -1138,22 +1215,22 @@ pub(super) fn save_shortcut(
         description: value.description.trim().to_owned(),
     };
     if shortcut.name.is_empty() || shortcut.prefix.is_empty() {
-        return Err(anyhow!("shortcut name and prefix are required"));
+        return Err(anyhow!("Shortcut name and prefix are required"));
     }
     if !matches!(
         shortcut.shortcut_type.as_str(),
         "url" | "application" | "command"
     ) {
-        return Err(anyhow!("invalid shortcut type"));
+        return Err(anyhow!("Invalid shortcut type"));
     }
     if !matches!(shortcut.mode.as_str(), "execute" | "search" | "panel") {
-        return Err(anyhow!("invalid shortcut mode"));
+        return Err(anyhow!("Invalid shortcut mode"));
     }
     if shortcut.shortcut_type == "url" && !shortcut.template.contains("{query}") {
         return Err(anyhow!("URL template must contain {{query}}"));
     }
     if shortcut.shortcut_type != "url" && shortcut.target.is_empty() {
-        return Err(anyhow!("application or command target is required"));
+        return Err(anyhow!("Application or command target is required"));
     }
     let keyword = shortcut.prefix.trim_end();
     if config
@@ -1166,7 +1243,7 @@ pub(super) fn save_shortcut(
             .eq_ignore_ascii_case(keyword)
     {
         return Err(anyhow!(
-            "shortcut prefix is already used by a built-in shortcut"
+            "Shortcut prefix is already used by a built-in shortcut"
         ));
     }
     if plugins.iter().any(|plugin| {
@@ -1180,7 +1257,7 @@ pub(super) fn save_shortcut(
                 .any(|word| word.eq_ignore_ascii_case(keyword))
         })
     }) {
-        return Err(anyhow!("shortcut prefix is already used by a plugin"));
+        return Err(anyhow!("Shortcut prefix is already used by a plugin"));
     }
     if config
         .shortcuts
@@ -1188,7 +1265,7 @@ pub(super) fn save_shortcut(
         .enumerate()
         .any(|(other, existing)| other as i32 != index && existing.prefix.trim() == shortcut.prefix)
     {
-        return Err(anyhow!("shortcut prefix is already in use"));
+        return Err(anyhow!("Shortcut prefix is already in use"));
     }
     if index == -1 {
         config.shortcuts.push(shortcut);
@@ -1196,7 +1273,7 @@ pub(super) fn save_shortcut(
         let existing = config
             .shortcuts
             .get_mut(index as usize)
-            .ok_or_else(|| anyhow!("shortcut no longer exists"))?;
+            .ok_or_else(|| anyhow!("Shortcut no longer exists"))?;
         *existing = shortcut;
     }
     Ok(())
@@ -1204,7 +1281,7 @@ pub(super) fn save_shortcut(
 
 pub(super) fn remove_shortcut(config: &mut config::Config, index: i32) -> Result<()> {
     if index < 0 || index as usize >= config.shortcuts.len() {
-        return Err(anyhow!("shortcut no longer exists"));
+        return Err(anyhow!("Shortcut no longer exists"));
     }
     config.shortcuts.remove(index as usize);
     Ok(())
@@ -1218,7 +1295,7 @@ fn move_order(order: &mut [String], id: &str, direction: &str) -> Result<()> {
     let index = order
         .iter()
         .position(|item| item == id)
-        .ok_or_else(|| anyhow!("priority item no longer exists: {id}"))?;
+        .ok_or_else(|| anyhow!("Priority item no longer exists: {id}"))?;
     match direction {
         "__move_up__" if index > 0 => order.swap(index, index - 1),
         "__move_down__" if index + 1 < order.len() => order.swap(index, index + 1),
@@ -1263,7 +1340,7 @@ pub(super) fn move_priority(
         return Ok(());
     }
     Err(anyhow!(
-        "priority items must be dropped within the same list"
+        "Priority items must be dropped within the same list"
     ))
 }
 
@@ -1274,15 +1351,15 @@ fn move_relative(order: &mut Vec<String>, source: &str, target: &str, after: boo
     let source_index = order
         .iter()
         .position(|item| item == source)
-        .ok_or_else(|| anyhow!("priority item no longer exists: {source}"))?;
+        .ok_or_else(|| anyhow!("Priority item no longer exists: {source}"))?;
     if !order.iter().any(|item| item == target) {
-        return Err(anyhow!("priority drop target no longer exists: {target}"));
+        return Err(anyhow!("Priority drop target no longer exists: {target}"));
     }
     let item = order.remove(source_index);
     let target_index = order
         .iter()
         .position(|item| item == target)
-        .ok_or_else(|| anyhow!("priority drop target no longer exists: {target}"))?;
+        .ok_or_else(|| anyhow!("Priority drop target no longer exists: {target}"))?;
     order.insert(target_index + usize::from(after), item);
     Ok(())
 }
@@ -1393,6 +1470,22 @@ fn apply_plugin_setting(
     Ok(())
 }
 
+fn set_accent_color(config: &mut config::Config, submitted: &str) -> Result<()> {
+    let value = submitted.trim();
+    if value.is_empty() {
+        config.accent_color.clear();
+    } else if value.eq_ignore_ascii_case("system") {
+        config.accent_color = "system".into();
+    } else if let Some(color) = config::parse_accent_color(value) {
+        config.accent_color = format!("#{color:06x}");
+    } else {
+        return Err(anyhow!(
+            "Accent color must be empty, system, or an explicit #RRGGBB value"
+        ));
+    }
+    Ok(())
+}
+
 fn set_builtin_shortcut_keyword(
     config: &mut config::Config,
     plugins: &[PluginSettingsDefinition],
@@ -1401,7 +1494,7 @@ fn set_builtin_shortcut_keyword(
 ) -> Result<()> {
     let keyword = submitted.trim();
     if keyword.is_empty() || keyword.chars().any(char::is_whitespace) {
-        return Err(anyhow!("shortcut keyword must be one non-empty word"));
+        return Err(anyhow!("Shortcut keyword must be one non-empty word"));
     }
     let other_builtin = if id == "web_search" {
         &config.shortcut_keywords.command
@@ -1409,14 +1502,14 @@ fn set_builtin_shortcut_keyword(
         &config.shortcut_keywords.web_search
     };
     if keyword.eq_ignore_ascii_case(other_builtin) {
-        return Err(anyhow!("built-in shortcut keywords must be different"));
+        return Err(anyhow!("Built-in shortcut keywords must be different"));
     }
     if config
         .shortcuts
         .iter()
         .any(|shortcut| shortcut.prefix.trim_end().eq_ignore_ascii_case(keyword))
     {
-        return Err(anyhow!("shortcut keyword is already in use"));
+        return Err(anyhow!("Shortcut keyword is already in use"));
     }
     if plugins.iter().any(|plugin| {
         plugin.commands.iter().any(|command| {
@@ -1429,7 +1522,7 @@ fn set_builtin_shortcut_keyword(
                 .any(|word| word.eq_ignore_ascii_case(keyword))
         })
     }) {
-        return Err(anyhow!("shortcut keyword is already in use by a plugin"));
+        return Err(anyhow!("Shortcut keyword is already in use by a plugin"));
     }
     match id {
         "web_search" => config.shortcut_keywords.web_search = keyword.to_owned(),
@@ -1447,10 +1540,10 @@ fn parse_action_words(value: &str) -> Result<Vec<String>> {
             continue;
         }
         if word.chars().any(char::is_whitespace) {
-            return Err(anyhow!("each trigger word must be a single word"));
+            return Err(anyhow!("Each trigger word must be a single word"));
         }
         if word.chars().count() > 48 {
-            return Err(anyhow!("trigger words must be 48 characters or fewer"));
+            return Err(anyhow!("Trigger words must be 48 characters or fewer"));
         }
         if words
             .iter()
@@ -1460,7 +1553,7 @@ fn parse_action_words(value: &str) -> Result<Vec<String>> {
         }
         words.push(word.to_owned());
         if words.len() > 16 {
-            return Err(anyhow!("a command can have at most 16 trigger words"));
+            return Err(anyhow!("A command can have at most 16 trigger words"));
         }
     }
     Ok(words)
@@ -1502,7 +1595,7 @@ fn validate_plugin_action_words(
             })
     };
     if words.iter().any(|word| collides(word)) {
-        return Err(anyhow!("one or more trigger words are already in use"));
+        return Err(anyhow!("One or more trigger words are already in use"));
     }
     Ok(())
 }
@@ -1531,4 +1624,58 @@ fn plugin_category(id: &str) -> String {
 
 fn translate(language: &str, text: &'static str) -> String {
     i18n::tr_owned_in_context(language, "Settings", text)
+}
+
+/// Localize validation messages shown in the settings status row.
+///
+/// Only strings that are part of the translation catalog are replaced;
+/// diagnostics from the OS, I/O, or configuration parser pass through
+/// unchanged so troubleshooting information is never distorted.
+pub(super) fn localized_error(language: &str, message: &str) -> String {
+    if let Some(path) = message.strip_prefix("Folder does not exist: ") {
+        return i18n::tr_owned_in_context(language, "Settings", "Folder does not exist: {path}")
+            .replace("{path}", path);
+    }
+    if let Some(id) = message.strip_prefix("Priority item no longer exists: ") {
+        return i18n::tr_owned_in_context(
+            language,
+            "Settings",
+            "Priority item no longer exists: {id}",
+        )
+        .replace("{id}", id);
+    }
+    if let Some(target) = message.strip_prefix("Priority drop target no longer exists: ") {
+        return i18n::tr_owned_in_context(
+            language,
+            "Settings",
+            "Priority drop target no longer exists: {target}",
+        )
+        .replace("{target}", target);
+    }
+    i18n::tr_owned_in_context(language, "Settings", message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::localized_error;
+
+    #[test]
+    fn known_validation_errors_are_localized_without_touching_diagnostics() {
+        assert_eq!(
+            localized_error("zh-CN", "Folder is already indexed"),
+            "该文件夹已在索引中。"
+        );
+        assert_eq!(
+            localized_error("zh-CN", "Folder does not exist: C:\\missing"),
+            "文件夹不存在：C:\\missing"
+        );
+        assert_eq!(
+            localized_error("en", "Folder is already indexed"),
+            "Folder is already indexed"
+        );
+        assert_eq!(
+            localized_error("zh-CN", "permission denied (os error 5)"),
+            "permission denied (os error 5)"
+        );
+    }
 }

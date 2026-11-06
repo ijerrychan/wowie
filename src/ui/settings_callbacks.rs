@@ -1,12 +1,17 @@
 use super::*;
 
+fn current_language() -> String {
+    config::Config::load().0.language
+}
+
 fn load_editable_config(settings: &slint::Weak<SettingsWindow>) -> Option<config::Config> {
     match config::Config::load_for_update() {
         Ok(config) => Some(config),
         Err(error) => {
             eprintln!("could not load settings for editing: {error:#}");
             if let Some(settings) = settings.upgrade() {
-                settings.set_status_message(error.to_string().into());
+                let message = settings::localized_error(&current_language(), &error.to_string());
+                settings.set_status_message(message.into());
             }
             None
         }
@@ -18,17 +23,21 @@ pub(super) fn register_settings_callbacks(
     window: &Launcher,
     context_window: &ContextMenu,
     plugin_settings: Vec<plugin::PluginSettingsDefinition>,
+    platform: Arc<dyn platform::PlatformIntegration>,
+    animations_enabled: Arc<AtomicBool>,
 ) {
     {
         let settings = settings_window.as_weak();
         let plugin_settings = plugin_settings.clone();
+        let animations_for_page = Arc::clone(&animations_enabled);
         let transition_generation = Arc::new(AtomicU64::new(0));
         let transition_generation_for_callback = Arc::clone(&transition_generation);
         settings_window.on_category_selected(move |category| {
             let category = category.to_string();
             let (config, _) = config::Config::load();
+            let animations_enabled = animations_for_page.load(Ordering::Acquire);
             if let Some(settings) = settings.upgrade() {
-                settings.set_page_transition_opacity(0.78);
+                settings.set_page_transition_opacity(if animations_enabled { 0.78 } else { 1.0 });
                 settings.set_status_message(String::new().into());
                 settings.set_selected_category(category.clone().into());
                 settings.set_selected_category_title(
@@ -39,17 +48,21 @@ pub(super) fn register_settings_callbacks(
                     &settings,
                     settings::entries(&config, &plugin_settings, &category, &config.language),
                 );
-                let generation =
-                    transition_generation_for_callback.fetch_add(1, Ordering::AcqRel) + 1;
-                let weak = settings.as_weak();
-                let transition_generation = Arc::clone(&transition_generation_for_callback);
-                Timer::single_shot(Duration::from_millis(75), move || {
-                    if transition_generation.load(Ordering::Acquire) == generation {
-                        if let Some(settings) = weak.upgrade() {
-                            settings.set_page_transition_opacity(1.0);
+                if animations_enabled {
+                    let generation =
+                        transition_generation_for_callback.fetch_add(1, Ordering::AcqRel) + 1;
+                    let weak = settings.as_weak();
+                    let transition_generation = Arc::clone(&transition_generation_for_callback);
+                    Timer::single_shot(Duration::from_millis(75), move || {
+                        if transition_generation.load(Ordering::Acquire) == generation {
+                            if let Some(settings) = weak.upgrade() {
+                                settings.set_page_transition_opacity(1.0);
+                            }
                         }
-                    }
-                });
+                    });
+                } else {
+                    transition_generation_for_callback.fetch_add(1, Ordering::AcqRel);
+                }
             }
         });
     }
@@ -59,6 +72,8 @@ pub(super) fn register_settings_callbacks(
         let context_for_typography = context_window.as_weak();
         let plugin_settings = plugin_settings.clone();
         let plugin_settings_for_drag = plugin_settings.clone();
+        let platform_for_theme = Arc::clone(&platform);
+        let animations_for_theme = Arc::clone(&animations_enabled);
         settings_window.on_setting_changed(move |id, value| {
             let Some(mut config) = load_editable_config(&settings_for_change) else {
                 return;
@@ -85,29 +100,55 @@ pub(super) fn register_settings_callbacks(
                 });
             if let Err(error) = setting_result {
                 if let Some(settings) = settings_for_change.upgrade() {
-                    settings.set_status_message(error.to_string().into());
+                    let message = settings::localized_error(&config.language, &error.to_string());
+                    settings.set_status_message(message.into());
                 }
                 eprintln!("could not save setting {id}: {error:#}");
                 return;
             }
             let (updated, valid) = config::Config::load();
             if valid {
+                // Apply a language change immediately for every Slint string
+                // instead of waiting for the file watcher to deliver another
+                // reload.
+                if id.as_str() == "language" {
+                    let slint_language = crate::utils::i18n::effective_language(&updated.language);
+                    let _ = slint::select_bundled_translation(&slint_language);
+                }
                 if let Err(error) = updated.save() {
                     eprintln!("could not normalize settings: {error:#}");
                 }
             }
-            if let Some(window) = window_for_typography.upgrade() {
-                window.set_ui_font_family(updated.font_family.clone().into());
+            animations_for_theme.store(updated.animations_enabled, Ordering::Release);
+            let dark_mode = match updated.theme.as_str() {
+                "dark" => true,
+                "light" => false,
+                _ => platform_for_theme.system_prefers_dark_theme(),
+            };
+            let window_handle = window_for_typography.upgrade();
+            let settings_handle = settings_for_change.upgrade();
+            let context_handle = context_for_typography.upgrade();
+            super::apply_theme_to_windows(
+                dark_mode,
+                &updated,
+                platform_for_theme.as_ref(),
+                window_handle.as_ref(),
+                settings_handle.as_ref(),
+                context_handle.as_ref(),
+            );
+            let ui_font_family = settings::resolved_ui_font_family(&updated.font_family);
+            if let Some(window) = window_handle.as_ref() {
+                window.set_ui_font_family(ui_font_family.clone().into());
                 window.set_ui_font_size(updated.font_size as f32);
             }
-            if let Some(context) = context_for_typography.upgrade() {
-                context.set_ui_font_family(updated.font_family.clone().into());
+            if let Some(context) = context_handle.as_ref() {
+                context.set_ui_font_family(ui_font_family.clone().into());
                 context.set_ui_font_size(updated.font_size as f32);
             }
-            if let Some(settings) = settings_for_change.upgrade() {
-                settings.set_ui_font_family(updated.font_family.clone().into());
+            if let Some(settings) = settings_handle.as_ref() {
+                settings.set_ui_font_family(ui_font_family.into());
                 settings.set_ui_font_size(updated.font_size as f32);
-                settings::refresh(&settings, &updated, &plugin_settings, &updated.language);
+                settings::refresh(settings, &updated, &plugin_settings, &updated.language);
                 settings.set_status_message(String::new().into());
             }
         });
@@ -122,7 +163,9 @@ pub(super) fn register_settings_callbacks(
                 Ok(source) => source.to_string(),
                 Err(error) => {
                     if let Some(settings) = settings_for_priority_drop.upgrade() {
-                        settings.set_status_message(error.to_string().into());
+                        let message =
+                            settings::localized_error(&current_language(), &error.to_string());
+                        settings.set_status_message(message.into());
                     }
                     return;
                 }
@@ -150,7 +193,11 @@ pub(super) fn register_settings_callbacks(
                         );
                         settings.set_status_message(String::new().into());
                     }
-                    Err(error) => settings.set_status_message(error.to_string().into()),
+                    Err(error) => {
+                        let message =
+                            settings::localized_error(&config.language, &error.to_string());
+                        settings.set_status_message(message.into());
+                    }
                 }
             }
         });
@@ -177,7 +224,11 @@ pub(super) fn register_settings_callbacks(
                         settings::refresh(&window, &config, &plugin_settings, &config.language);
                         window.set_status_message(String::new().into());
                     }
-                    Err(error) => window.set_status_message(error.to_string().into()),
+                    Err(error) => {
+                        let message =
+                            settings::localized_error(&config.language, &error.to_string());
+                        window.set_status_message(message.into());
+                    }
                 }
             }
         });
@@ -197,7 +248,11 @@ pub(super) fn register_settings_callbacks(
                         settings::refresh(&window, &config, &plugin_settings, &config.language);
                         window.set_status_message(String::new().into());
                     }
-                    Err(error) => window.set_status_message(error.to_string().into()),
+                    Err(error) => {
+                        let message =
+                            settings::localized_error(&config.language, &error.to_string());
+                        window.set_status_message(message.into());
+                    }
                 }
             }
         });
@@ -213,7 +268,13 @@ pub(super) fn register_settings_callbacks(
                 Ok(Some(path)) => path,
                 Ok(None) => return,
                 Err(error) => {
-                    window.set_status_message(error.to_string().into());
+                    let language = current_language();
+                    let prefix = crate::utils::i18n::tr_owned_in_context(
+                        &language,
+                        "Settings",
+                        "Could not open the folder picker",
+                    );
+                    window.set_status_message(format!("{prefix}: {error}").into());
                     return;
                 }
             };
@@ -228,7 +289,10 @@ pub(super) fn register_settings_callbacks(
                     settings::refresh(&window, &config, &plugin_settings, &config.language);
                     window.set_status_message(String::new().into());
                 }
-                Err(error) => window.set_status_message(error.to_string().into()),
+                Err(error) => {
+                    let message = settings::localized_error(&config.language, &error.to_string());
+                    window.set_status_message(message.into());
+                }
             }
         });
     }
@@ -244,5 +308,18 @@ mod tests {
         let previous_size = config.font_size;
         assert!(settings::apply(&mut config, &[], "font_size", "not-a-number").is_err());
         assert_eq!(config.font_size, previous_size);
+    }
+
+    #[test]
+    fn accent_setting_rejects_invalid_values_and_canonicalizes_valid_ones() {
+        let mut config = crate::config::Config::default();
+        assert!(settings::apply(&mut config, &[], "accent_color", "blue").is_err());
+        assert_eq!(config.accent_color, "");
+        settings::apply(&mut config, &[], "accent_color", "#6260A8").unwrap();
+        assert_eq!(config.accent_color, "#6260a8");
+        settings::apply(&mut config, &[], "accent_color", "SYSTEM").unwrap();
+        assert_eq!(config.accent_color, "system");
+        settings::apply(&mut config, &[], "accent_color", "").unwrap();
+        assert_eq!(config.accent_color, "");
     }
 }

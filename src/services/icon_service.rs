@@ -476,6 +476,10 @@ fn named_icon(name: &str, size: u32) -> Option<IconData> {
         "book" | "wowie" => {
             load_svg_bytes(include_bytes!("../../assets/icons/book-open.svg"), size)
         }
+        "bookmark" => load_svg_bytes(
+            include_bytes!("../../assets/icons/bookmark-outline.svg"),
+            size,
+        ),
         "window" => load_svg_bytes(include_bytes!("../../assets/icons/window.svg"), size),
         "checklist" => load_svg_bytes(include_bytes!("../../assets/icons/list-checks.svg"), size),
         "folder-open" => load_svg_bytes(
@@ -926,6 +930,7 @@ mod tests {
     fn bundled_icons_render_visible_pixels() {
         for name in [
             "book",
+            "bookmark",
             "checklist",
             "wowie",
             "settings",

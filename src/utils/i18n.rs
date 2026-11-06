@@ -147,6 +147,18 @@ mod tests {
     }
 
     #[test]
+    fn plugin_manifest_command_title_uses_launcher_catalog() {
+        assert_eq!(
+            tr_owned_in_context("zh-CN", "Launcher", "Search files"),
+            "文件搜索"
+        );
+        assert_eq!(
+            tr_owned_in_context("en", "Launcher", "Search files"),
+            "Search files"
+        );
+    }
+
+    #[test]
     fn aliases_include_localized_and_english_values() {
         assert_eq!(
             tr_aliases("zh-CN", "Launcher", "Weather keyword"),

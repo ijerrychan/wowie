@@ -57,9 +57,15 @@ fn select_renderer(renderer: &str) -> Result<()> {
                 };
                 // Apply to every frameless window, including settings and menus.
                 // Winit manages the native DWM shadow across window changes.
+                // The undecorated shadow keeps a 1px native frame strip on top
+                // (documented by winit). DWMWA_COLOR_NONE stops DWM from
+                // painting that strip as a system-colored border, leaving the
+                // Slint canvas and its own border in control. Windows 10 does
+                // not support the attribute; winit ignores the failure.
                 attributes
                     .with_transparent(false)
                     .with_undecorated_shadow(true)
+                    .with_border_color(None)
                     .with_corner_preference(CornerPreference::Round)
             };
             attributes

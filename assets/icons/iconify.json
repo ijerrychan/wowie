@@ -4,6 +4,7 @@
     { "file": "assets/icons/arrow-left-dark.svg", "icon": "mdi:chevron-left", "color": "#4b5563", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/chevron-left.svg?color=%234b5563" },
     { "file": "assets/icons/arrow-left-light.svg", "icon": "mdi:chevron-left", "color": "#f3f4f6", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/chevron-left.svg?color=%23f3f4f6" },
     { "file": "assets/icons/book-open.svg", "icon": "flat-color-icons:reading", "license": "MIT", "source": "https://api.iconify.design/flat-color-icons/reading.svg" },
+    { "file": "assets/icons/bookmark-outline.svg", "icon": "mdi:bookmark-outline", "color": "#78909c", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/bookmark-outline.svg?color=%2378909c" },
     { "file": "assets/icons/calculator.svg", "icon": "flat-color-icons:calculator", "license": "MIT", "source": "https://api.iconify.design/flat-color-icons/calculator.svg" },
     { "file": "assets/icons/chevron-down.svg", "icon": "mdi:chevron-down", "color": "#929292", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/chevron-down.svg?color=%23929292" },
     { "file": "assets/icons/chevron-right.svg", "icon": "mdi:chevron-right", "color": "#929292", "license": "Apache-2.0", "source": "https://api.iconify.design/mdi/chevron-right.svg?color=%23929292" },

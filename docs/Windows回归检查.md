@@ -12,7 +12,7 @@
 | 损坏 `.lnk` | 固定截断 ShellLink 样本及偏移边界、ANSI、Unicode 和超大文件用例 | `cargo test platform::windows::shortcuts::tests -- --nocapture --test-threads=1` |
 | 不可解析配置 | 固定的截断 JSON 样本确保读取失败时原文件保持不变 | `cargo test config::tests::invalid_existing_config_is_preserved_and_valid_writes_replace_it -- --nocapture` |
 | renderer 配置规范化 | 确认支持的 renderer 值在配置加载后保留 | `cargo test config::tests::supported_renderers_are_preserved_by_normalization` |
-| 紧凑窗口反复呼出 | 实际 Slint UI 软件渲染，覆盖 DPI、行高、结果数量、选中项和尺寸变化，断言无 callback/instantiation chain 日志 | `cargo test ui::layout_tests::launcher_layout_settles_when_reopened` |
+| 紧凑窗口反复呼出 | 实际 Slint UI 软件渲染；基线语言/缩放完整扫描选中边界，其他语言与分数 DPI 稀疏采样，覆盖分组、行高、结果数量、选中项、小窗口和尺寸变化，断言无 callback/instantiation chain 日志 | `cargo test ui::layout_tests::launcher_layout_settles_when_reopened` |
 | Windows 过渡背景 | 隐藏原生窗口验证独立主题、主题切换、尺寸增大及绘制期间擦除不会覆盖已渲染内容 | `cargo test platform::windows::window_background::tests::` |
 
 测试样本位于 [`tests/fixtures/windows`](../tests/fixtures/windows/README.md)。快捷键与平台监听器的桌面集成测试默认忽略，它们会短暂注册系统级热键、托盘图标和 Shell 监听器，单独串行运行。只读系统项枚举也默认忽略；目录通知、无头布局与隐藏窗口像素测试属于默认测试集，不需要运行 `--ignored`。

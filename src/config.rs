@@ -21,6 +21,11 @@ const MIN_FONT_SIZE: u32 = 11;
 const MAX_FONT_SIZE: u32 = 20;
 const DEFAULT_THEME: &str = "system";
 const DEFAULT_LANGUAGE: &str = "system";
+/// Application accent used when `accent_color` is empty. A lighter variant is
+/// used on dark surfaces so accent-colored text keeps readable contrast.
+pub const DEFAULT_ACCENT_COLOR: u32 = 0x6260a8;
+pub const DEFAULT_ACCENT_COLOR_DARK: u32 = 0x9492dc;
+const ACCENT_SYSTEM: &str = "system";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -34,6 +39,11 @@ pub struct Config {
     pub font_size: u32,
     pub theme: String,
     pub language: String,
+    /// `""` follows Wowie's default accent, `"system"` follows the OS accent,
+    /// and `#RRGGBB` selects a custom color. Invalid values normalize to `""`.
+    pub accent_color: String,
+    /// When disabled, Slint properties jump directly to their final value.
+    pub animations_enabled: bool,
     pub show_on_startup: bool,
     pub run_at_sign_in: bool,
     pub hide_on_focus_loss: bool,
@@ -188,6 +198,8 @@ impl Default for Config {
             font_size: DEFAULT_FONT_SIZE,
             theme: DEFAULT_THEME.into(),
             language: DEFAULT_LANGUAGE.into(),
+            accent_color: String::new(),
+            animations_enabled: true,
             show_on_startup: true,
             run_at_sign_in: false,
             hide_on_focus_loss: true,
@@ -276,6 +288,7 @@ impl Config {
         if self.language != "system" && !crate::utils::i18n::is_supported_language(&self.language) {
             self.language = DEFAULT_LANGUAGE.into();
         }
+        self.accent_color = normalize_accent_color(&self.accent_color);
         self.shortcut_keywords.normalize();
         if !self.result_priorities.is_empty() {
             let mut old_priorities = std::mem::take(&mut self.result_priorities);
@@ -386,6 +399,25 @@ impl Config {
         self.providers.indexed_extensions.dedup();
     }
 
+    /// Resolve the configured accent for the active theme. Empty means the
+    /// application default, `system` reads the platform accent, and an explicit
+    /// `#RRGGBB` value is used verbatim. Invalid values fall back to the default.
+    pub fn resolved_accent_color(&self, system_accent: u32, dark_mode: bool) -> u32 {
+        let fallback = if dark_mode {
+            DEFAULT_ACCENT_COLOR_DARK
+        } else {
+            DEFAULT_ACCENT_COLOR
+        };
+        let value = self.accent_color.trim();
+        if value.is_empty() {
+            fallback
+        } else if value.eq_ignore_ascii_case(ACCENT_SYSTEM) {
+            system_accent
+        } else {
+            parse_accent_color(value).unwrap_or(fallback)
+        }
+    }
+
     pub fn save(&self) -> Result<()> {
         self.save_to_path(&config_path())
     }
@@ -397,6 +429,30 @@ impl Config {
         let json = serde_json::to_string_pretty(self).context("serialize config")?;
         crate::utils::atomic_write(path, format!("{json}\n").as_bytes()).context("write config")
     }
+}
+
+/// Parse an explicit `#RRGGBB` accent color. Named colors and bare hex are
+/// rejected so a typo cannot silently change the interface accent.
+pub fn parse_accent_color(value: &str) -> Option<u32> {
+    let value = value.trim();
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(hex, 16).ok()
+}
+
+fn normalize_accent_color(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return String::new();
+    }
+    if value.eq_ignore_ascii_case(ACCENT_SYSTEM) {
+        return ACCENT_SYSTEM.into();
+    }
+    parse_accent_color(value)
+        .map(|color| format!("#{color:06x}"))
+        .unwrap_or_default()
 }
 
 pub(crate) fn default_result_order() -> Vec<String> {
@@ -512,6 +568,59 @@ mod tests {
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(directory).unwrap();
     }
+    #[test]
+    fn legacy_config_gets_new_defaults_for_animations_and_accent() {
+        let config: Config =
+            serde_json::from_str(r#"{"hotkey":"Ctrl+Space"}"#).expect("legacy config JSON");
+        assert!(config.animations_enabled);
+        assert_eq!(config.accent_color, "");
+        assert_eq!(
+            config.resolved_accent_color(0x123456, false),
+            DEFAULT_ACCENT_COLOR
+        );
+    }
+
+    #[test]
+    fn accent_values_are_normalized_and_resolved() {
+        let mut config = Config {
+            accent_color: "  #6260A8  ".into(),
+            ..Config::default()
+        };
+        config.normalize();
+        assert_eq!(config.accent_color, "#6260a8");
+        assert_eq!(config.resolved_accent_color(0x123456, false), 0x6260a8);
+        assert_eq!(config.resolved_accent_color(0x123456, true), 0x6260a8);
+
+        config.accent_color = "SYSTEM".into();
+        config.normalize();
+        assert_eq!(config.accent_color, "system");
+        assert_eq!(config.resolved_accent_color(0x123456, false), 0x123456);
+
+        config.accent_color = "blue".into();
+        config.normalize();
+        assert_eq!(config.accent_color, "");
+        assert_eq!(
+            config.resolved_accent_color(0x123456, false),
+            DEFAULT_ACCENT_COLOR
+        );
+        assert_eq!(
+            config.resolved_accent_color(0x123456, true),
+            DEFAULT_ACCENT_COLOR_DARK
+        );
+
+        assert_eq!(parse_accent_color("#ABCDEF"), Some(0xabcdef));
+        assert_eq!(parse_accent_color("abcdef"), None);
+        assert_eq!(parse_accent_color("#abcde"), None);
+        assert_eq!(parse_accent_color("#abcdeg"), None);
+    }
+
+    #[test]
+    fn explicit_false_animation_setting_survives_loading() {
+        let config: Config =
+            serde_json::from_str(r#"{"animations_enabled": false}"#).expect("config JSON");
+        assert!(!config.animations_enabled);
+    }
+
     #[test]
     fn supported_renderers_are_preserved_by_normalization() {
         for renderer in ["femtovg", "femtovg-wgpu", "skia", "skia-opengl", "software"] {

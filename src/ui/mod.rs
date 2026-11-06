@@ -50,43 +50,54 @@ const SEARCH_PAGE_PREFETCH_DISTANCE: usize = 12;
 /// matches. SearchCore shares exactly the snapshot accepted by this surface.
 const MAX_RENDERED_RESULTS: usize = 256;
 
-fn apply_theme_to_windows(
+/// Resolve one accent pair for all three windows. The default application
+/// accent is theme-adaptive so accent-colored text stays readable on dark
+/// surfaces; an explicit system/custom color is used as supplied.
+pub(super) fn accent_colors(
+    config: &config::Config,
+    system_accent: u32,
     dark_mode: bool,
+) -> (slint::Color, slint::Color) {
+    let accent = config.resolved_accent_color(system_accent, dark_mode);
+    let red = ((accent >> 16) & 0xff) as u8;
+    let green = ((accent >> 8) & 0xff) as u8;
+    let blue = (accent & 0xff) as u8;
+    (
+        slint::Color::from_rgb_u8(red, green, blue),
+        slint::Color::from_argb_u8(if dark_mode { 0x42 } else { 0x28 }, red, green, blue),
+    )
+}
+
+pub(super) fn apply_theme_to_windows(
+    dark_mode: bool,
+    config: &config::Config,
     platform: &dyn platform::PlatformIntegration,
     launcher: Option<&Launcher>,
     settings: Option<&SettingsWindow>,
     context: Option<&ContextMenu>,
 ) {
-    let accent = platform.system_accent_color();
-    let accent_color = || {
-        slint::Color::from_rgb_u8(
-            ((accent >> 16) & 0xff) as u8,
-            ((accent >> 8) & 0xff) as u8,
-            (accent & 0xff) as u8,
-        )
-    };
+    let (accent_color, accent_background) =
+        accent_colors(config, platform.system_accent_color(), dark_mode);
 
     if let Some(launcher) = launcher {
         launcher.set_dark_mode(dark_mode);
-        launcher.set_accent_color(accent_color());
-        launcher.set_accent_background(slint::Color::from_argb_u8(
-            if dark_mode { 0x42 } else { 0x28 },
-            ((accent >> 16) & 0xff) as u8,
-            ((accent >> 8) & 0xff) as u8,
-            (accent & 0xff) as u8,
-        ));
+        launcher.set_accent_color(accent_color);
+        launcher.set_accent_background(accent_background);
+        launcher.set_animations_enabled(config.animations_enabled);
         platform::set_window_background(launcher.window(), launcher.get_native_background_color());
         launcher.window().request_redraw();
     }
     if let Some(settings) = settings {
         settings.set_dark_mode(dark_mode);
-        settings.set_accent_color(accent_color());
+        settings.set_accent_color(accent_color);
+        settings.set_animations_enabled(config.animations_enabled);
         platform::set_window_background(settings.window(), settings.get_native_background_color());
         settings.window().request_redraw();
     }
     if let Some(context) = context {
         context.set_dark_mode(dark_mode);
-        context.set_accent_color(accent_color());
+        context.set_accent_color(accent_color);
+        context.set_animations_enabled(config.animations_enabled);
         platform::set_window_background(context.window(), context.get_native_background_color());
         context.window().request_redraw();
     }

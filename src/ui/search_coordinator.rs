@@ -491,22 +491,32 @@ pub(super) fn build_search_presentation(
         .map(|item| static_icon_kind(item.icon.as_ref()).to_owned())
         .unwrap_or_default();
     let is_search_engine = search_engine.is_some();
+    // Best match only exists on the root result surface; an entered engine
+    // keeps provider order.
+    let best_match = (!is_search_engine)
+        .then(|| engine.best_match_index(search_query, &found))
+        .flatten();
     let rows = found
         .iter()
-        .map(|item| {
+        .enumerate()
+        .map(|(index, item)| {
             // A session prefix selects the engine, not every result the
             // engine returns. Showing it on menu rows is both misleading and
             // consumes their trailing-row space.
             let shortcut_hint = (!is_search_engine && active_session.is_none())
                 .then(|| engine.shortcut_hint(&item.id))
                 .flatten();
-            ResultRowPayload::from(
+            let mut row = ResultRowPayload::from(
                 item,
                 show_advanced_details,
                 shortcut_hint.as_deref(),
                 engine.is_favorite(&item.id),
                 engine.is_fallback_result(item),
-            )
+            );
+            // Weak matches still render as ordinary rows; only strong lexical
+            // evidence may occupy the best-match slot.
+            row.best_match_eligible = best_match == Some(index);
+            row
         })
         .collect();
     SearchPresentation {

@@ -108,8 +108,8 @@ msgid "Favorites"
 msgstr "收藏"
 
 msgctxt "Launcher"
-msgid "Search tools"
-msgstr "搜索工具"
+msgid "Command"
+msgstr "命令"
 
 msgctxt "Launcher"
 msgid "Suggestions"
@@ -452,6 +452,10 @@ msgid "Search with Everything"
 msgstr "用 Everything 搜索"
 
 msgctxt "Launcher"
+msgid "Search files"
+msgstr "文件搜索"
+
+msgctxt "Launcher"
 msgid "Google Translate"
 msgstr "谷歌翻译"
 
@@ -580,8 +584,8 @@ msgid "Font family"
 msgstr "字体"
 
 msgctxt "Settings"
-msgid "Choose an installed font family. Select System default to use the OS default."
-msgstr "选择已安装的字体。选择“系统默认”将使用操作系统的默认字体。"
+msgid "Choose an installed font family. System default uses the platform UI font when available."
+msgstr "选择已安装的字体。选择“系统默认”时，将优先使用平台界面字体（如果可用）。"
 
 msgctxt "Settings"
 msgid "Font size"
@@ -590,6 +594,22 @@ msgstr "字体大小"
 msgctxt "Settings"
 msgid "Base text size used throughout the interface."
 msgstr "用于整个界面的基准字号。"
+
+msgctxt "Settings"
+msgid "Interface animations"
+msgstr "界面动画"
+
+msgctxt "Settings"
+msgid "Animate details, menus, and session transitions. Disable for instant changes."
+msgstr "为详情、菜单和搜索会话添加动画。关闭后立即切换。"
+
+msgctxt "Settings"
+msgid "Accent color"
+msgstr "强调色"
+
+msgctxt "Settings"
+msgid "Leave empty for the default blue-violet, enter system to follow the system accent, or specify #RRGGBB."
+msgstr "留空使用默认蓝紫色；输入 system 跟随系统强调色；或输入 #RRGGBB 自定义颜色。"
 
 msgctxt "Settings"
 msgid "List row height"
@@ -796,8 +816,8 @@ msgid "Panel"
 msgstr "面板"
 
 msgctxt "SettingsWindow"
-msgid "URL template (include {query})"
-msgstr "网址模板（包含 {query}）"
+msgid "URL template (include {{query}})"
+msgstr "网址模板（包含 {{query}}）"
 
 msgctxt "SettingsWindow"
 msgid "Target path or command"
@@ -916,10 +936,6 @@ msgid "Result type order"
 msgstr "结果类型顺序"
 
 msgctxt "Settings"
-msgid "More accurate text matches stay first. This order breaks ties between result types."
-msgstr "文本匹配更准确的结果始终靠前；此顺序仅用于匹配程度相同的结果类型。"
-
-msgctxt "Settings"
 msgid "Move this result type earlier or later."
 msgstr "调整此类结果的优先顺序。"
 
@@ -985,6 +1001,106 @@ msgstr "用逗号分隔此命令的触发词。留空则使用插件默认值。
 msgctxt "SettingsWindow"
 msgid "Press a modifier and key, or Escape to cancel"
 msgstr "按下一个修饰键和按键，或按 Esc 取消"
+
+msgctxt "Settings"
+msgid "Folder is already indexed"
+msgstr "该文件夹已在索引中。"
+
+msgctxt "Settings"
+msgid "Folder does not exist: {path}"
+msgstr "文件夹不存在：{path}"
+
+msgctxt "Settings"
+msgid "Indexed folder no longer exists"
+msgstr "索引文件夹已不存在。"
+
+msgctxt "Settings"
+msgid "Shortcut name and prefix are required"
+msgstr "快捷项名称和前缀为必填项。"
+
+msgctxt "Settings"
+msgid "Invalid shortcut type"
+msgstr "快捷项类型无效。"
+
+msgctxt "Settings"
+msgid "Invalid shortcut mode"
+msgstr "快捷项模式无效。"
+
+msgctxt "Settings"
+msgid "URL template must contain {query}"
+msgstr "网址模板必须包含 {query}。"
+
+msgctxt "Settings"
+msgid "Application or command target is required"
+msgstr "必须填写应用程序或命令目标。"
+
+msgctxt "Settings"
+msgid "Shortcut prefix is already used by a built-in shortcut"
+msgstr "此前缀已被内置快捷项使用。"
+
+msgctxt "Settings"
+msgid "Shortcut prefix is already used by a plugin"
+msgstr "此前缀已被插件使用。"
+
+msgctxt "Settings"
+msgid "Shortcut prefix is already in use"
+msgstr "此前缀已被使用。"
+
+msgctxt "Settings"
+msgid "Shortcut no longer exists"
+msgstr "快捷项已不存在。"
+
+msgctxt "Settings"
+msgid "Priority item no longer exists: {id}"
+msgstr "排序项目已不存在：{id}"
+
+msgctxt "Settings"
+msgid "Priority drop target no longer exists: {target}"
+msgstr "排序拖放目标已不存在：{target}"
+
+msgctxt "Settings"
+msgid "Priority items must be dropped within the same list"
+msgstr "排序项目只能拖放到同一列表内。"
+
+msgctxt "Settings"
+msgid "Accent color must be empty, system, or an explicit #RRGGBB value"
+msgstr "强调色必须留空、为 system，或使用 #RRGGBB 格式。"
+
+msgctxt "Settings"
+msgid "Shortcut keyword must be one non-empty word"
+msgstr "快捷关键词必须是一个非空单词。"
+
+msgctxt "Settings"
+msgid "Built-in shortcut keywords must be different"
+msgstr "内置快捷关键词不能相同。"
+
+msgctxt "Settings"
+msgid "Shortcut keyword is already in use"
+msgstr "快捷关键词已被使用。"
+
+msgctxt "Settings"
+msgid "Shortcut keyword is already in use by a plugin"
+msgstr "快捷关键词已被插件使用。"
+
+msgctxt "Settings"
+msgid "Each trigger word must be a single word"
+msgstr "每个触发词必须是一个单词。"
+
+msgctxt "Settings"
+msgid "Trigger words must be 48 characters or fewer"
+msgstr "触发词不能超过 48 个字符。"
+
+msgctxt "Settings"
+msgid "A command can have at most 16 trigger words"
+msgstr "一个命令最多可以有 16 个触发词。"
+
+msgctxt "Settings"
+msgid "One or more trigger words are already in use"
+msgstr "一个或多个触发词已被使用。"
+
+msgctxt "Settings"
+msgid "Could not open the folder picker"
+msgstr "无法打开文件夹选择器"
 
 msgid "Settings"
 msgstr "设置"

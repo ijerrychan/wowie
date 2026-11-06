@@ -16,7 +16,11 @@ pub fn run() -> Result<()> {
     window.set_native_window_frame(cfg!(windows));
     settings_window.set_native_window_frame(cfg!(windows));
     context_window.set_native_window_frame(cfg!(windows));
-    settings::preload_font_families(settings_window.as_weak());
+    settings::preload_font_families(
+        settings_window.as_weak(),
+        window.as_weak(),
+        context_window.as_weak(),
+    );
     let slint_language = i18n::effective_language(&config.language);
     slint::select_bundled_translation(&slint_language)
         .map_err(|error| anyhow::anyhow!("could not select language: {error}"))?;
@@ -35,6 +39,7 @@ pub fn run() -> Result<()> {
         "light" => false,
         _ => platform.system_prefers_dark_theme(),
     };
+    let ui_font_family = settings::resolved_ui_font_family(&config.font_family);
     if config_was_valid {
         if let Err(error) = config.save() {
             eprintln!("could not persist configuration: {error:#}");
@@ -84,6 +89,7 @@ pub fn run() -> Result<()> {
     let show_advanced_details = Arc::new(AtomicBool::new(config.show_advanced_details));
     let show_advanced_launch_entries =
         Arc::new(AtomicBool::new(config.show_advanced_launch_entries));
+    let animations_enabled = Arc::new(AtomicBool::new(config.animations_enabled));
     let follow_system_theme = Arc::new(AtomicBool::new(config.theme == "system"));
     let hide_on_focus_loss = Arc::new(AtomicBool::new(config.hide_on_focus_loss));
     let query_generation = Arc::new(AtomicU64::new(0));
@@ -106,7 +112,7 @@ pub fn run() -> Result<()> {
 
     window.set_results(ModelRc::from(results.clone()));
     window.set_window_width(config.window_width as i32);
-    window.set_ui_font_family(config.font_family.clone().into());
+    window.set_ui_font_family(ui_font_family.clone().into());
     window.set_ui_font_size(config.font_size as f32);
     window.set_result_window_height(config.window_height as f32);
     window.set_compact_search(config.compact_search);
@@ -114,18 +120,11 @@ pub fn run() -> Result<()> {
     window.set_empty_query_results_visible(false);
     window.set_list_item_height(config.list_item_height as f32);
     window.set_dark_mode(dark_mode);
-    let accent = platform.system_accent_color();
-    window.set_accent_color(slint::Color::from_rgb_u8(
-        ((accent >> 16) & 0xff) as u8,
-        ((accent >> 8) & 0xff) as u8,
-        (accent & 0xff) as u8,
-    ));
-    window.set_accent_background(slint::Color::from_argb_u8(
-        if dark_mode { 0x42 } else { 0x28 },
-        ((accent >> 16) & 0xff) as u8,
-        ((accent >> 8) & 0xff) as u8,
-        (accent & 0xff) as u8,
-    ));
+    window.set_animations_enabled(config.animations_enabled);
+    let (accent_color, accent_background) =
+        accent_colors(&config, platform.system_accent_color(), dark_mode);
+    window.set_accent_color(accent_color);
+    window.set_accent_background(accent_background);
     window.set_search_icon(slint::Image::default());
     window.set_search_icon_previous(slint::Image::default());
     window.set_search_icon_previous_kind(String::new().into());
@@ -143,19 +142,13 @@ pub fn run() -> Result<()> {
         context_window.as_weak(),
         ContextMenu::get_native_background_color,
     );
-    context_window.set_ui_font_family(config.font_family.clone().into());
+    context_window.set_ui_font_family(ui_font_family.clone().into());
     context_window.set_ui_font_size(config.font_size as f32);
-    context_window.set_accent_color(slint::Color::from_rgb_u8(
-        ((accent >> 16) & 0xff) as u8,
-        ((accent >> 8) & 0xff) as u8,
-        (accent & 0xff) as u8,
-    ));
-    settings_window.set_accent_color(slint::Color::from_rgb_u8(
-        ((accent >> 16) & 0xff) as u8,
-        ((accent >> 8) & 0xff) as u8,
-        (accent & 0xff) as u8,
-    ));
-    settings_window.set_ui_font_family(config.font_family.clone().into());
+    context_window.set_accent_color(accent_color);
+    context_window.set_animations_enabled(config.animations_enabled);
+    settings_window.set_accent_color(accent_color);
+    settings_window.set_animations_enabled(config.animations_enabled);
+    settings_window.set_ui_font_family(ui_font_family.into());
     settings_window.set_ui_font_size(config.font_size as f32);
 
     settings_callbacks::register_settings_callbacks(
@@ -163,6 +156,8 @@ pub fn run() -> Result<()> {
         &window,
         &context_window,
         plugin_settings.clone(),
+        Arc::clone(&platform),
+        Arc::clone(&animations_enabled),
     );
 
     let hotkey_registration = platform.register_hotkey(&config.hotkey, true, &platform_shutdown)?;
@@ -490,6 +485,7 @@ pub fn run() -> Result<()> {
         let icon_service = icon_service.clone();
         let detail_generation = Arc::clone(&detail_generation);
         let explicit_detail_item = Arc::clone(&explicit_detail_item);
+        let animations_enabled = Arc::clone(&animations_enabled);
         window.on_detail_back_requested(move || {
             // Invalidate an in-flight dynamic preview before hiding it. A
             // late provider response must not reopen the detail surface.
@@ -503,9 +499,16 @@ pub fn run() -> Result<()> {
                 let delayed_window = window.as_weak();
                 let detail_generation = Arc::clone(&detail_generation);
                 let icon_service = icon_service.clone();
-                // Leave one render interval after the 180ms Slint animation
-                // before clearing its content and detail layout state.
-                Timer::single_shot(Duration::from_millis(200), move || {
+                // Leave one render interval after the 160ms Slint animation
+                // before clearing its content and detail layout state. With
+                // animations disabled the panel already snapped closed, so the
+                // cleanup can run on the next event-loop turn.
+                let cleanup_delay = if animations_enabled.load(Ordering::Acquire) {
+                    Duration::from_millis(200)
+                } else {
+                    Duration::ZERO
+                };
+                Timer::single_shot(cleanup_delay, move || {
                     if detail_generation.load(Ordering::Acquire) != close_generation {
                         return;
                     }
@@ -1673,6 +1676,7 @@ pub fn run() -> Result<()> {
             tray_updates: tray_updates.clone(),
             follow_system_theme: Arc::clone(&follow_system_theme),
             hide_on_focus_loss: Arc::clone(&hide_on_focus_loss),
+            animations_enabled: Arc::clone(&animations_enabled),
             custom_directories: Arc::clone(&custom_directories),
             show_advanced_details: Arc::clone(&show_advanced_details),
             show_advanced_launch_entries: Arc::clone(&show_advanced_launch_entries),
@@ -1941,13 +1945,17 @@ pub fn run() -> Result<()> {
                     let window = weak.upgrade();
                     let settings = settings_weak.upgrade();
                     let context = context_weak.upgrade();
-                    apply_theme_to_windows(
-                        dark_mode,
-                        platform.as_ref(),
-                        window.as_ref(),
-                        settings.as_ref(),
-                        context.as_ref(),
-                    );
+                    let (current, valid) = config::Config::load();
+                    if valid {
+                        apply_theme_to_windows(
+                            dark_mode,
+                            &current,
+                            platform.as_ref(),
+                            window.as_ref(),
+                            settings.as_ref(),
+                            context.as_ref(),
+                        );
+                    }
                 }
                 platform::PlatformEvent::SystemThemeChanged => {}
                 platform::PlatformEvent::OpenSettings => {

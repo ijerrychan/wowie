@@ -31,6 +31,9 @@ pub(super) struct ResultRowPayload {
     section_more_key: String,
     headers_before: i32,
     is_best_match: bool,
+    /// Set by SearchCore's evidence check. Independent of fallback/command
+    /// eligibility, which [`ResultFilterState::best_match_index`] also applies.
+    pub(super) best_match_eligible: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -94,7 +97,7 @@ impl ResultFilterState {
             "document",
             "bookmark",
             "window",
-            "search_tools",
+            "command",
             "other",
         ];
         let mut counts = [0_usize; 11];
@@ -181,7 +184,9 @@ impl ResultFilterState {
             .iter()
             .zip(&self.all_rows)
             .position(|(item, row)| {
-                !row.is_fallback && effective_category_key(item) != "search_tools"
+                row.best_match_eligible
+                    && !row.is_fallback
+                    && effective_category_key(item) != "command"
             })
     }
 
@@ -239,7 +244,7 @@ impl ResultFilterState {
                 continue;
             }
             if self.mode == PresentationMode::RootEmpty {
-                let group = if effective_category_key(item) == "search_tools" {
+                let group = if effective_category_key(item) == "command" {
                     1
                 } else if row.favorite {
                     0
@@ -247,7 +252,7 @@ impl ResultFilterState {
                     2
                 };
                 empty_groups[group].push(index);
-            } else if row.is_fallback && effective_category_key(item) != "search_tools" {
+            } else if row.is_fallback && effective_category_key(item) != "command" {
                 fallback.push(index);
             } else {
                 let key = effective_category_key(item);
@@ -259,7 +264,7 @@ impl ResultFilterState {
             }
         }
         if self.mode == PresentationMode::RootEmpty {
-            for (key, indices) in ["favorites", "search_tools", "suggestions"]
+            for (key, indices) in ["favorites", "command", "suggestions"]
                 .into_iter()
                 .zip(empty_groups)
             {
@@ -320,15 +325,7 @@ impl ResultFilterState {
 }
 
 fn effective_category_key(item: &SearchResult) -> &'static str {
-    if item
-        .actions
-        .iter()
-        .any(|action| matches!(action, crate::result::Action::EnterSearchEngine { .. }))
-    {
-        "search_tools"
-    } else {
-        category_key(item.category)
-    }
+    category_key(item.effective_category())
 }
 
 fn category_key(category: ResultCategory) -> &'static str {
@@ -342,6 +339,7 @@ fn category_key(category: ResultCategory) -> &'static str {
         ResultCategory::Document => "document",
         ResultCategory::Bookmark => "bookmark",
         ResultCategory::Window => "window",
+        ResultCategory::Command => "command",
         ResultCategory::Other => "other",
         ResultCategory::Unclassified => "other",
     }
@@ -390,6 +388,10 @@ impl ResultRowPayload {
             section_more_key: String::new(),
             headers_before: 0,
             is_best_match: false,
+            // Direct construction (including unit tests) keeps the historical
+            // assumption that the first ordinary row may headline the list.
+            // Search presentation overrides this with lexical evidence.
+            best_match_eligible: true,
         }
     }
 }
@@ -439,6 +441,7 @@ pub(super) fn static_icon_kind(icon: Option<&IconSpec>) -> &'static str {
         Some(IconSpec::Calculator) => "calculator",
         Some(IconSpec::Named(name)) => match name.as_str() {
             "book" | "wowie" => "book",
+            "bookmark" => "bookmark",
             "window" => "window",
             "checklist" => "checklist",
             "folder-open" => "folder-open",
@@ -699,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn session_actions_define_exclusive_search_tools_in_every_mode() {
+    fn session_actions_define_exclusive_command_in_every_mode() {
         let mut entry = item("arbitrary-id", ResultCategory::Bookmark);
         entry
             .actions
@@ -725,14 +728,14 @@ mod tests {
             );
             assert_eq!(
                 filter.categories(),
-                [("bookmark", 1), ("search_tools", 2), ("other", 1)]
+                [("bookmark", 1), ("command", 2), ("other", 1)]
             );
             assert!(filter.all_rows[0].category_kind.is_empty());
             let (_, rows) = filter.visible();
             if mode != PresentationMode::Engine {
-                assert!(rows.iter().any(|row| row.section_kind == "search_tools"));
+                assert!(rows.iter().any(|row| row.section_kind == "command"));
             }
-            filter.selected = "search_tools".into();
+            filter.selected = "command".into();
             let (shown, rows) = filter.visible();
             assert_eq!(
                 shown
@@ -742,7 +745,7 @@ mod tests {
                 ["arbitrary-id", "fav-tool"]
             );
             if mode != PresentationMode::Engine {
-                assert_eq!(rows[0].section_kind, "search_tools");
+                assert_eq!(rows[0].section_kind, "command");
             }
             filter.selected = "other".into();
             assert_eq!(filter.visible().0[0].id, "normal-other");
@@ -752,7 +755,87 @@ mod tests {
     }
 
     #[test]
-    fn search_tools_more_filter_expands_all_entries_without_best_match() {
+    fn every_session_entry_is_command_but_ordinary_launches_keep_their_category() {
+        let mut bookmark_entry = item("bookmarks:entry", ResultCategory::Bookmark);
+        bookmark_entry
+            .actions
+            .push(crate::result::Action::EnterSearchEngine {
+                prefix: "bm ".into(),
+            });
+        let mut window_entry = item("windows:entry", ResultCategory::Window);
+        window_entry
+            .actions
+            .push(crate::result::Action::EnterSearchEngine {
+                prefix: "< ".into(),
+            });
+        let mut plugin_entry = item("plugin:demo:menu", ResultCategory::Application);
+        plugin_entry
+            .actions
+            .push(crate::result::Action::EnterSearchEngine {
+                prefix: "demo ".into(),
+            });
+        for entry in [&bookmark_entry, &window_entry, &plugin_entry] {
+            assert!(entry.is_session_entry());
+            assert_eq!(entry.effective_category(), ResultCategory::Command);
+            assert_eq!(effective_category_key(entry), "command");
+        }
+
+        // A launchable command-line or application result is not a session
+        // entry merely because of its title or category.
+        let mut launchable_command = item("shortcut:active", ResultCategory::Other);
+        launchable_command.title = "Execute Command \"ipconfig\"".into();
+        launchable_command
+            .actions
+            .push(crate::result::Action::Launch(crate::result::LaunchEntry {
+                source: SourceId::Shortcut,
+                path: std::path::PathBuf::new(),
+                target: std::path::PathBuf::from("pwsh.exe"),
+                arguments: "-Command ipconfig".into(),
+                working_directory: None,
+                icon: None,
+            }));
+        assert!(!launchable_command.is_session_entry());
+        assert_eq!(effective_category_key(&launchable_command), "other");
+
+        let application = item("application", ResultCategory::Application);
+        assert_eq!(effective_category_key(&application), "application");
+
+        // An explicitly categorized command result remains a command even
+        // without a session action.
+        assert_eq!(
+            effective_category_key(&item("command-result", ResultCategory::Command)),
+            "command"
+        );
+    }
+
+    #[test]
+    fn results_inside_a_session_keep_their_provider_categories() {
+        let items = Arc::new(vec![
+            item("window-result", ResultCategory::Window),
+            item("bookmark-result", ResultCategory::Bookmark),
+            item("website-result", ResultCategory::Website),
+        ]);
+        let rows = items
+            .iter()
+            .map(|item| ResultRowPayload::from(item, false, None, false, false))
+            .collect();
+        let mut filter = ResultFilterState::default();
+        filter.replace(1, Arc::clone(&items), rows, Some(PresentationMode::Engine));
+        for item in items.iter() {
+            assert!(!item.is_session_entry());
+            assert_eq!(item.effective_category(), item.category);
+        }
+        assert_eq!(
+            filter.categories(),
+            [("website", 1), ("bookmark", 1), ("window", 1)]
+        );
+        let (shown, rows) = filter.visible();
+        assert_eq!(shown.len(), 3);
+        assert!(rows.iter().all(|row| row.section_kind.is_empty()));
+    }
+
+    #[test]
+    fn command_more_filter_expands_all_entries_without_best_match() {
         let items = (0..5)
             .map(|index| {
                 let mut entry = item(&format!("entry-{index}"), ResultCategory::Other);
@@ -771,18 +854,18 @@ mod tests {
                 .iter()
                 .map(|f| f.key.as_str())
                 .collect::<Vec<_>>(),
-            ["all", "search_tools"]
+            ["all", "command"]
         );
         let (_, rows) = filter.visible();
         assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].section_kind, "search_tools");
+        assert_eq!(rows[0].section_kind, "command");
         assert_eq!(rows[0].section_count, 5);
-        assert_eq!(rows[0].section_more_key, "search_tools");
+        assert_eq!(rows[0].section_more_key, "command");
         assert!(rows.iter().all(|row| !row.is_best_match));
-        filter.selected = "search_tools".into();
+        filter.selected = "command".into();
         let (_, rows) = filter.visible();
         assert_eq!(rows.len(), 5);
-        assert_eq!(rows[0].section_kind, "search_tools");
+        assert_eq!(rows[0].section_kind, "command");
         assert!(rows.iter().all(|row| row.section_more_key.is_empty()));
     }
 
@@ -985,8 +1068,50 @@ mod tests {
             rows.iter()
                 .map(|row| row.section_kind.as_str())
                 .collect::<Vec<_>>(),
-            ["best_match", "search_tools", "fallbacks", ""]
+            ["best_match", "command", "fallbacks", ""]
         );
+    }
+
+    #[test]
+    fn weak_match_rows_do_not_take_the_best_match_slot() {
+        let items = Arc::new(vec![
+            item("weak", ResultCategory::Application),
+            item("strong", ResultCategory::Website),
+        ]);
+        let mut rows = items
+            .iter()
+            .map(|item| ResultRowPayload::from(item, false, None, false, false))
+            .collect::<Vec<_>>();
+        // SearchCore marks the leading weak match as ineligible while the
+        // later strong match remains eligible.
+        rows[0].best_match_eligible = false;
+        let mut filter = ResultFilterState::default();
+        filter.replace(1, items, rows, Some(PresentationMode::RootSearch));
+        let (shown, rows) = filter.visible();
+        assert_eq!(shown[0].id, "strong");
+        assert_eq!(rows[0].section_kind, "best_match");
+        assert_eq!(rows.iter().filter(|row| row.is_best_match).count(), 1);
+    }
+
+    #[test]
+    fn only_weak_matches_leave_the_best_match_slot_empty() {
+        let items = Arc::new(vec![
+            item("weak-a", ResultCategory::Application),
+            item("weak-b", ResultCategory::Website),
+        ]);
+        let mut rows = items
+            .iter()
+            .map(|item| ResultRowPayload::from(item, false, None, false, false))
+            .collect::<Vec<_>>();
+        for row in &mut rows {
+            row.best_match_eligible = false;
+        }
+        let mut filter = ResultFilterState::default();
+        filter.replace(1, items, rows, Some(PresentationMode::RootSearch));
+        let (shown, rows) = filter.visible();
+        assert_eq!(shown.len(), 2);
+        assert!(rows.iter().all(|row| !row.is_best_match));
+        assert_eq!(rows[0].section_kind, "application");
     }
 
     #[test]
@@ -1092,7 +1217,7 @@ mod tests {
         assert_eq!(shown.len(), 7);
         assert!(shown[0].id.starts_with("fav"));
         assert_eq!(rows[0].section_kind, "favorites");
-        assert_eq!(rows[5].section_kind, "search_tools");
+        assert_eq!(rows[5].section_kind, "command");
         assert_eq!(rows[6].section_kind, "suggestions");
         assert!(rows
             .iter()

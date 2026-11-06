@@ -40,6 +40,10 @@ msgid "Searching..."
 msgstr "Searching..."
 
 msgctxt "Launcher"
+msgid "All"
+msgstr "All"
+
+msgctxt "Launcher"
 msgid "Could not open application"
 msgstr "Could not open application"
 
@@ -104,8 +108,8 @@ msgid "Favorites"
 msgstr "Favorites"
 
 msgctxt "Launcher"
-msgid "Search tools"
-msgstr "Search tools"
+msgid "Command"
+msgstr "Command"
 
 msgctxt "Launcher"
 msgid "Suggestions"
@@ -448,6 +452,10 @@ msgid "Search with Everything"
 msgstr "Search with Everything"
 
 msgctxt "Launcher"
+msgid "Search files"
+msgstr "Search files"
+
+msgctxt "Launcher"
 msgid "Google Translate"
 msgstr "Google Translate"
 
@@ -572,8 +580,8 @@ msgid "Font family"
 msgstr "Font family"
 
 msgctxt "Settings"
-msgid "Choose an installed font family. Select System default to use the OS default."
-msgstr "Choose an installed font family. Select System default to use the OS default."
+msgid "Choose an installed font family. System default uses the platform UI font when available."
+msgstr "Choose an installed font family. System default uses the platform UI font when available."
 
 msgctxt "Settings"
 msgid "Font size"
@@ -582,6 +590,22 @@ msgstr "Font size"
 msgctxt "Settings"
 msgid "Base text size used throughout the interface."
 msgstr "Base text size used throughout the interface."
+
+msgctxt "Settings"
+msgid "Interface animations"
+msgstr "Interface animations"
+
+msgctxt "Settings"
+msgid "Animate details, menus, and session transitions. Disable for instant changes."
+msgstr "Animate details, menus, and session transitions. Disable for instant changes."
+
+msgctxt "Settings"
+msgid "Accent color"
+msgstr "Accent color"
+
+msgctxt "Settings"
+msgid "Leave empty for the default blue-violet, enter system to follow the system accent, or specify #RRGGBB."
+msgstr "Leave empty for the default blue-violet, enter system to follow the system accent, or specify #RRGGBB."
 
 msgctxt "Settings"
 msgid "List row height"
@@ -888,8 +912,8 @@ msgid "Panel"
 msgstr "Panel"
 
 msgctxt "SettingsWindow"
-msgid "URL template (include {query})"
-msgstr "URL template (include {query})"
+msgid "URL template (include {{query}})"
+msgstr "URL template (include {{query}})"
 
 msgctxt "SettingsWindow"
 msgid "Target path or command"
@@ -978,6 +1002,106 @@ msgstr "Comma-separated words that activate this command. Leave empty to use plu
 msgctxt "SettingsWindow"
 msgid "Press a modifier and key, or Escape to cancel"
 msgstr "Press a modifier and key, or Escape to cancel"
+
+msgctxt "Settings"
+msgid "Folder is already indexed"
+msgstr "Folder is already indexed"
+
+msgctxt "Settings"
+msgid "Folder does not exist: {path}"
+msgstr "Folder does not exist: {path}"
+
+msgctxt "Settings"
+msgid "Indexed folder no longer exists"
+msgstr "Indexed folder no longer exists"
+
+msgctxt "Settings"
+msgid "Shortcut name and prefix are required"
+msgstr "Shortcut name and prefix are required"
+
+msgctxt "Settings"
+msgid "Invalid shortcut type"
+msgstr "Invalid shortcut type"
+
+msgctxt "Settings"
+msgid "Invalid shortcut mode"
+msgstr "Invalid shortcut mode"
+
+msgctxt "Settings"
+msgid "URL template must contain {query}"
+msgstr "URL template must contain {query}"
+
+msgctxt "Settings"
+msgid "Application or command target is required"
+msgstr "Application or command target is required"
+
+msgctxt "Settings"
+msgid "Shortcut prefix is already used by a built-in shortcut"
+msgstr "Shortcut prefix is already used by a built-in shortcut"
+
+msgctxt "Settings"
+msgid "Shortcut prefix is already used by a plugin"
+msgstr "Shortcut prefix is already used by a plugin"
+
+msgctxt "Settings"
+msgid "Shortcut prefix is already in use"
+msgstr "Shortcut prefix is already in use"
+
+msgctxt "Settings"
+msgid "Shortcut no longer exists"
+msgstr "Shortcut no longer exists"
+
+msgctxt "Settings"
+msgid "Priority item no longer exists: {id}"
+msgstr "Priority item no longer exists: {id}"
+
+msgctxt "Settings"
+msgid "Priority drop target no longer exists: {target}"
+msgstr "Priority drop target no longer exists: {target}"
+
+msgctxt "Settings"
+msgid "Priority items must be dropped within the same list"
+msgstr "Priority items must be dropped within the same list"
+
+msgctxt "Settings"
+msgid "Accent color must be empty, system, or an explicit #RRGGBB value"
+msgstr "Accent color must be empty, system, or an explicit #RRGGBB value"
+
+msgctxt "Settings"
+msgid "Shortcut keyword must be one non-empty word"
+msgstr "Shortcut keyword must be one non-empty word"
+
+msgctxt "Settings"
+msgid "Built-in shortcut keywords must be different"
+msgstr "Built-in shortcut keywords must be different"
+
+msgctxt "Settings"
+msgid "Shortcut keyword is already in use"
+msgstr "Shortcut keyword is already in use"
+
+msgctxt "Settings"
+msgid "Shortcut keyword is already in use by a plugin"
+msgstr "Shortcut keyword is already in use by a plugin"
+
+msgctxt "Settings"
+msgid "Each trigger word must be a single word"
+msgstr "Each trigger word must be a single word"
+
+msgctxt "Settings"
+msgid "Trigger words must be 48 characters or fewer"
+msgstr "Trigger words must be 48 characters or fewer"
+
+msgctxt "Settings"
+msgid "A command can have at most 16 trigger words"
+msgstr "A command can have at most 16 trigger words"
+
+msgctxt "Settings"
+msgid "One or more trigger words are already in use"
+msgstr "One or more trigger words are already in use"
+
+msgctxt "Settings"
+msgid "Could not open the folder picker"
+msgstr "Could not open the folder picker"
 
 msgid "Settings"
 msgstr "Settings"
