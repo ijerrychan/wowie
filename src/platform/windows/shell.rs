@@ -120,7 +120,7 @@ fn enumerate_control_panel_folder(
                 unsafe { CoTaskMemFree(Some(absolute.cast())) };
                 target
             };
-            let mut keywords = control_panel_keywords(&folder, root_pidl, child);
+            let keywords = control_panel_keywords(&folder, root_pidl, child);
             unsafe { CoTaskMemFree(Some(child.cast())) };
             let (Some(title), Some(parsing)) = (title, parsing) else {
                 continue;
@@ -146,13 +146,11 @@ fn enumerate_control_panel_folder(
                 "control-panel"
             };
             let identity = format!("{prefix}:{}", parsing.to_lowercase());
-            if !tasks {
-                keywords.extend(canonical_name.clone());
-            }
             items.push(super::super::ControlPanelItem {
                 identity,
                 title,
-                aliases: keywords,
+                aliases: canonical_name.clone().into_iter().collect(),
+                keywords,
                 area: tasks.then_some(canonical_name).flatten(),
                 launch_target: target,
                 icon_target,
@@ -200,7 +198,7 @@ fn control_panel_keywords(
         .unwrap_or_default()
         .split(';')
         .map(str::trim)
-        .filter(|s| !s.is_empty())
+        .filter(|keyword| !keyword.is_empty())
     {
         if !keywords
             .iter()
@@ -922,7 +920,13 @@ fn store_application(
     title: String,
     source: &'static str,
 ) -> super::super::StoreApplication {
-    store_application_with_metadata(aumid, title, source, None, None)
+    let mut application = store_application_with_metadata(aumid, title, source, None, None);
+    if let Some(location) = super::package_install_location(aumid) {
+        if let Some(alias) = crate::platform::package_manifest_executable_alias(&location, aumid) {
+            application.aliases.push(alias);
+        }
+    }
+    application
 }
 
 pub(super) fn store_application_with_metadata(
@@ -932,17 +936,12 @@ pub(super) fn store_application_with_metadata(
     package_metadata: Option<super::super::PackageMetadata>,
     description: Option<String>,
 ) -> super::super::StoreApplication {
-    let mut aliases = Vec::new();
-    if let Some(product) = aumid
-        .split('!')
-        .next()
-        .and_then(|value| value.split('_').next())
-    {
-        let product = product.replace(['.', '_'], " ");
-        if !product.is_empty() && !product.eq_ignore_ascii_case(&title) {
-            aliases.push(product);
-        }
-    }
+    let aliases = package_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.install_location.as_deref())
+        .and_then(|location| crate::platform::package_manifest_executable_alias(location, aumid))
+        .into_iter()
+        .collect();
     let launch_target = PathBuf::from(format!("shell:AppsFolder\\{aumid}"));
     let app_user_model_id = Some(aumid.to_owned());
     let package_family_name = aumid

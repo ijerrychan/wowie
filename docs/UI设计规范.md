@@ -42,6 +42,6 @@
 
 ## 平台边界
 
-Windows 继续使用 `native-window-frame`（`cfg!(windows)`）、DWM 原生圆角/阴影和 GDI 首帧背景填充，避免黑边与首帧闪色；这些原生外壳不属于 Slint 应用内容的统一范围。其他平台保留透明无框外壳和 Slint 自绘圆角。`native-background-color` 始终与各窗口实际画布一致。
+Windows 继续使用 `native-window-frame`（`cfg!(windows)`）、DWM 原生圆角/阴影和 GDI 首帧背景填充，避免黑边与首帧闪色。Windows 外框描边只由 DWM 绘制，`native-border-color` 同步主题边框 token；Slint 外框描边关闭，设置页标题背景不再另画圆角。其他平台保留透明无框外壳和 Slint 自绘圆角。`native-background-color` 始终与各窗口实际画布一致。
 
 本次改动没有在真实 macOS/Linux 设备或不同 Windows DPI/显卡组合上做逐项实机验证；已验证范围以 `cargo check`、格式检查和仓库内的软件渲染布局测试为准。此前文档中“用户已有强调色设置”的说法不准确：`accent_color`、界面动画开关和对应的中英文文案均为本次新增；原有实现只是直接读取系统强调色。

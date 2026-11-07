@@ -3217,3 +3217,27 @@ msgstr "登录 Windows 时启动"
 msgctxt "Settings"
 msgid "Start Wowie when you sign in to Windows."
 msgstr "登录 Windows 时启动 Wowie。"
+
+msgctxt "Settings"
+msgid "File search"
+msgstr "文件搜索"
+
+msgctxt "Settings"
+msgid "Show file search in the launcher and accept its keyword."
+msgstr "在启动器中显示文件搜索并接受其关键词。"
+
+msgctxt "Settings"
+msgid "File search backend"
+msgstr "文件搜索后端"
+
+msgctxt "Settings"
+msgid "Automatic prefers Everything and falls back to the Windows Search index."
+msgstr "自动模式优先使用 Everything，不可用时改用 Windows 文件索引。"
+
+msgctxt "Settings"
+msgid "File search keyword"
+msgstr "文件搜索关键词"
+
+msgctxt "Settings"
+msgid "Keyword used to enter file search; use one word without spaces."
+msgstr "进入文件搜索的关键词；请使用不含空格的单个词。"

@@ -13,6 +13,8 @@ use std::{
 };
 
 const HALF_LIFE_SECONDS: u64 = 7 * 24 * 60 * 60;
+const MAX_FRECENCY_LAUNCHES: u32 = 10_000;
+const MAX_FRECENCY_VALUE: i32 = 100;
 const MAX_BEHAVIOR_SCORE: i32 = 180;
 const WRITE_DEBOUNCE: Duration = Duration::from_millis(150);
 const HISTORY_MAX_AGE: u64 = 90 * 24 * 60 * 60;
@@ -567,8 +569,31 @@ pub(crate) fn engine_history_result_id(engine_id: &str, query: &str) -> String {
     format!("{engine_id}:history:{hash:016x}")
 }
 
-fn normalize_query(query: &str) -> String {
-    query.trim().to_lowercase()
+pub(crate) fn normalize_query(query: &str) -> String {
+    let mut normalized = String::with_capacity(query.len());
+    normalize_query_into(query, &mut normalized);
+    normalized
+}
+
+pub(crate) fn normalize_query_into(query: &str, normalized: &mut String) {
+    normalized.clear();
+    let mut pending_space = false;
+    for character in query.chars() {
+        let character = match character as u32 {
+            0xFF01..=0xFF5E => char::from_u32(character as u32 - 0xFEE0).unwrap(),
+            0x3000 => ' ',
+            _ => character,
+        };
+        if character.is_whitespace() {
+            pending_space = !normalized.is_empty();
+            continue;
+        }
+        if pending_space {
+            normalized.push(' ');
+            pending_space = false;
+        }
+        normalized.extend(character.to_lowercase());
+    }
 }
 
 fn unix_seconds() -> u64 {
@@ -583,17 +608,41 @@ fn frecency(count: u32, last_used: u64, now: u64) -> i32 {
         return 0;
     }
     let age = now.saturating_sub(last_used);
-    let decay = if age >= HALF_LIFE_SECONDS {
-        0
-    } else {
-        ((HALF_LIFE_SECONDS - age) * 100 / HALF_LIFE_SECONDS) as i32
-    };
-    (count.min(20) as i32 * decay / 10).min(100)
+    let frequency = (1.0 + f64::from(count.min(MAX_FRECENCY_LAUNCHES))).ln()
+        / (1.0 + f64::from(MAX_FRECENCY_LAUNCHES)).ln();
+    let decay = 2.0_f64.powf(-(age as f64) / HALF_LIFE_SECONDS as f64);
+    (f64::from(MAX_FRECENCY_VALUE) * frequency * decay).round() as i32
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frecency_uses_seven_day_half_life_and_safe_time_bounds() {
+        let now = 2_000_000_000;
+        let recent = frecency(100, now, now);
+        let one_half_life = frecency(100, now - HALF_LIFE_SECONDS, now);
+        let two_half_lives = frecency(100, now - 2 * HALF_LIFE_SECONDS, now);
+        assert!((2 * one_half_life - recent).abs() <= 1);
+        assert!((4 * two_half_lives - recent).abs() <= 2);
+        assert_eq!(frecency(100, now + 100, now), recent);
+        assert_eq!(frecency(u32::MAX, now, now), MAX_FRECENCY_VALUE);
+    }
+
+    #[test]
+    fn frecency_frequency_growth_is_logarithmic_and_bounded() {
+        let now = 2_000_000_000;
+        let one = frecency(1, now, now);
+        let ten = frecency(10, now, now);
+        let hundred = frecency(100, now, now);
+        assert!(one > 0 && one < ten && ten < hundred);
+        assert!(frecency(MAX_FRECENCY_LAUNCHES, now, now) <= MAX_FRECENCY_VALUE);
+        assert_eq!(
+            frecency(u32::MAX, now, now),
+            frecency(MAX_FRECENCY_LAUNCHES, now, now)
+        );
+    }
 
     #[test]
     fn batch_scores_preserve_candidate_order_and_query_normalization() {
@@ -736,12 +785,14 @@ mod tests {
                     query_launches: HashMap::from([
                         (" Calc ".into(), 2),
                         ("calc".into(), 1),
+                        ("\u{FF23}\u{FF21}\u{FF2C}\u{FF23}\u{3000}\t".into(), 1),
                         ("  ".into(), 1),
                         ("old".into(), 1),
                     ]),
                     query_last_used: HashMap::from([
                         (" Calc ".into(), now),
                         ("calc".into(), now - 1),
+                        ("\u{FF23}\u{FF21}\u{FF2C}\u{FF23}\u{3000}\t".into(), now - 2),
                         ("  ".into(), now),
                         ("old".into(), now - HISTORY_MAX_AGE - 1),
                     ]),
@@ -760,13 +811,36 @@ mod tests {
         assert!(!items.contains_key("stale"));
         assert_eq!(
             items["app"].query_launches,
-            HashMap::from([("calc".into(), 3)])
+            HashMap::from([("calc".into(), 4)])
         );
         assert_eq!(
             items["app"].query_last_used,
             HashMap::from([("calc".into(), now)])
         );
+        let ranker = Ranker {
+            history: Mutex::new(HistoryFile {
+                items: items.clone(),
+                ..HistoryFile::default()
+            }),
+            writer: None,
+            actions_since_compaction: AtomicU64::new(0),
+            query_count: AtomicUsize::new(1),
+        };
+        assert_eq!(
+            ranker.scores(["app"], "calc"),
+            ranker.scores(["app"], "\u{FF23}\u{FF21}\u{FF2C}\u{FF23}\u{3000}\t")
+        );
         assert!(!compact_behavior_history(&mut items, now));
+    }
+
+    #[test]
+    fn query_normalization_maps_finite_fullwidth_ascii_and_collapses_whitespace() {
+        assert_eq!(
+            normalize_query("  \u{FF27}\u{FF4F}\u{FF4F}\u{FF47}\u{FF4C}\u{FF45}\u{3000}  CHROME\t"),
+            "google chrome"
+        );
+        assert_eq!(normalize_query("  Calc  "), "calc");
+        assert_eq!(normalize_query("\u{FF11}\u{FF12}"), "12");
     }
 
     #[test]

@@ -43,6 +43,17 @@ pub(super) fn associate_file_entries(items: &mut Vec<SearchResult>) -> Associati
                 application.icon = item.icon.clone();
             }
             application.aliases.extend(item.aliases);
+            for (target, values) in [
+                (&mut application.metadata.keywords, item.metadata.keywords),
+                (&mut application.metadata.context, item.metadata.context),
+                (&mut application.metadata.technical, item.metadata.technical),
+            ] {
+                for value in values {
+                    if !target.contains(&value) {
+                        target.push(value);
+                    }
+                }
+            }
             application.sources.extend(item.sources);
             merge_launch_entries(application, item.launch_entries);
         } else {

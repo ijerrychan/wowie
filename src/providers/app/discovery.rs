@@ -196,11 +196,30 @@ pub(super) fn collect_store_apps(
             );
         }
         let launch_target = app.launch_target.clone();
+        let search_metadata = app
+            .executable
+            .as_deref()
+            .map(crate::platform::application_search_metadata)
+            .unwrap_or_default();
         output.push(SearchResult {
             id: app.identity.clone(),
             identity: app.identity,
             title: app.title,
             category: ResultCategory::Unclassified,
+            metadata: crate::result::SearchMetadata {
+                technical: app
+                    .app_user_model_id
+                    .iter()
+                    .flat_map(|aumid| {
+                        let family = aumid.split('!').next().unwrap_or(aumid);
+                        [Some(aumid.clone()), Some(family.replace(['.', '_'], " "))]
+                    })
+                    .flatten()
+                    .chain(search_metadata.technical)
+                    .collect(),
+                keywords: search_metadata.keywords,
+                context: search_metadata.context,
+            },
             aliases: app.aliases,
             location: launch_target.display().to_string(),
             launch_target: launch_target.clone(),
@@ -314,6 +333,7 @@ pub(super) fn collect_tree(
                 identity,
                 title: title.to_owned(),
                 category: ResultCategory::Unclassified,
+                metadata: crate::platform::application_search_metadata(&path),
                 aliases: Vec::new(),
                 location: path.display().to_string(),
                 launch_target: path.clone(),
@@ -369,6 +389,7 @@ pub(super) fn collect_tree(
                 identity: format!("url:{normalized_url}"),
                 title: title.to_owned(),
                 category: ResultCategory::Unclassified,
+                metadata: Default::default(),
                 aliases: Vec::new(),
                 location: url.clone(),
                 launch_target: PathBuf::from(&url),
@@ -423,6 +444,7 @@ pub(super) fn collect_tree(
             target_identity(&resolved_target)
         };
         let aliases = target_stem_alias(title, &resolved_target);
+        let search_metadata = crate::platform::application_search_metadata(&resolved_target);
         let (app_user_model_id, package_family_name) = packaged_identity_fields(&identity);
         let icon = website_url
             .as_ref()
@@ -446,6 +468,7 @@ pub(super) fn collect_tree(
             title: title.to_owned(),
             category: ResultCategory::Unclassified,
             aliases,
+            metadata: search_metadata,
             location: path.display().to_string(),
             // Launch the shortcut itself so Windows preserves ShellLink metadata.
             launch_target: path.clone(),
@@ -484,6 +507,7 @@ pub(super) fn generic_file_result(path: &Path, title: &str, source: &str) -> Sea
         identity,
         title: title.to_owned(),
         category: ResultCategory::Unclassified,
+        metadata: Default::default(),
         aliases: Vec::new(),
         location: path.display().to_string(),
         launch_target: target.clone(),

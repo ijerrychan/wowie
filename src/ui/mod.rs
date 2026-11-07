@@ -84,21 +84,33 @@ pub(super) fn apply_theme_to_windows(
         launcher.set_accent_color(accent_color);
         launcher.set_accent_background(accent_background);
         launcher.set_animations_enabled(config.animations_enabled);
-        platform::set_window_background(launcher.window(), launcher.get_native_background_color());
+        platform::set_window_background(
+            launcher.window(),
+            launcher.get_native_background_color(),
+            launcher.get_native_border_color(),
+        );
         launcher.window().request_redraw();
     }
     if let Some(settings) = settings {
         settings.set_dark_mode(dark_mode);
         settings.set_accent_color(accent_color);
         settings.set_animations_enabled(config.animations_enabled);
-        platform::set_window_background(settings.window(), settings.get_native_background_color());
+        platform::set_window_background(
+            settings.window(),
+            settings.get_native_background_color(),
+            settings.get_native_border_color(),
+        );
         settings.window().request_redraw();
     }
     if let Some(context) = context {
         context.set_dark_mode(dark_mode);
         context.set_accent_color(accent_color);
         context.set_animations_enabled(config.animations_enabled);
-        platform::set_window_background(context.window(), context.get_native_background_color());
+        platform::set_window_background(
+            context.window(),
+            context.get_native_background_color(),
+            context.get_native_border_color(),
+        );
         context.window().request_redraw();
     }
 }
@@ -116,7 +128,11 @@ fn open_settings_window(
     let (config, _) = config::Config::load();
     settings::refresh(settings, &config, plugin_settings, &config.language);
     settings.set_status_message(String::new().into());
-    platform::set_window_background(settings.window(), settings.get_native_background_color());
+    platform::set_window_background(
+        settings.window(),
+        settings.get_native_background_color(),
+        settings.get_native_border_color(),
+    );
     let _ = settings.show();
     settings.window().request_redraw();
     platform.activate_palette(settings.window());
@@ -154,6 +170,7 @@ mod tests {
             identity: id.to_string(),
             title: id.to_string(),
             category: result::ResultCategory::Other,
+            metadata: Default::default(),
             aliases: Vec::new(),
             location: String::new(),
             launch_target: PathBuf::new(),
@@ -232,6 +249,7 @@ mod tests {
             identity: "shortcut:command".into(),
             title: "Execute Command \"echo test\"".into(),
             category: result::ResultCategory::Other,
+            metadata: Default::default(),
             aliases: Vec::new(),
             location: "PowerShell".into(),
             launch_target: PathBuf::from("pwsh.exe"),
@@ -307,6 +325,7 @@ mod tests {
             identity: "exe:chrome".into(),
             title: "Chrome".into(),
             category: result::ResultCategory::Application,
+            metadata: Default::default(),
             aliases: Vec::new(),
             location: "chrome.exe".into(),
             launch_target: default.target.clone(),

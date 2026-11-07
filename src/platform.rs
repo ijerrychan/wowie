@@ -512,11 +512,15 @@ pub trait PlatformIntegration: Send + Sync {
 }
 
 /// Match the native fallback surface to the Slint canvas before showing or resizing.
-pub(crate) fn set_window_background(window: &slint::Window, color: slint::Color) {
+pub(crate) fn set_window_background(
+    window: &slint::Window,
+    color: slint::Color,
+    border: slint::Color,
+) {
     #[cfg(windows)]
-    windows::set_window_background(window, color);
+    windows::set_window_background(window, color, border);
     #[cfg(not(windows))]
-    let _ = (window, color);
+    let _ = (window, color, border);
 }
 
 /// Open the system folder picker owned by the settings window.
@@ -599,12 +603,57 @@ pub struct StoreApplication {
 pub struct ControlPanelItem {
     pub identity: String,
     pub title: String,
-    /// Canonical applet names or OS-localized task keywords.
+    /// Canonical applet names or localized task names.
     pub aliases: Vec<String>,
+    /// Shell keyword property values, kept weaker than the visible name.
+    pub keywords: Vec<String>,
     pub area: Option<String>,
     pub launch_target: std::path::PathBuf,
     /// Captured absolute Shell PIDL; independent of the launch destination.
     pub icon_target: std::path::PathBuf,
+}
+
+/// Return a package app's executable stem only when the AUMID selects a
+/// unique Application entry in the package manifest. Shared framework
+/// executables are not exposed as user-facing aliases.
+pub(crate) fn package_manifest_executable_alias(
+    install_location: &std::path::Path,
+    aumid: &str,
+) -> Option<String> {
+    let path = install_location.join("AppxManifest.xml");
+    let size = std::fs::metadata(&path).ok()?.len();
+    if size == 0 || size > 2 * 1024 * 1024 {
+        return None;
+    }
+    let source = std::fs::read_to_string(path).ok()?;
+    let source = source.trim_start_matches('\u{feff}');
+    let document = roxmltree::Document::parse(&source).ok()?;
+    let application_id = aumid.rsplit_once('!')?.1;
+    let applications = document
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name() == "Application")
+        .collect::<Vec<_>>();
+    let selected = applications.iter().find(|node| {
+        node.attribute("Id")
+            .is_some_and(|value| value.eq_ignore_ascii_case(application_id))
+    })?;
+    let executable = selected.attribute("Executable")?;
+    let executable_count = applications
+        .iter()
+        .filter(|node| {
+            node.attribute("Executable")
+                .is_some_and(|value| value.eq_ignore_ascii_case(executable))
+        })
+        .count();
+    if executable_count != 1 {
+        return None;
+    }
+    let executable_name = executable.rsplit(['\\', '/']).next()?;
+    let name = std::path::Path::new(executable_name)
+        .file_stem()?
+        .to_str()?
+        .trim();
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// A small, renderer-neutral icon payload. Pixels are kept off the Slint UI
@@ -652,6 +701,20 @@ pub fn application_description(target: &std::path::Path) -> Option<String> {
     {
         let _ = target;
         None
+    }
+}
+
+/// Return bounded, role-typed search metadata from an executable's version
+/// resource. Other platforms do not expose this Windows metadata source.
+pub fn application_search_metadata(target: &std::path::Path) -> crate::result::SearchMetadata {
+    #[cfg(windows)]
+    {
+        windows::application_search_metadata(target)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = target;
+        crate::result::SearchMetadata::default()
     }
 }
 
@@ -735,7 +798,36 @@ pub fn current() -> Arc<dyn PlatformIntegration> {
 
 #[cfg(test)]
 mod geometry_tests {
-    use super::logical_point_to_physical;
+    use super::{logical_point_to_physical, package_manifest_executable_alias};
+
+    #[test]
+    fn appx_manifest_alias_uses_matching_unique_application_and_accepts_bom() {
+        let root =
+            std::env::temp_dir().join(format!("wowie-package-manifest-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("AppxManifest.xml"),
+            "\u{feff}<Package xmlns=\"urn:schemas-microsoft-com:package:manifest\"><Applications><Application Id=\"Editor\" Executable=\"Editor\\\\Notepad.exe\" /><Application Id=\"Helper\" Executable=\"Helper.exe\" /></Applications></Package>",
+        ).unwrap();
+        assert_eq!(
+            package_manifest_executable_alias(&root, "Contoso.Editor!Editor").as_deref(),
+            Some("Notepad")
+        );
+        assert_eq!(
+            package_manifest_executable_alias(&root, "Contoso.Editor!Missing"),
+            None
+        );
+
+        std::fs::write(
+            root.join("AppxManifest.xml"),
+            "<Package><Applications><Application Id=\"Editor\" Executable=\"Shared.exe\" /><Application Id=\"Helper\" Executable=\"Shared.exe\" /></Applications></Package>",
+        ).unwrap();
+        assert_eq!(
+            package_manifest_executable_alias(&root, "Contoso.Editor!Editor"),
+            None
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn platform_shutdown_joins_all_listeners_across_restarts() {

@@ -106,6 +106,7 @@ export component Launcher inherits Window {
 
     in property <bool> native-window-frame: false;
     out property <color> native-background-color: root.canvas;
+    out property <color> native-border-color: root.border;
     in property <bool> animations-enabled: true;
     in-out property <int> window-width: 900;
     in property <string> ui-font-family: "";
@@ -360,7 +361,7 @@ export component Launcher inherits Window {
         height: parent.height - 2 * root.window-inset;
         background: root.canvas;
         border-color: root.border;
-        border-width: 1px;
+        border-width: root.native-window-frame ? 0px : 1px;
         // Windows rounds the native frame, including its shadow.
         border-radius: root.native-window-frame ? 0px : DesignTokens.radius-lg;
 
@@ -911,6 +912,7 @@ export component ContextMenu inherits Window {
 
     in property <bool> native-window-frame: false;
     out property <color> native-background-color: root.canvas;
+    out property <color> native-border-color: root.border;
     in property <bool> animations-enabled: true;
     in property <bool> dark-mode: true;
     in property <color> accent-color: #0067c0;
@@ -971,7 +973,7 @@ export component ContextMenu inherits Window {
             x: 0px; y: 0px; width: parent.width; height: parent.height;
             background: root.canvas;
             border-color: root.border;
-            border-width: 1px;
+            border-width: root.native-window-frame ? 0px : 1px;
             border-radius: root.native-window-frame ? 0px : DesignTokens.radius-md;
 
             for action[index] in root.actions : Rectangle {

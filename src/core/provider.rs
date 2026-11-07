@@ -22,6 +22,17 @@ use std::{
 pub const DEFAULT_SEARCH_DEBOUNCE: Duration = Duration::from_millis(30);
 const MAX_SEARCH_DEBOUNCE_MS: u64 = 2_000;
 
+/// Determines which layer decides whether a result matches and its order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchingPolicy {
+    /// The host matches and ranks every result using its common search rules.
+    #[default]
+    Central,
+    /// An active engine session owns matching and ordering for its results.
+    ProviderOwned,
+}
+
 /// Behaviour shared by every search engine, including plugin engines.
 ///
 /// `participates_in_root` controls discovery from the root search. It does
@@ -34,8 +45,8 @@ const MAX_SEARCH_DEBOUNCE_MS: u64 = 2_000;
 pub struct SearchEngineSettings {
     pub participates_in_root: bool,
     pub respect_global_fuzzy_search: bool,
-    /// A bounded, engine-wide tie breaker. It is intentionally applied only
-    /// after lexical relevance, user history and category preference.
+    /// A bounded, engine-wide tie breaker applied after the combined
+    /// lexical/behavior score, category and plugin preferences.
     pub ranking_bias: i32,
     /// Number of recent successful session queries retained for this engine.
     /// Zero disables query history. Values are capped by the host.
@@ -43,6 +54,9 @@ pub struct SearchEngineSettings {
     /// Delay interactive session queries until input has been idle for this
     /// many milliseconds. This is useful for remote APIs that charge per call.
     pub search_debounce_ms: u64,
+    /// Matching/order policy for nonempty results in an active session.
+    #[serde(default)]
+    pub matching_policy: MatchingPolicy,
 }
 
 impl Default for SearchEngineSettings {
@@ -53,6 +67,7 @@ impl Default for SearchEngineSettings {
             ranking_bias: 0,
             history_limit: 0,
             search_debounce_ms: DEFAULT_SEARCH_DEBOUNCE.as_millis() as u64,
+            matching_policy: MatchingPolicy::Central,
         }
     }
 }
@@ -87,6 +102,18 @@ pub trait SearchEngineProvider: Send + Sync {
 
     /// Attach the registry's shared generation counter for async content changes.
     fn set_content_notifier(&mut self, _notifier: Arc<std::sync::atomic::AtomicU64>) {}
+
+    /// Attach the registry-wide cancellation generation used by native search
+    /// backends that can poll while waiting on an operating-system service.
+    fn set_query_cancellation(&mut self, _generation: Arc<std::sync::atomic::AtomicU64>) {}
+
+    /// Attach live file-search preferences without requiring the engine lock
+    /// while a backend query is in flight.
+    fn set_file_search_config(
+        &mut self,
+        _config: Arc<crate::services::file_search::FileSearchRuntimeConfig>,
+    ) {
+    }
 
     /// Optional content for an empty result surface. This is presentation
     /// state, not a selectable result row, so engines can describe a session
@@ -250,6 +277,8 @@ pub struct ProviderRegistry {
     engines: Vec<Mutex<Box<dyn SearchEngineProvider>>>,
     indexed: Arc<Mutex<Arc<Vec<SearchResult>>>>,
     content_generation: Arc<std::sync::atomic::AtomicU64>,
+    query_generation: Arc<std::sync::atomic::AtomicU64>,
+    file_search_config: Arc<crate::services::file_search::FileSearchRuntimeConfig>,
 }
 
 impl ProviderRegistry {
@@ -261,6 +290,8 @@ impl ProviderRegistry {
             engines: Vec::new(),
             indexed,
             content_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            query_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            file_search_config: Arc::new(Default::default()),
         };
         registry.register_indexed_engines();
         registry
@@ -282,6 +313,8 @@ impl ProviderRegistry {
             engines: Vec::new(),
             indexed: Arc::new(Mutex::new(Arc::new(Vec::new()))),
             content_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            query_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            file_search_config: Arc::new(Default::default()),
         };
         registry.register_indexed_engines();
         registry.register_search_engine(plugin_engine);
@@ -294,6 +327,8 @@ impl ProviderRegistry {
         P: SearchEngineProvider + 'static,
     {
         engine.set_content_notifier(Arc::clone(&self.content_generation));
+        engine.set_query_cancellation(Arc::clone(&self.query_generation));
+        engine.set_file_search_config(Arc::clone(&self.file_search_config));
         self.engines.push(Mutex::new(Box::new(engine)));
         Arc::clone(&self.content_generation)
     }
@@ -334,6 +369,8 @@ impl ProviderRegistry {
         query: &str,
         history: &[SearchHistoryEntry],
     ) -> Vec<EngineSearchResult> {
+        self.query_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         if let SearchContext::Engine(session) = context {
             for engine in &self.engines {
                 if let Ok(engine) = engine.lock() {
@@ -343,7 +380,7 @@ impl ProviderRegistry {
                             .into_iter()
                             .map(|item| EngineSearchResult {
                                 item,
-                                settings: engine.settings(),
+                                settings: engine.settings_for_session(session),
                             })
                             .collect();
                     }
@@ -372,7 +409,15 @@ impl ProviderRegistry {
     }
 
     pub fn cancel_active_queries(&self) {
+        self.query_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.plugins.cancel_active_queries();
+    }
+
+    pub fn replace_file_search_preferences(&self, backend: &str, enabled: bool, keyword: &str) {
+        self.query_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        self.file_search_config.replace(backend, enabled, keyword);
     }
 
     pub fn history_limit(&self, session: &SearchEngineSession) -> usize {
@@ -387,6 +432,22 @@ impl ProviderRegistry {
             })
             .unwrap_or_default()
             .min(crate::ranking::MAX_ENGINE_SEARCH_HISTORY)
+    }
+
+    pub fn settings_for_context(&self, context: &SearchContext) -> SearchEngineSettings {
+        let Some(session) = context.session() else {
+            return SearchEngineSettings::default();
+        };
+        self.engines
+            .iter()
+            .find_map(|engine| {
+                engine.lock().ok().and_then(|engine| {
+                    engine
+                        .owns_session(session)
+                        .then(|| engine.settings_for_session(session))
+                })
+            })
+            .unwrap_or_default()
     }
 
     pub fn empty_state(&self, context: &SearchContext, query: &str) -> Option<SearchResult> {
@@ -413,6 +474,8 @@ impl ProviderRegistry {
         query: &str,
         offset: usize,
     ) -> Vec<SearchResult> {
+        self.query_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let SearchContext::Engine(session) = context else {
             return Vec::new();
         };
@@ -640,6 +703,7 @@ mod context_action_tests {
             identity: "plugin:weather:current".into(),
             title: "Weather".into(),
             category: ResultCategory::Other,
+            metadata: Default::default(),
             aliases: Vec::new(),
             location: String::new(),
             launch_target: Default::default(),

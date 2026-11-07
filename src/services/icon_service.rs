@@ -1006,6 +1006,7 @@ mod tests {
             identity: id.into(),
             title: "Test".into(),
             category: ResultCategory::Website,
+            metadata: Default::default(),
             aliases: vec![],
             location: "https://example.com".into(),
             launch_target: PathBuf::from("https://example.com"),

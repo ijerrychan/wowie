@@ -12,7 +12,7 @@ use std::{
 use url::Url;
 use windows_sys::Win32::{
     Foundation::{GetLastError, POINT},
-    Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED},
+    Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_TRANSITIONS_FORCEDISABLED},
     Storage::FileSystem::{
         FindCloseChangeNotification, FindFirstChangeNotificationW, FindNextChangeNotification,
         FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE,
@@ -49,9 +49,26 @@ mod window_switcher;
 
 pub(crate) use window_switcher::{switch_window, visible_windows};
 
-pub(super) fn set_window_background(window: &slint::Window, color: slint::Color) {
+pub(super) fn set_window_background(
+    window: &slint::Window,
+    color: slint::Color,
+    border: slint::Color,
+) {
     if let Some(hwnd) = hwnd_from_window(window) {
         window_background::set_background(hwnd, color);
+        // Use the same theme token as the non-native Slint outline. DWM draws
+        // the entire rounded contour, including the non-client top strip.
+        let border = u32::from(border.red())
+            | (u32::from(border.green()) << 8)
+            | (u32::from(border.blue()) << 16);
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR as u32,
+                &border as *const _ as _,
+                std::mem::size_of_val(&border) as u32,
+            );
+        }
     }
 }
 
@@ -97,9 +114,16 @@ pub struct WindowsPlatform;
 
 static APPLICATION_DESCRIPTION_CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> =
     OnceLock::new();
+static APPLICATION_SEARCH_METADATA_CACHE: OnceLock<
+    Mutex<HashMap<String, crate::result::SearchMetadata>>,
+> = OnceLock::new();
+
+const MAX_VERSION_RESOURCE_BYTES: u32 = 2 * 1024 * 1024;
+const MAX_VERSION_METADATA_VALUES: usize = 32;
+const MAX_VERSION_METADATA_CHARS: usize = 256;
 
 pub(crate) fn application_description(target: &Path) -> Option<String> {
-    let key = target.to_string_lossy().to_lowercase();
+    let key = version_cache_key(target);
     let cache = APPLICATION_DESCRIPTION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(values) = cache.lock() {
         if let Some(description) = values.get(&key) {
@@ -128,25 +152,75 @@ pub(crate) fn application_description(target: &Path) -> Option<String> {
     description
 }
 
+pub(crate) fn application_search_metadata(target: &Path) -> crate::result::SearchMetadata {
+    let Some(extension) = target.extension().and_then(|value| value.to_str()) else {
+        return crate::result::SearchMetadata::default();
+    };
+    if !extension.eq_ignore_ascii_case("exe") {
+        return crate::result::SearchMetadata::default();
+    }
+    let key = version_cache_key(target);
+    let cache = APPLICATION_SEARCH_METADATA_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(values) = cache.lock() {
+        if let Some(metadata) = values.get(&key) {
+            return metadata.clone();
+        }
+    }
+    let metadata = file_version_search_metadata(target);
+    if let Ok(mut values) = cache.lock() {
+        if values.len() >= 512 {
+            values.clear();
+        }
+        values.insert(key, metadata.clone());
+    }
+    metadata
+}
+
 fn file_description(path: &Path) -> Option<String> {
+    read_version_resource(path).and_then(|data| {
+        version_values_limited(&data, "FileDescription", None)
+            .into_iter()
+            .next()
+    })
+}
+
+fn file_version_search_metadata(path: &Path) -> crate::result::SearchMetadata {
+    let data = read_version_resource(path);
+    let Some(data) = data else {
+        return crate::result::SearchMetadata::default();
+    };
+    let descriptions = version_values(&data, "FileDescription");
+    let product_names = version_values(&data, "ProductName");
+    version_search_metadata(&descriptions, &product_names)
+}
+
+fn read_version_resource(path: &Path) -> Option<Vec<u8>> {
     let path = wide_path(path);
     let mut handle = 0;
     let size = unsafe { GetFileVersionInfoSizeW(path.as_ptr(), &mut handle) };
-    if size == 0 {
+    if size == 0 || size > MAX_VERSION_RESOURCE_BYTES {
         return None;
     }
     let mut data = vec![0_u8; size as usize];
     if unsafe { GetFileVersionInfoW(path.as_ptr(), handle, size, data.as_mut_ptr().cast()) } == 0 {
         return None;
     }
+    Some(data)
+}
 
-    let translations = query_version_value(&data, r"\VarFileInfo\Translation")
+fn version_values(data: &[u8], field: &str) -> Vec<String> {
+    version_values_limited(data, field, Some(MAX_VERSION_METADATA_CHARS))
+}
+
+fn version_values_limited(data: &[u8], field: &str, max_chars: Option<usize>) -> Vec<String> {
+    let translations = query_version_value(data, r"\VarFileInfo\Translation")
         .and_then(|(pointer, length)| {
             (length >= 4).then(|| {
                 unsafe { std::slice::from_raw_parts(pointer.cast::<u16>(), length as usize / 2) }
                     .as_chunks::<2>()
                     .0
                     .iter()
+                    .take(MAX_VERSION_METADATA_VALUES)
                     .map(|pair| (pair[0], pair[1]))
                     .collect::<Vec<_>>()
             })
@@ -158,17 +232,77 @@ fn file_description(path: &Path) -> Option<String> {
         translations
     };
 
-    translations.into_iter().find_map(|(language, code_page)| {
-        let path = format!(r"\StringFileInfo\{language:04x}{code_page:04x}\FileDescription");
-        let (pointer, length) = query_version_value(&data, &path)?;
+    let mut values = Vec::new();
+    for (language, code_page) in translations {
+        let query = format!(r"\StringFileInfo\{language:04x}{code_page:04x}\{field}");
+        let Some((pointer, length)) = query_version_value(data, &query) else {
+            continue;
+        };
         let value = unsafe { std::slice::from_raw_parts(pointer.cast::<u16>(), length as usize) };
         let end = value
             .iter()
             .position(|unit| *unit == 0)
             .unwrap_or(value.len());
         let value = String::from_utf16_lossy(&value[..end]);
-        (!value.trim().is_empty()).then_some(value.trim().to_owned())
-    })
+        let value = value.trim();
+        if value.is_empty()
+            || max_chars.is_some_and(|maximum| value.chars().count() > maximum)
+            || values
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(value))
+        {
+            continue;
+        }
+        values.push(value.to_owned());
+        if values.len() >= MAX_VERSION_METADATA_VALUES {
+            break;
+        }
+    }
+    values
+}
+
+fn version_search_metadata(
+    descriptions: &[String],
+    product_names: &[String],
+) -> crate::result::SearchMetadata {
+    let mut metadata = crate::result::SearchMetadata::default();
+    for description in descriptions {
+        append_version_value(&mut metadata.keywords, description);
+    }
+    for product_name in product_names {
+        if metadata.keywords.len() + metadata.context.len() >= MAX_VERSION_METADATA_VALUES {
+            break;
+        }
+        append_version_value(&mut metadata.context, product_name);
+    }
+    metadata
+}
+
+fn append_version_value(values: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if values.len() < MAX_VERSION_METADATA_VALUES
+        && !value.is_empty()
+        && value.chars().count() <= MAX_VERSION_METADATA_CHARS
+        && !values
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(value))
+    {
+        values.push(value.to_owned());
+    }
+}
+
+fn version_cache_key(target: &Path) -> String {
+    let path = target.to_string_lossy().to_lowercase();
+    let Ok(metadata) = std::fs::metadata(target) else {
+        return path;
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or_default();
+    format!("{path}|{}|{modified}", metadata.len())
 }
 
 fn query_version_value(data: &[u8], path: &str) -> Option<(*mut c_void, u32)> {
@@ -869,6 +1003,29 @@ fn parse_hotkey(value: &str) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn executable_version_strings_keep_description_and_product_in_weak_roles() {
+        let metadata = version_search_metadata(
+            &["Editor for documents".into(), "Document editor".into()],
+            &["Acme Suite".into(), "Acme Suite".into()],
+        );
+        assert_eq!(
+            metadata.keywords,
+            vec!["Editor for documents", "Document editor"]
+        );
+        assert_eq!(metadata.context, vec!["Acme Suite"]);
+        assert!(metadata.technical.is_empty());
+    }
+
+    #[test]
+    fn system_executable_exposes_version_description_for_search() {
+        let executable = PathBuf::from(std::env::var_os("WINDIR").expect("WINDIR"))
+            .join("System32")
+            .join("cmd.exe");
+        let metadata = application_search_metadata(&executable);
+        assert!(!metadata.keywords.is_empty());
+    }
 
     #[test]
     #[ignore = "uses Windows hotkey, tray and Shell registrations"]

@@ -221,9 +221,6 @@ local function language_menu(kind, selected, query, menu_query, locale)
             local title = (current and "✓ " or "") .. name
             local subtitle = item.code
             local aliases = { item.code, item.en, item.zh }
-            if inherited_query and normalized_query ~= "" then
-                aliases[#aliases + 1] = query
-            end
             if current then
                 subtitle = subtitle .. " · " .. label("当前选择", "Current", locale)
             end

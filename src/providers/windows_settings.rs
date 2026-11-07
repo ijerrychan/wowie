@@ -8,7 +8,7 @@
 
 use crate::{
     platform::source_ids,
-    result::{IconSpec, LaunchEntry, ResultCategory, SearchResult},
+    result::{IconSpec, LaunchEntry, ResultCategory, SearchMetadata, SearchResult},
     utils::i18n,
 };
 use std::{collections::HashMap, path::PathBuf, sync::OnceLock};
@@ -34,6 +34,7 @@ struct PowerToysSetting {
     #[serde(default)]
     alt_names: Vec<String>,
     command: String,
+    #[cfg(test)]
     note: Option<String>,
     introduced_in_build: Option<u32>,
     deprecated_in_build: Option<u32>,
@@ -92,54 +93,31 @@ fn append_unique_alias(aliases: &mut Vec<String>, value: String) {
     }
 }
 
-fn translated_paths(setting: &PowerToysSetting) -> Vec<String> {
-    let mut paths = vec![String::new()];
-    for key in std::iter::once(&setting.kind).chain(setting.areas.iter()) {
-        let parts = resource_aliases(key);
-        let mut combined = Vec::new();
-        for prefix in &paths {
-            for part in &parts {
-                let path = if prefix.is_empty() {
-                    part.clone()
-                } else {
-                    format!("{prefix} › {part}")
-                };
-                append_unique_alias(&mut combined, path);
-                if combined.len() >= 64 {
-                    break;
-                }
-            }
-            if combined.len() >= 64 {
-                break;
-            }
-        }
-        paths = combined;
-    }
-    paths
+fn powertoys_aliases(setting: &PowerToysSetting) -> Vec<String> {
+    resource_aliases(&setting.name)
 }
 
-fn powertoys_aliases(setting: &PowerToysSetting) -> Vec<String> {
-    let mut aliases = Vec::new();
-    for key in std::iter::once(&setting.name)
-        .chain(setting.areas.iter())
-        .chain(setting.alt_names.iter())
-    {
-        for alias in resource_aliases(key) {
-            append_unique_alias(&mut aliases, alias);
+fn powertoys_metadata(setting: &PowerToysSetting) -> SearchMetadata {
+    let mut metadata = SearchMetadata::default();
+    for key in &setting.alt_names {
+        for value in resource_aliases(key) {
+            append_unique_alias(&mut metadata.keywords, value);
         }
     }
-    for path in translated_paths(setting) {
-        append_unique_alias(&mut aliases, path);
+    for key in std::iter::once(&setting.kind).chain(setting.areas.iter()) {
+        for value in resource_aliases(key) {
+            append_unique_alias(&mut metadata.context, value);
+        }
+    }
+    for language in ["en", "zh-CN"] {
+        append_unique_alias(&mut metadata.context, translated_path(setting, language));
     }
     if setting.kind == "AppControlPanel" {
-        append_unique_alias(&mut aliases, format!("Microsoft.{}", setting.name));
+        metadata
+            .technical
+            .push(format!("Microsoft.{}", setting.name));
     }
-    if let Some(note) = &setting.note {
-        for alias in resource_aliases(note) {
-            append_unique_alias(&mut aliases, alias);
-        }
-    }
-    aliases
+    metadata
 }
 
 fn parse_powertoys_command(command: &str) -> (PathBuf, String) {
@@ -252,6 +230,7 @@ fn powertoys_result(setting: &PowerToysSetting) -> SearchResult {
         identity,
         title: localized_resource("en", &setting.name),
         category,
+        metadata: powertoys_metadata(setting),
         aliases: powertoys_aliases(setting),
         location: path,
         launch_target: target.clone(),
@@ -434,11 +413,17 @@ pub(crate) fn merge_results(items: impl IntoIterator<Item = SearchResult>) -> Ve
         );
         if let Some(&index) = positions.get(&key) {
             let existing: &mut SearchResult = &mut results[index];
-            for alias in std::iter::once(item.title)
-                .chain(std::iter::once(item.location))
-                .chain(item.aliases)
-            {
+            for alias in std::iter::once(item.title).chain(item.aliases) {
                 append_unique_alias(&mut existing.aliases, alias);
+            }
+            for (target, values) in [
+                (&mut existing.metadata.keywords, item.metadata.keywords),
+                (&mut existing.metadata.context, item.metadata.context),
+                (&mut existing.metadata.technical, item.metadata.technical),
+            ] {
+                for value in values {
+                    append_unique_alias(target, value);
+                }
             }
             existing.ranking_bias = existing.ranking_bias.max(item.ranking_bias);
             for entry in item.launch_entries {
@@ -466,6 +451,7 @@ fn shell_catalog_setting(item: &SearchResult) -> Option<&'static PowerToysSettin
                 .is_some_and(|canonical| {
                     item.aliases
                         .iter()
+                        .chain(item.metadata.technical.iter())
                         .any(|alias| alias.eq_ignore_ascii_case(canonical))
                 })
     })
@@ -475,6 +461,16 @@ pub(crate) fn enrich_shell_result(item: &mut SearchResult) {
     if let Some(setting) = shell_catalog_setting(item) {
         for alias in powertoys_aliases(setting) {
             append_unique_alias(&mut item.aliases, alias);
+        }
+        let metadata = powertoys_metadata(setting);
+        for (target, values) in [
+            (&mut item.metadata.keywords, metadata.keywords),
+            (&mut item.metadata.context, metadata.context),
+            (&mut item.metadata.technical, metadata.technical),
+        ] {
+            for value in values {
+                append_unique_alias(target, value);
+            }
         }
     }
 }
@@ -506,7 +502,8 @@ pub(crate) fn matches_settings_path(item: &SearchResult, query: &str) -> bool {
     };
     path_matches(&item.location)
         || item
-            .aliases
+            .metadata
+            .context
             .iter()
             .filter(|alias| alias.contains('›'))
             .any(|alias| path_matches(alias))
@@ -570,7 +567,8 @@ pub(crate) fn apply_compatible_destination(
         return;
     }
     let Some(uri) = item
-        .aliases
+        .metadata
+        .technical
         .iter()
         .find_map(|alias| compatible_settings_uri_for_canonical_name(alias))
     else {
@@ -722,6 +720,12 @@ mod tests {
         duplicate.id = "another-resource-id".into();
         duplicate.title = "屏幕设置".into();
         duplicate.aliases = vec!["monitor configuration".into()];
+        duplicate.metadata.keywords.push("monitor setup".into());
+        duplicate.metadata.context.push("system display".into());
+        duplicate
+            .metadata
+            .technical
+            .push("Microsoft.Display".into());
         let mut different = first.clone();
         different.launch_target = "ms-settings:display-advanced".into();
         let results = merge_results([first.clone(), duplicate, different]);
@@ -732,6 +736,21 @@ mod tests {
             .aliases
             .iter()
             .any(|a| a == "monitor configuration"));
+        assert!(results[0]
+            .metadata
+            .keywords
+            .iter()
+            .any(|value| value == "monitor setup"));
+        assert!(results[0]
+            .metadata
+            .context
+            .iter()
+            .any(|value| value == "system display"));
+        assert!(results[0]
+            .metadata
+            .technical
+            .iter()
+            .any(|value| value == "Microsoft.Display"));
     }
 
     #[test]

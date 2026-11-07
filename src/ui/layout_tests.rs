@@ -124,6 +124,19 @@ fn launcher_layout_settles_when_reopened() {
             let mut pixels = vec![slint::Rgb8Pixel::default(); 900 * 350];
             renderer.render(&mut pixels, 900);
             let canvas = window.get_native_background_color();
+            // Native DWM owns the complete contour. A Slint stroke here would
+            // be clipped at its rounded corners and create a second outline.
+            for index in [450, 175 * 900, 175 * 900 + 899, 349 * 900 + 450] {
+                assert_eq!(
+                    pixels[index],
+                    slint::Rgb8Pixel {
+                        r: canvas.red(),
+                        g: canvas.green(),
+                        b: canvas.blue(),
+                    },
+                    "native frame must not contain a second client-side border"
+                );
+            }
             assert_eq!(
                 pixels[5 * 900 + 5],
                 slint::Rgb8Pixel {

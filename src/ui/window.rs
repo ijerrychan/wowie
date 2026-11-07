@@ -55,13 +55,8 @@ fn select_renderer(renderer: &str) -> Result<()> {
                 use slint::winit_030::winit::platform::windows::{
                     CornerPreference, WindowAttributesExtWindows,
                 };
-                // Apply to every frameless window, including settings and menus.
-                // Winit manages the native DWM shadow across window changes.
-                // The undecorated shadow keeps a 1px native frame strip on top
-                // (documented by winit). DWMWA_COLOR_NONE stops DWM from
-                // painting that strip as a system-colored border, leaving the
-                // Slint canvas and its own border in control. Windows 10 does
-                // not support the attribute; winit ignores the failure.
+                // DWM owns the outside contour and shadow. The theme border
+                // is installed with the native background once the HWND exists.
                 attributes
                     .with_transparent(false)
                     .with_undecorated_shadow(true)
@@ -86,6 +81,7 @@ fn launcher_window_icon() -> Option<slint::winit_030::winit::window::Icon> {
 pub(super) fn install_native_background<C: ComponentHandle + 'static>(
     weak: slint::Weak<C>,
     color: fn(&C) -> slint::Color,
+    border: fn(&C) -> slint::Color,
 ) {
     #[cfg(windows)]
     {
@@ -95,12 +91,16 @@ pub(super) fn install_native_background<C: ComponentHandle + 'static>(
                 return;
             };
             if component.window().winit_window().await.is_ok() {
-                platform::set_window_background(component.window(), color(&component));
+                platform::set_window_background(
+                    component.window(),
+                    color(&component),
+                    border(&component),
+                );
             }
         });
     }
     #[cfg(not(windows))]
-    let _ = (weak, color);
+    let _ = (weak, color, border);
 }
 
 pub(super) fn toggle_palette(
@@ -111,7 +111,11 @@ pub(super) fn toggle_palette(
     if visible.fetch_xor(true, Ordering::AcqRel) {
         let _ = window.hide();
     } else {
-        platform::set_window_background(window.window(), window.get_native_background_color());
+        platform::set_window_background(
+            window.window(),
+            window.get_native_background_color(),
+            window.get_native_border_color(),
+        );
         platform.disable_window_transitions(window.window());
         if window.get_compact_search()
             && window.get_root_query_empty()

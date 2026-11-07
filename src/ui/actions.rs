@@ -284,6 +284,7 @@ mod tests {
             identity: "test-result".into(),
             title: "Test result".into(),
             category: result::ResultCategory::Other,
+            metadata: Default::default(),
             aliases: Vec::new(),
             location: target.to_string_lossy().into_owned(),
             launch_target: target,

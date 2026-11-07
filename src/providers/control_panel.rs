@@ -1,7 +1,7 @@
 //! Windows Control Panel settings provider.
 
 use crate::platform::source_ids;
-use crate::result::{IconSpec, LaunchEntry, ResultCategory, SearchResult};
+use crate::result::{IconSpec, LaunchEntry, ResultCategory, SearchMetadata, SearchResult};
 
 pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
     #[cfg(windows)]
@@ -16,9 +16,15 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
                 identity: item.identity,
                 title: item.title,
                 category: ResultCategory::ControlPanel,
-                // The platform provider supplies localized titles and the
-                // language-independent canonical name as a searchable alias.
-                aliases: item.aliases,
+                // Canonical Shell identifiers support internal catalog mapping
+                // but are technical evidence, not user-facing names.
+                aliases: Vec::new(),
+                metadata: SearchMetadata {
+                    keywords: item.keywords,
+                    context: item.area.clone().into_iter().collect(),
+                    technical: item.aliases,
+                    ..SearchMetadata::default()
+                },
                 // Tasks expose their localized applet area; Shell identities
                 // remain launch details and never become searchable locations.
                 location: item.area.unwrap_or_default(),

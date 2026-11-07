@@ -69,7 +69,7 @@ struct PersistedAppIndex {
     sources: Vec<(crate::platform::AppProviderSource, Vec<SearchResult>)>,
 }
 
-const APP_INDEX_CACHE_VERSION: u32 = 7;
+const APP_INDEX_CACHE_VERSION: u32 = 11;
 const SHELL_SOURCE_RECONCILE_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(15 * 60);
 
@@ -225,16 +225,11 @@ impl SourceLookup {
     }
 }
 
-const PROVIDER_DEFINITIONS: [ProviderDefinition; 6] = [
+const PROVIDER_DEFINITIONS: [ProviderDefinition; 5] = [
     ProviderDefinition {
         source: crate::platform::AppProviderSource::AppsFolder,
         enabled: |config| config.store_apps,
-        discover: discover_apps_folder_source,
-    },
-    ProviderDefinition {
-        source: crate::platform::AppProviderSource::PackagedApps,
-        enabled: |config| config.store_apps,
-        discover: discover_packaged_source,
+        discover: discover_store_source,
     },
     ProviderDefinition {
         source: crate::platform::AppProviderSource::StartMenu,
@@ -276,7 +271,7 @@ impl AppProvider {
         dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("Wowie")
-            .join("app-index-v7.json")
+            .join("app-index-v11.json")
     }
 
     fn restore_persisted_index(&mut self) -> bool {
@@ -425,6 +420,13 @@ impl AppProvider {
     /// record, so the source is re-enumerated and the normal merge rules are
     /// applied again.
     pub fn refresh_source(&mut self, source: crate::platform::AppProviderSource) -> bool {
+        let source = match source {
+            crate::platform::AppProviderSource::PackagedApps
+            | crate::platform::AppProviderSource::StoreApps => {
+                crate::platform::AppProviderSource::AppsFolder
+            }
+            source => source,
+        };
         let Some(provider) = PROVIDER_DEFINITIONS
             .iter()
             .find(|provider| provider.source == source && (provider.enabled)(&self.config))
@@ -480,7 +482,6 @@ impl AppProvider {
         let mut changed_sources = Vec::new();
         if self.config.store_apps != config.store_apps {
             changed_sources.push(crate::platform::AppProviderSource::AppsFolder);
-            changed_sources.push(crate::platform::AppProviderSource::PackagedApps);
         }
         if self.config.start_menu != config.start_menu {
             changed_sources.push(crate::platform::AppProviderSource::StartMenu);
@@ -546,6 +547,24 @@ impl AppProvider {
     }
 }
 
+fn discover_store_source(config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
+    combine_store_records(
+        discover_apps_folder_source(config),
+        discover_packaged_source(config),
+    )
+}
+
+fn combine_store_records(
+    mut apps_folder: Vec<SearchResult>,
+    package_records: Vec<SearchResult>,
+) -> Vec<SearchResult> {
+    // Keep both source records intact until the usual full-pipeline merge.
+    // Association runs before identity deduplication and can use a distinct
+    // package display title while retaining the AppsFolder launch behavior.
+    apps_folder.extend(package_records);
+    apps_folder
+}
+
 fn unix_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -608,6 +627,15 @@ fn merge_sources(
         &items,
         started.elapsed(),
     );
+    items
+}
+
+#[cfg(test)]
+fn merge_record_pipeline(mut items: Vec<SearchResult>) -> Vec<SearchResult> {
+    associate_file_entries(&mut items);
+    sort_merge_inputs(&mut items);
+    merge_by_identity(&mut items);
+    classify_unclassified_items(&mut items);
     items
 }
 
@@ -796,6 +824,7 @@ mod tests {
             identity: identity.into(),
             title: title.into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec![],
             location: String::new(),
             launch_target: PathBuf::from("target.exe"),
@@ -1110,7 +1139,7 @@ mod tests {
             None,
         )];
 
-        let mut package = item(editor_identity, "Editor", source_ids::PACKAGE);
+        let mut package = item(editor_identity, "Text Editor", source_ids::PACKAGE);
         package.category = ResultCategory::Unclassified;
         package.package_metadata = Some(PackageMetadata {
             full_name: Some("Vendor.Editor_1.0.0.0_x64__abc".into()),
@@ -1134,7 +1163,11 @@ mod tests {
             None,
         )];
 
-        let mut start_menu = item("exe:c:\\apps\\editor.exe", "Editor", source_ids::START_MENU);
+        let mut start_menu = item(
+            "exe:c:\\apps\\editor.exe",
+            "Text Editor",
+            source_ids::START_MENU,
+        );
         start_menu.category = ResultCategory::Unclassified;
         start_menu.app_user_model_id = Some("vendor.editor_abc!main".into());
         start_menu.package_family_name = Some("vendor.editor_abc".into());
@@ -1173,7 +1206,37 @@ mod tests {
         );
         sources.insert(crate::platform::AppProviderSource::Desktop, vec![desktop]);
 
-        let results = merge_sources(&sources);
+        let mut legacy_results = merge_record_pipeline(
+            [
+                crate::platform::AppProviderSource::AppsFolder,
+                crate::platform::AppProviderSource::PackagedApps,
+                crate::platform::AppProviderSource::StartMenu,
+                crate::platform::AppProviderSource::Desktop,
+                crate::platform::AppProviderSource::ControlPanel,
+                crate::platform::AppProviderSource::CustomDirectories,
+            ]
+            .iter()
+            .filter_map(|source| sources.get(source))
+            .flat_map(|records| records.iter().cloned())
+            .collect(),
+        );
+        let mut unified_sources = sources.clone();
+        let mut store_records = unified_sources
+            .remove(&crate::platform::AppProviderSource::AppsFolder)
+            .unwrap_or_default();
+        store_records.extend(
+            unified_sources
+                .remove(&crate::platform::AppProviderSource::PackagedApps)
+                .unwrap_or_default(),
+        );
+        unified_sources.insert(
+            crate::platform::AppProviderSource::AppsFolder,
+            store_records,
+        );
+        let mut results = merge_sources(&unified_sources);
+        legacy_results.sort_by_cached_key(|result| result.identity.clone());
+        results.sort_by_cached_key(|result| result.identity.clone());
+        assert_eq!(results, legacy_results);
 
         assert_eq!(results.len(), 2);
         let editor = results
@@ -2121,14 +2184,26 @@ mod tests {
     }
 
     #[test]
-    fn local_title_and_aumid_product_remain_searchable_after_merge() {
+    fn local_title_and_aumid_product_remain_searchable_as_technical_evidence() {
         let mut item = item("aumid:vendor.calculator_abc!main", "计算器", "AppsFolder");
         item.launch_target = PathBuf::from("shell:AppsFolder\\Vendor.Calculator_abc!Main");
         let mut entries = vec![item];
         merge_by_identity(&mut entries);
+        assert!(entries[0]
+            .aliases
+            .iter()
+            .all(|alias| alias != "vendor calculator"));
+        assert!(entries[0]
+            .metadata
+            .technical
+            .iter()
+            .any(|value| value == "vendor calculator"));
+        assert!(!entries[0].aliases.iter().any(|alias| alias == "vendor"));
+        assert!(!entries[0].aliases.iter().any(|alias| alias == "calculator"));
         let search = SearchCore::new(entries);
         assert_eq!(search.search("计算器").len(), 1);
-        assert_eq!(search.search("calculator").len(), 1);
+        assert!(search.search("calculator").is_empty());
+        assert_eq!(search.search("vendor calculator").len(), 1);
     }
 
     #[test]
@@ -2194,5 +2269,203 @@ mod tests {
             PathBuf::from(r"C:\Windows\regedit.exe")
         );
         std::env::remove_var("WOWIE_TEST_WINDIR");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "native source coverage audit; prints counts only"]
+    fn native_source_coverage_and_unified_store_pipeline_are_equivalent() {
+        use std::ffi::OsString;
+
+        struct DebugEnvGuard(Vec<(&'static str, Option<OsString>)>);
+        impl Drop for DebugEnvGuard {
+            fn drop(&mut self) {
+                for (key, value) in self.0.drain(..) {
+                    if let Some(value) = value {
+                        std::env::set_var(key, value);
+                    }
+                }
+            }
+        }
+        let _debug_guard = DebugEnvGuard(
+            [
+                "WOWIE_PROVIDER_DEBUG",
+                "WOWIE_ALL_PROVIDER_DEBUG",
+                "WOWIE_PROVIDER_DEBUG_FILTER",
+            ]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect(),
+        );
+        for key in [
+            "WOWIE_PROVIDER_DEBUG",
+            "WOWIE_ALL_PROVIDER_DEBUG",
+            "WOWIE_PROVIDER_DEBUG_FILTER",
+        ] {
+            std::env::remove_var(key);
+        }
+
+        let config = crate::config::ProviderConfig::default();
+        let mut raw_sources = HashMap::new();
+        raw_sources.insert(
+            crate::platform::AppProviderSource::AppsFolder,
+            discover_apps_folder_source(&config),
+        );
+        raw_sources.insert(
+            crate::platform::AppProviderSource::PackagedApps,
+            discover_packaged_source(&config),
+        );
+        raw_sources.insert(
+            crate::platform::AppProviderSource::StartMenu,
+            discover_start_menu_source(&config),
+        );
+        raw_sources.insert(
+            crate::platform::AppProviderSource::Desktop,
+            discover_desktop_source(&config),
+        );
+        raw_sources.insert(
+            crate::platform::AppProviderSource::ControlPanel,
+            crate::providers::control_panel::discover(&config),
+        );
+        raw_sources.insert(
+            crate::platform::AppProviderSource::CustomDirectories,
+            discover_custom_directories(&config),
+        );
+
+        for (label, source) in [
+            ("AppsFolder", crate::platform::AppProviderSource::AppsFolder),
+            ("Package", crate::platform::AppProviderSource::PackagedApps),
+            ("StartMenu", crate::platform::AppProviderSource::StartMenu),
+            ("Desktop", crate::platform::AppProviderSource::Desktop),
+            (
+                "ControlPanel",
+                crate::platform::AppProviderSource::ControlPanel,
+            ),
+            (
+                "CustomDirectories",
+                crate::platform::AppProviderSource::CustomDirectories,
+            ),
+        ] {
+            let records = raw_sources.get(&source).map(Vec::as_slice).unwrap_or(&[]);
+            let identity_count = records
+                .iter()
+                .filter(|record| !record.identity.is_empty())
+                .count();
+            let unique_identity_count = records
+                .iter()
+                .filter(|record| !record.identity.is_empty())
+                .map(|record| record.identity.to_lowercase())
+                .collect::<HashSet<_>>()
+                .len();
+            println!(
+                "[source-audit] source={label} records={} identities={identity_count} unique_identities={unique_identity_count}",
+                records.len()
+            );
+        }
+
+        fn by_identity(records: &[SearchResult]) -> HashMap<String, Vec<Vec<u8>>> {
+            let mut grouped = HashMap::<String, Vec<Vec<u8>>>::new();
+            for record in records {
+                let serialized = serde_json::to_vec(record).expect("SearchResult serializes");
+                grouped
+                    .entry(record.identity.to_lowercase())
+                    .or_default()
+                    .push(serialized);
+            }
+            for records in grouped.values_mut() {
+                records.sort();
+            }
+            grouped
+        }
+
+        let legacy = merge_record_pipeline(
+            [
+                crate::platform::AppProviderSource::AppsFolder,
+                crate::platform::AppProviderSource::PackagedApps,
+                crate::platform::AppProviderSource::StartMenu,
+                crate::platform::AppProviderSource::Desktop,
+                crate::platform::AppProviderSource::ControlPanel,
+                crate::platform::AppProviderSource::CustomDirectories,
+            ]
+            .iter()
+            .filter_map(|source| raw_sources.get(source))
+            .flat_map(|records| records.iter().cloned())
+            .collect(),
+        );
+        let mut unified_sources = raw_sources;
+        let apps_folder = unified_sources
+            .remove(&crate::platform::AppProviderSource::AppsFolder)
+            .unwrap_or_default();
+        let package = unified_sources
+            .remove(&crate::platform::AppProviderSource::PackagedApps)
+            .unwrap_or_default();
+        unified_sources.insert(
+            crate::platform::AppProviderSource::AppsFolder,
+            combine_store_records(apps_folder, package),
+        );
+        let unified = merge_sources(&unified_sources);
+
+        let legacy_by_identity = by_identity(&legacy);
+        let unified_by_identity = by_identity(&unified);
+        let mut missing = 0;
+        let mut changed = 0;
+        let mut added = 0;
+        for (identity, old_records) in &legacy_by_identity {
+            match unified_by_identity.get(identity) {
+                None => missing += old_records.len(),
+                Some(new_records) if new_records != old_records => changed += 1,
+                Some(_) => {}
+            }
+        }
+        for (identity, new_records) in &unified_by_identity {
+            if !legacy_by_identity.contains_key(identity) {
+                added += new_records.len();
+            }
+        }
+        println!(
+            "[source-audit] legacy_records={} unified_records={} missing={missing} changed={changed} added={added}",
+            legacy.len(),
+            unified.len(),
+        );
+        assert_eq!(missing, 0, "unified source dropped final records");
+        assert_eq!(
+            changed, 0,
+            "unified source changed names or launch evidence"
+        );
+        assert_eq!(added, 0, "unified source added final records");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires an installed package exposing Notepad through AppsFolder"]
+    fn apps_folder_localized_notepad_title_matches_its_manifest_executable_name() {
+        let config = crate::config::ProviderConfig::default();
+        let items = discovery::discover_apps_folder_source(&config);
+        let notepad = items
+            .iter()
+            .find(|item| {
+                item.id
+                    .to_ascii_lowercase()
+                    .starts_with("aumid:microsoft.windowsnotepad_")
+            })
+            .expect("AppsFolder should expose the installed Notepad package");
+        assert!(notepad
+            .aliases
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case("notepad")));
+        let original_target = notepad.launch_target.clone();
+        let core = SearchCore::new(items);
+        let result = core
+            .search("notepad")
+            .into_iter()
+            .find(|item| {
+                item.id
+                    .to_ascii_lowercase()
+                    .starts_with("aumid:microsoft.windowsnotepad_")
+            })
+            .expect(
+                "the localized AppsFolder title should be searchable by manifest executable name",
+            );
+        assert_eq!(result.launch_target, original_target);
     }
 }

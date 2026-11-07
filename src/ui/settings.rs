@@ -112,6 +112,27 @@ fn definitions() -> Vec<Definition> {
             "toggle",
         ),
         field(
+            "file_search_enabled",
+            "search",
+            "File search",
+            "Show file search in the launcher and accept its keyword.",
+            "toggle",
+        ),
+        choice(
+            "file_search_backend",
+            "search",
+            "File search backend",
+            "Automatic prefers Everything and falls back to the Windows Search index.",
+            &["auto", "everything", "windows-index"],
+        ),
+        field(
+            "file_search_keyword",
+            "search",
+            "File search keyword",
+            "Keyword used to enter file search; use one word without spaces.",
+            "text",
+        ),
+        field(
             "compact_search",
             "search",
             "Compact empty search",
@@ -981,6 +1002,9 @@ fn choice_label(language: &str, setting_id: &str, value: &str) -> String {
         ("font_family", "") => Some("System default"),
         ("language", "en") => Some("English"),
         ("language", "zh-CN") => Some("Simplified Chinese"),
+        ("file_search_backend", "auto") => Some("Automatic"),
+        ("file_search_backend", "everything") => Some("Everything"),
+        ("file_search_backend", "windows-index") => Some("Windows Search index"),
         _ => None,
     };
     message
@@ -1138,6 +1162,16 @@ pub(super) fn apply(
             set_builtin_shortcut_keyword(config, plugins, "command", &value)?
         }
         "fuzzy_search" => config.fuzzy_search = parse_bool(&value)?,
+        "file_search_enabled" => config.file_search_enabled = parse_bool(&value)?,
+        "file_search_backend" => {
+            if !matches!(value.as_str(), "auto" | "everything" | "windows-index") {
+                return Err(anyhow!("unknown file search backend: {value}"));
+            }
+            config.file_search_backend = value;
+        }
+        "file_search_keyword" => {
+            config.file_search_keyword = crate::services::file_search::normalize_keyword(&value)
+        }
         "compact_search" => config.compact_search = parse_bool(&value)?,
         "separate_launch_entries" => config.separate_launch_entries = parse_bool(&value)?,
         "show_advanced_details" => config.show_advanced_details = parse_bool(&value)?,

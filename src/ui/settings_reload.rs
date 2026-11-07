@@ -55,6 +55,11 @@ impl SettingsReloadContext {
             .replace_separate_launch_entries(updated.separate_launch_entries);
         self.engine
             .replace_show_advanced_launch_entries(updated.show_advanced_launch_entries);
+        self.engine.replace_file_search_preferences(
+            &updated.file_search_backend,
+            updated.file_search_enabled,
+            &updated.file_search_keyword,
+        );
         let plugin_order = settings::visible_plugin_order(updated, &self.plugin_settings);
         self.engine
             .replace_priority_order(&updated.result_order, &plugin_order);

@@ -86,6 +86,7 @@ fn result(query: &str, language: &str) -> Option<SearchResult> {
         identity: id,
         title: format!("= {display_value}"),
         category: ResultCategory::Calculator,
+        metadata: Default::default(),
         aliases: vec![expression.to_owned()],
         location: crate::utils::i18n::tr(language, "Calculator").into(),
         launch_target: PathBuf::new(),

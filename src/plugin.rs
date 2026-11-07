@@ -73,9 +73,6 @@ const MAX_PLUGIN_FUZZY_CANDIDATES: usize = 20_000;
 const MAX_PLUGIN_FUZZY_FIELDS: usize = 8;
 const MAX_PLUGIN_FUZZY_TEXT_BYTES: usize = 4096;
 const MAX_PLUGIN_FUZZY_QUERY_BYTES: usize = 4096;
-const BUILTIN_FILE_SEARCH_ID: &str = "everything";
-const BUILTIN_FILE_SEARCH_MANIFEST: &str = include_str!("../plugins/everything/manifest.json");
-const BUILTIN_FILE_SEARCH_SOURCE: &str = include_str!("../plugins/everything/main.lua");
 
 struct PluginFuzzyScratch {
     matcher: Matcher,
@@ -947,33 +944,12 @@ fn query_everything(
     offset: usize,
     max_results: usize,
 ) -> Result<Vec<(String, String)>> {
-    #[cfg(windows)]
-    {
-        use everything_ipc::wm::{EverythingClient, RequestFlags};
-
-        let client = EverythingClient::new().context("Everything IPC is unavailable")?;
-        let list = client
-            .query_wait(query)
-            .request_flags(RequestFlags::FileName | RequestFlags::Path)
-            .offset(offset.min(u32::MAX as usize) as u32)
-            .max_results(max_results.min(u32::MAX as usize) as u32)
-            .call()
-            .context("Everything IPC query failed")?;
-        Ok(list
-            .iter()
-            .filter_map(|item| {
-                let name = item.get_string(RequestFlags::FileName)?;
-                let path = item.get_string(RequestFlags::Path)?;
-                let full = PathBuf::from(path).join(&name);
-                Some((name, full.to_string_lossy().into_owned()))
-            })
-            .collect())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (query, offset, max_results);
-        Ok(Vec::new())
-    }
+    crate::services::file_search::query_everything(
+        query,
+        offset,
+        max_results,
+        &active_query_abort_reason,
+    )
 }
 
 fn query_file_search(
@@ -985,95 +961,33 @@ fn query_file_search(
 ) -> Result<Vec<(String, String)>> {
     #[cfg(windows)]
     {
-        if let Some(reason) = abort_reason() {
-            anyhow::bail!(reason);
-        }
-        match backend {
-            "everything" if !everything_ipc_available() => Ok(Vec::new()),
-            "everything" => query_everything(query, offset, max_results),
-            "windows-index" => {
-                active_query_allow_unbounded_wait();
-                crate::platform::query_file_index(query, offset, max_results, abort_reason)
-            }
-            _ => match query_everything(query, offset, max_results) {
-                Ok(rows) => Ok(rows),
-                Err(_) => {
-                    active_query_allow_unbounded_wait();
-                    crate::platform::query_file_index(query, offset, max_results, abort_reason)
-                }
-            },
-        }
+        crate::services::file_search::query_file_search_with_windows_hook(
+            query,
+            offset,
+            max_results,
+            backend,
+            abort_reason,
+            &active_query_allow_unbounded_wait,
+        )
     }
     #[cfg(not(windows))]
     {
-        let _ = (query, offset, max_results, backend, abort_reason);
-        Ok(Vec::new())
+        crate::services::file_search::query_file_search(
+            query,
+            offset,
+            max_results,
+            backend,
+            abort_reason,
+        )
     }
 }
 
 fn file_search_backend(backend: &str) -> &'static str {
-    #[cfg(windows)]
-    {
-        let everything_available = everything_ipc_available();
-        match backend {
-            "windows-index" => "windows-index",
-            "everything" if everything_available => "everything",
-            "everything" => "everything-unavailable",
-            _ if everything_available => "everything",
-            _ => "windows-index",
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = backend;
-        "unsupported"
-    }
-}
-
-#[cfg(windows)]
-fn everything_ipc_available() -> bool {
-    everything_ipc::wm::EverythingClient::new().is_ok()
+    crate::services::file_search::file_search_backend(backend)
 }
 
 fn everything_icon_target() -> Option<String> {
-    #[cfg(windows)]
-    {
-        static TARGET: OnceLock<Option<String>> = OnceLock::new();
-        TARGET
-            .get_or_init(|| {
-                find_everything_executable().map(|path| path.to_string_lossy().into_owned())
-            })
-            .clone()
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
-}
-
-#[cfg(windows)]
-fn find_everything_executable() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates
-            .extend(std::env::split_paths(&path).map(|directory| directory.join("Everything.exe")));
-    }
-    for variable in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
-        if let Some(root) = std::env::var_os(variable) {
-            let root = PathBuf::from(root);
-            candidates.push(root.join("Everything").join("Everything.exe"));
-            if let Ok(entries) = fs::read_dir(&root) {
-                candidates.extend(entries.flatten().filter_map(|entry| {
-                    let name = entry.file_name();
-                    name.to_string_lossy()
-                        .to_ascii_lowercase()
-                        .starts_with("everything")
-                        .then(|| entry.path().join("Everything.exe"))
-                }));
-            }
-        }
-    }
-    candidates.into_iter().find(|path| path.is_file())
+    crate::services::file_search::everything_icon_target()
 }
 
 fn download_plugin_file(url: &str, filename: &str) -> Result<String> {
@@ -1188,7 +1102,6 @@ fn build_installed_plugin(
     manifest: PluginManifest,
     locale: &str,
     plugin_configs: &BTreeMap<String, PluginConfig>,
-    embedded_source: Option<&str>,
 ) -> InstalledPlugin {
     let settings =
         merge_preference_defaults(plugin_config_for(&manifest.id, plugin_configs), &manifest);
@@ -1208,18 +1121,8 @@ fn build_installed_plugin(
         last_query_results: 0,
         query_truncations: 0,
     }));
-    let embedded_result = match embedded_source {
-        Some(source) => EmbeddedPlugin::from_source(
-            source,
-            &manifest.entry_point,
-            locale,
-            &manifest.default_locale,
-            &settings.preferences,
-            &manifest.permissions,
-            Some(plugin_storage_dir(&manifest.id)),
-        ),
-        None => EmbeddedPlugin::from_file(&root, &manifest, locale, &settings.preferences),
-    };
+    let embedded_result =
+        EmbeddedPlugin::from_file(&root, &manifest, locale, &settings.preferences);
     let embedded = match embedded_result {
         Ok(plugin) => Some(Arc::new(Mutex::new(plugin))),
         Err(error) => {
@@ -1329,7 +1232,7 @@ impl PluginManager {
                 };
                 match serde_json::from_str::<PluginManifest>(&text) {
                     Ok(manifest) => {
-                        if manifest.id.eq_ignore_ascii_case(BUILTIN_FILE_SEARCH_ID) {
+                        if is_legacy_everything_manifest(&manifest) {
                             continue;
                         }
                         plugins.push(build_installed_plugin(
@@ -1337,7 +1240,6 @@ impl PluginManager {
                             manifest,
                             &locale,
                             plugin_configs,
-                            None,
                         ));
                     }
                     Err(error) => {
@@ -1345,16 +1247,6 @@ impl PluginManager {
                     }
                 }
             }
-        }
-        match serde_json::from_str::<PluginManifest>(BUILTIN_FILE_SEARCH_MANIFEST) {
-            Ok(manifest) => plugins.push(build_installed_plugin(
-                PathBuf::from("plugins/everything"),
-                manifest,
-                &locale,
-                plugin_configs,
-                Some(BUILTIN_FILE_SEARCH_SOURCE),
-            )),
-            Err(error) => eprintln!("[plugin] invalid built-in file search manifest: {error}"),
         }
         plugins.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
         if !plugins.is_empty() {
@@ -1795,6 +1687,7 @@ impl PluginManager {
             identity: format!("plugin:{}:{}:empty-state", plugin.manifest.id, command_id),
             title,
             category: ResultCategory::Other,
+            metadata: Default::default(),
             aliases: Vec::new(),
             location: description.clone(),
             launch_target: PathBuf::new(),
@@ -1853,14 +1746,18 @@ impl PluginManager {
                     "fallback_locale": plugin.manifest.default_locale,
                     "preferences": plugin_preferences(plugin),
                 });
-                let output = embedded.call("search_engine_icon", &request, None, None).ok()?;
+                let output = embedded
+                    .call("search_engine_icon", &request, None, None)
+                    .ok()?;
                 let response: SearchEngineIconResponse =
                     parse_plugin_response(&output, MAX_PLUGIN_SMALL_RESPONSE_BYTES).ok()?;
                 validate_response_id(response.request_id.as_deref(), &request_id).ok()?;
                 if response.error.is_some() {
                     return None;
                 }
-                response.icon.and_then(|icon| resolve_plugin_icon(&plugin.root, icon))
+                response
+                    .icon
+                    .and_then(|icon| resolve_plugin_icon(&plugin.root, icon))
             })
             .or_else(|| {
                 command
@@ -1873,6 +1770,7 @@ impl PluginManager {
             identity: session.id.clone(),
             title: crate::utils::i18n::tr_owned_in_context(&locale, "Launcher", &command.title),
             category: ResultCategory::Other,
+            metadata: Default::default(),
             aliases: action_words.clone(),
             location: plugin.manifest.name.clone(),
             launch_target: PathBuf::new(),
@@ -2018,6 +1916,18 @@ impl PluginManager {
             }
         }
     }
+}
+
+fn is_legacy_everything_manifest(manifest: &PluginManifest) -> bool {
+    manifest.id.eq_ignore_ascii_case("everything")
+        && manifest
+            .permissions
+            .iter()
+            .any(|permission| permission == "file_search")
+        && manifest
+            .commands
+            .iter()
+            .any(|command| command.id == "search")
 }
 
 impl crate::provider::SearchEngineProvider for PluginManager {
@@ -2544,6 +2454,84 @@ mod tests {
     }
 
     #[test]
+    fn embedded_steam_query_decodes_empty_lua_lists_and_migrates_legacy_cache() {
+        let plugin = EmbeddedPlugin::from_source(
+            include_str!("../plugins/steam-games/main.lua"),
+            "main.lua",
+            "en",
+            "en",
+            &BTreeMap::new(),
+            &[],
+            None,
+        )
+        .unwrap();
+        plugin
+            .lua
+            .load(
+                r#"
+                local now = 100000
+                os.time = function() return now end
+                stored = {
+                  saved_at=now,
+                  games={{
+                    id="steam-77",
+                    title="Legacy Cached Game",
+                    aliases={"77"},
+                    keywords={},
+                    context={},
+                    target="steam://rungameid/77"
+                  }}
+                }
+                wowie.storage_read = function(_) return stored end
+                wowie.storage_write = function(_, value) stored = value end
+                wowie.fuzzy_filter = function(candidates, query)
+                  local matches = {}
+                  for index, fields in ipairs(candidates) do
+                    for _, field in ipairs(fields) do
+                      if string.find(string.lower(field), string.lower(query), 1, true) then
+                        matches[#matches + 1] = index
+                        break
+                      end
+                    end
+                  end
+                  return matches
+                end
+                wowie.result = function(item) return item end
+                "#,
+            )
+            .exec()
+            .unwrap();
+        plugin
+            .lua
+            .load(include_str!("../plugins/steam-games/main.lua"))
+            .exec()
+            .unwrap();
+        plugin
+            .call(
+                "initialize",
+                &serde_json::json!({"preferences":{}}),
+                None,
+                None,
+            )
+            .unwrap();
+
+        let output = plugin
+            .call_query(
+                &serde_json::json!({"request_id":"steam-legacy-1", "query":"Legacy"}),
+                None,
+            )
+            .unwrap();
+        let response: QueryResponse = serde_json::from_str(&output).unwrap();
+        assert_eq!(response.items.len(), 1);
+        let item = &response.items[0];
+        assert_eq!(item.title, "Legacy Cached Game");
+        assert!(item.aliases.is_empty());
+        assert!(item.keywords.is_empty());
+        assert!(item.context.is_empty());
+        assert_eq!(item.technical, ["77"]);
+    }
+
+    #[test]
     fn plugin_file_apis_preserve_missing_utf8_and_storage_behavior() {
         let root = std::env::temp_dir().join(format!(
             "wowie-plugin-files-{}-{}",
@@ -2601,6 +2589,10 @@ mod tests {
         assert_eq!(m.version, "0.1.0");
         assert_eq!(m.engine.history_limit, 0);
         assert_eq!(m.engine.search_debounce_ms, 30);
+        assert_eq!(
+            m.engine.matching_policy,
+            crate::provider::MatchingPolicy::Central
+        );
     }
 
     #[test]
@@ -2611,6 +2603,18 @@ mod tests {
         .unwrap();
         assert_eq!(manifest.engine.history_limit, 12);
         assert_eq!(manifest.engine.search_debounce_ms, 400);
+    }
+
+    #[test]
+    fn manifest_engine_can_declare_provider_owned_matching() {
+        let manifest: PluginManifest = serde_json::from_str(
+            r#"{"id":"x","name":"X","entry_point":"main.lua","engine":{"matching_policy":"provider_owned"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.engine.matching_policy,
+            crate::provider::MatchingPolicy::ProviderOwned
+        );
     }
 
     #[test]
@@ -2944,32 +2948,10 @@ mod tests {
             .iter()
             .any(|item| item.id == "plugin:google-translate:entry"
                 && item.visibility == crate::result::ResultVisibility::EmptyQueryOnly));
-        assert!(manager
+        assert!(!manager
             .query("")
             .iter()
-            .any(|item| item.id == "plugin:everything:entry"
-                && item.visibility == crate::result::ResultVisibility::EmptyQueryOnly));
-
-        let everything_session = manager.search_engine("e ").unwrap();
-        assert!(manager
-            .search_engine_result(&everything_session)
-            .is_some_and(|item| item.icon.is_some()));
-        assert!(manager
-            .query_active_search_engine(&everything_session, "")
-            .is_empty());
-        let empty_state = crate::provider::SearchEngineProvider::empty_state(
-            &manager,
-            &crate::page::SearchContext::Engine(everything_session),
-            "",
-        )
-        .expect("Everything should provide its custom empty page");
-        assert!(empty_state.detail.is_none());
-        let description = empty_state.description.unwrap_or_default();
-        assert!(
-            description.contains("Everything syntax")
-                || description.contains("Windows Search index")
-                || description.contains("available on Windows")
-        );
+            .any(|item| item.id.starts_with("plugin:everything:")));
 
         assert!(manager.search_engine("eng").is_none());
         let translation_session = manager.search_engine("tmt ").unwrap();
@@ -3004,14 +2986,6 @@ mod tests {
     }
 
     #[test]
-    fn plugin_command_titles_follow_the_current_locale() {
-        let manager = PluginManager::discover_with_config("zh-CN", &Default::default());
-        let session = manager.search_engine("e ").expect("file search session");
-        assert_eq!(session.title, "文件搜索");
-        assert_eq!(session.placeholder, "文件搜索");
-    }
-
-    #[test]
     fn detail_view_is_deserialized_and_limited() {
         let view: PluginDetailView = serde_json::from_str(
             r#"{
@@ -3041,5 +3015,165 @@ mod tests {
                 copyable: false,
             }
         );
+    }
+
+    #[test]
+    fn plugin_typed_metadata_is_optional_and_bounded_with_aliases() {
+        let old: PluginItem =
+            serde_json::from_str(r#"{"id":"old","title":"Old","aliases":["old name"]}"#).unwrap();
+        assert_eq!(sanitize_plugin_item(old).aliases, vec!["old name"]);
+
+        let aliases = (0..31)
+            .map(|index| format!("alias-{index}"))
+            .collect::<Vec<_>>();
+        let input = serde_json::json!({
+            "id": "typed",
+            "title": "Typed",
+            "aliases": aliases,
+            "keywords": ["keyword-1", "keyword-2"],
+            "context": ["parent"],
+            "technical": ["urn:test"]
+        });
+        let item: PluginItem = serde_json::from_value(input).unwrap();
+        let item = sanitize_plugin_item(item);
+        assert_eq!(item.aliases.len(), 31);
+        assert_eq!(
+            item.keywords.len() + item.context.len() + item.technical.len(),
+            1
+        );
+        assert_eq!(item.keywords, vec!["keyword-1"]);
+
+        let mut oversized = PluginItem::default();
+        oversized.keywords = vec!["x".repeat(MAX_PLUGIN_ALIAS_CHARS + 44)];
+        let oversized = sanitize_plugin_item(oversized);
+        assert_eq!(
+            oversized.keywords[0].chars().count(),
+            MAX_PLUGIN_ALIAS_CHARS
+        );
+    }
+
+    #[test]
+    fn plugin_generated_query_evidence_stays_weak_and_session_trigger_remains() {
+        fn plugin() -> InstalledPlugin {
+            InstalledPlugin {
+                root: PathBuf::from("plugins/example"),
+                manifest: PluginManifest {
+                    id: "example".into(),
+                    name: "Example Translator".into(),
+                    version: "1.0".into(),
+                    api_version: 1,
+                    entry_point: "main.lua".into(),
+                    keywords: vec!["manifest hint".into()],
+                    commands: vec![PluginCommand {
+                        id: "translate".into(),
+                        title: "Translate".into(),
+                        placeholder: None,
+                        keywords: vec!["command hint".into()],
+                        action_words: vec!["gt".into()],
+                        customizable_action_words: false,
+                        mode: None,
+                        require_separator: true,
+                        icon: None,
+                    }],
+                    preferences: Vec::new(),
+                    engine: SearchEngineSettings::default(),
+                    permissions: Vec::new(),
+                    default_locale: "en".into(),
+                },
+                embedded: None,
+                has_detail_handler: false,
+                enabled: Arc::new(AtomicBool::new(true)),
+                weight: Arc::new(AtomicI32::new(0)),
+                preferences: Arc::new(Mutex::new(BTreeMap::new())),
+                action_word_overrides: Arc::new(RwLock::new(BTreeMap::new())),
+                status: Arc::new(Mutex::new(PluginRuntimeStatus {
+                    state: "ready".into(),
+                    last_method: None,
+                    last_error: None,
+                    failure_count: 0,
+                    last_query_ms: 0,
+                    last_query_results: 0,
+                    query_truncations: 0,
+                })),
+            }
+        }
+
+        let plugin = plugin();
+        let mut ordinary = PluginItem::default();
+        ordinary.id = "localized-result".into();
+        ordinary.title = "Localized Result".into();
+        ordinary.command_id = Some("translate".into());
+        ordinary.aliases = vec!["trusted localized name".into()];
+        ordinary.technical = vec!["urn:vendor:result-17".into()];
+        let ordinary = to_result(
+            &plugin,
+            ordinary,
+            Some("translate"),
+            "Arbitrary User Query",
+            "en",
+        );
+        assert_eq!(ordinary.aliases, vec!["trusted localized name"]);
+        assert!(ordinary.metadata.keywords.contains(&"manifest hint".into()));
+        assert!(ordinary.metadata.keywords.contains(&"command hint".into()));
+        assert!(ordinary
+            .metadata
+            .technical
+            .contains(&"urn:vendor:result-17".into()));
+        let core = crate::search::SearchCore::new(vec![ordinary.clone()]);
+        assert!(core
+            .search("Arbitrary User Query")
+            .iter()
+            .all(|result| result.id != ordinary.id));
+        let weak_matches = core.search("manifest hint");
+        assert!(weak_matches.iter().any(|result| result.id == ordinary.id));
+        assert_eq!(core.best_match_index("manifest hint", &weak_matches), None);
+
+        let mut capacity = PluginItem::default();
+        capacity.id = "capacity".into();
+        capacity.title = "Capacity".into();
+        capacity.command_id = Some("translate".into());
+        capacity.aliases = (0..30).map(|index| format!("explicit-{index}")).collect();
+        capacity.technical = vec!["urn:vendor:kept-identity".into()];
+        let capacity = to_result(
+            &plugin,
+            capacity,
+            Some("translate"),
+            "unused query echo",
+            "en",
+        );
+        assert!(capacity
+            .metadata
+            .technical
+            .contains(&"urn:vendor:kept-identity".into()));
+        assert_eq!(
+            capacity.aliases.len()
+                + capacity.metadata.keywords.len()
+                + capacity.metadata.context.len()
+                + capacity.metadata.technical.len(),
+            MAX_PLUGIN_ITEM_ALIASES
+        );
+        assert_eq!(capacity.metadata.keywords, vec!["manifest hint"]);
+
+        let mut entry = PluginItem::default();
+        entry.id = "entry".into();
+        entry.title = "Example Translator".into();
+        entry.command_id = Some("translate".into());
+        entry.session_entry = true;
+        let entry = to_result(
+            &plugin,
+            entry,
+            Some("translate"),
+            "Arbitrary User Query",
+            "en",
+        );
+        assert!(entry.aliases.iter().any(|alias| alias == "gt"));
+        assert!(entry
+            .aliases
+            .iter()
+            .all(|alias| alias != "Arbitrary User Query"));
+        assert!(entry.actions.iter().any(|action| matches!(
+            action,
+            Action::EnterSearchEngine { prefix } if prefix == "gt "
+        )));
     }
 }

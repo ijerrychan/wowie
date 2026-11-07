@@ -78,6 +78,30 @@ where
     }
 }
 
+pub(super) fn deserialize_plugin_string_list<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Array(values) => values
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<Vec<String>, _>>()
+            .map_err(de::Error::custom),
+        // Lua's empty table has no array/object distinction and mlua encodes
+        // it as an object. Accept that representation only when it is empty;
+        // non-empty objects remain invalid list data.
+        serde_json::Value::Object(values) if values.is_empty() => Ok(Vec::new()),
+        other => Err(de::Error::custom(format!(
+            "expected plugin string list array, got {}",
+            json_type_name(&other)
+        ))),
+    }
+}
+
 pub(super) fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",
@@ -118,8 +142,14 @@ pub(super) struct PluginItem {
     pub(super) category: Option<String>,
     #[serde(default)]
     pub(super) subtitle: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_plugin_string_list")]
     pub(super) aliases: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_plugin_string_list")]
+    pub(super) keywords: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_plugin_string_list")]
+    pub(super) context: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_plugin_string_list")]
+    pub(super) technical: Vec<String>,
     #[serde(default = "default_optional_string")]
     pub(super) target: Option<String>,
     #[serde(default)]
@@ -444,7 +474,7 @@ pub(super) fn to_result(
     plugin: &InstalledPlugin,
     item: PluginItem,
     requested_command_id: Option<&str>,
-    requested_query: &str,
+    _requested_query: &str,
     language: &str,
 ) -> SearchResult {
     let item = sanitize_plugin_item(item);
@@ -465,8 +495,6 @@ pub(super) fn to_result(
     // A default-search session entry is a discoverable fallback, not an
     // exact alias for every query. Treat it like configured custom commands
     // so ordinary applications and actions remain ahead of it.
-    let command_query_alias =
-        (!item.session_entry && command.is_some()).then(|| requested_query.to_owned());
     let icon = item
         .icon
         .or_else(|| command.and_then(|command| command.icon.clone()));
@@ -541,6 +569,42 @@ pub(super) fn to_result(
         actions
     };
     actions.extend(context_actions);
+    let mut aliases = item.aliases;
+    let mut metadata = crate::result::SearchMetadata {
+        keywords: item.keywords,
+        context: item.context,
+        technical: item.technical,
+    };
+    // Keep all explicit item evidence first. The 32-term cap was already
+    // enforced by sanitize_plugin_item; injected terms may use only space
+    // left after those fields, so manifest keywords cannot evict item IDs or
+    // other technical evidence.
+    let explicit_count =
+        aliases.len() + metadata.keywords.len() + metadata.context.len() + metadata.technical.len();
+    let mut remaining = MAX_PLUGIN_ITEM_ALIASES.saturating_sub(explicit_count);
+    if item.session_entry {
+        for word in &command_action_words {
+            if remaining == 0 {
+                break;
+            }
+            if append_unique_term(&mut aliases, word) {
+                remaining -= 1;
+            }
+        }
+    }
+    for word in plugin
+        .manifest
+        .keywords
+        .iter()
+        .chain(command_keywords.iter())
+    {
+        if remaining == 0 {
+            break;
+        }
+        if append_unique_term(&mut metadata.keywords, word) {
+            remaining -= 1;
+        }
+    }
     SearchResult {
         id: format!("plugin:{}:{}", plugin.manifest.id, item.id),
         identity: format!("plugin:{}:{}", plugin.manifest.id, item.id),
@@ -552,14 +616,8 @@ pub(super) fn to_result(
             .as_deref()
             .map(parse_plugin_category)
             .unwrap_or(ResultCategory::Application),
-        aliases: item
-            .aliases
-            .into_iter()
-            .chain(plugin.manifest.keywords.clone())
-            .chain(command_keywords)
-            .chain(command_action_words)
-            .chain(command_query_alias)
-            .collect(),
+        aliases,
+        metadata,
         location: item.subtitle,
         launch_target: target,
         launch_arguments: String::new(),
@@ -590,6 +648,20 @@ pub(super) fn to_result(
     }
 }
 
+fn append_unique_term(values: &mut Vec<String>, value: &str) -> bool {
+    let value = limit_context_text(value, MAX_PLUGIN_ALIAS_CHARS);
+    let normalized = crate::ranking::normalize_query(&value);
+    if normalized.is_empty()
+        || values
+            .iter()
+            .any(|existing| crate::ranking::normalize_query(existing) == normalized)
+    {
+        return false;
+    }
+    values.push(value);
+    true
+}
+
 pub(super) fn sanitize_plugin_item(mut item: PluginItem) -> PluginItem {
     item.id = limit_context_text(&item.id, MAX_PLUGIN_ITEM_ID_CHARS);
     item.title = limit_context_text(&item.title, MAX_PLUGIN_ITEM_TITLE_CHARS);
@@ -600,6 +672,15 @@ pub(super) fn sanitize_plugin_item(mut item: PluginItem) -> PluginItem {
         .take(MAX_PLUGIN_ITEM_ALIASES)
         .map(|alias| limit_context_text(&alias, MAX_PLUGIN_ALIAS_CHARS))
         .collect();
+    let mut remaining = MAX_PLUGIN_ITEM_ALIASES.saturating_sub(item.aliases.len());
+    for values in [&mut item.keywords, &mut item.context, &mut item.technical] {
+        let take = values.len().min(remaining);
+        values.truncate(take);
+        for value in values.iter_mut() {
+            *value = limit_context_text(value, MAX_PLUGIN_ALIAS_CHARS);
+        }
+        remaining -= take;
+    }
     item.target = item
         .target
         .map(|target| limit_context_text(&target, MAX_PLUGIN_ITEM_SUBTITLE_CHARS));
@@ -838,8 +919,39 @@ pub(super) fn is_supported_detail_url(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_plugin_response, validate_json_shape, validate_response_id};
+    use super::{
+        append_unique_term, parse_plugin_response, validate_json_shape, validate_response_id,
+    };
     use crate::plugin::MAX_PLUGIN_JSON_DEPTH;
+
+    #[test]
+    fn plugin_string_lists_accept_empty_lua_tables_but_reject_nonempty_objects() {
+        let mut item = serde_json::json!({"id":"item", "title":"Item"});
+        for field in ["aliases", "keywords", "context", "technical"] {
+            item[field] = serde_json::json!({});
+        }
+        let parsed: super::super::PluginItem = serde_json::from_value(item.clone()).unwrap();
+        assert!(parsed.aliases.is_empty());
+        assert!(parsed.keywords.is_empty());
+        assert!(parsed.context.is_empty());
+        assert!(parsed.technical.is_empty());
+
+        item["aliases"] = serde_json::json!(["alias"]);
+        item["keywords"] = serde_json::json!(["keyword"]);
+        item["context"] = serde_json::json!(["context"]);
+        item["technical"] = serde_json::json!(["technical"]);
+        let parsed: super::super::PluginItem = serde_json::from_value(item.clone()).unwrap();
+        assert_eq!(parsed.aliases, ["alias"]);
+        assert_eq!(parsed.keywords, ["keyword"]);
+        assert_eq!(parsed.context, ["context"]);
+        assert_eq!(parsed.technical, ["technical"]);
+
+        for field in ["aliases", "keywords", "context", "technical"] {
+            item[field] = serde_json::json!({"unexpected":"value"});
+            assert!(serde_json::from_value::<super::super::PluginItem>(item.clone()).is_err());
+            item[field] = serde_json::json!([]);
+        }
+    }
 
     #[test]
     fn response_parser_rejects_malformed_json_and_excessive_depth() {
@@ -856,5 +968,13 @@ mod tests {
     fn stale_request_id_is_rejected() {
         assert!(validate_response_id(Some("request-old"), "request-current").is_err());
         assert!(validate_response_id(Some("request-current"), "request-current").is_ok());
+    }
+
+    #[test]
+    fn injected_plugin_terms_deduplicate_by_search_normalization() {
+        let mut values = vec!["Alpha   Beta".to_owned()];
+        assert!(!append_unique_term(&mut values, "Ａｌｐｈａ\tＢｅｔａ"));
+        assert!(append_unique_term(&mut values, "Gamma"));
+        assert_eq!(values, vec!["Alpha   Beta", "Gamma"]);
     }
 }

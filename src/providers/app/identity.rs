@@ -55,6 +55,17 @@ fn merge_metadata(preferred: &mut SearchResult, other: &SearchResult) {
     if preferred.package_metadata.is_none() {
         preferred.package_metadata = other.package_metadata.clone();
     }
+    for (target, values) in [
+        (&mut preferred.metadata.keywords, &other.metadata.keywords),
+        (&mut preferred.metadata.context, &other.metadata.context),
+        (&mut preferred.metadata.technical, &other.metadata.technical),
+    ] {
+        for value in values {
+            if !target.contains(value) {
+                target.push(value.clone());
+            }
+        }
+    }
     if preferred.ranking_bias == 0 {
         preferred.ranking_bias = other.ranking_bias;
     }
@@ -301,8 +312,17 @@ pub(super) fn merge_by_identity(items: &mut Vec<SearchResult>) -> IdentityMergeS
                 .and_then(|value| value.split('_').next())
             {
                 let product = product.replace(['.', '_'], " ");
-                aliases.extend(product.split_whitespace().map(str::to_owned));
-                aliases.push(product);
+                if !product.trim().is_empty() && !item.metadata.technical.contains(&product) {
+                    item.metadata.technical.push(product);
+                }
+            }
+            if !item
+                .metadata
+                .technical
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(aumid))
+            {
+                item.metadata.technical.push(aumid.to_owned());
             }
         }
         if item.identity.trim().is_empty() {

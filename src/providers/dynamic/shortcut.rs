@@ -125,11 +125,11 @@ pub(super) fn build_result(query: ShortcutQuery<'_>, spec: ShortcutSpec) -> Sear
         id: spec.id.clone(),
         identity: spec.id,
         title,
-        // The shortcut selected this interaction, but the generated row is a
-        // normal custom result. Result categories describe the result itself,
-        // never the syntax used to reach it.
-        category: ResultCategory::Other,
+        // These results are executable user commands (including URL/open
+        // shortcuts), so root filters group them with other commands.
+        category: ResultCategory::Command,
         aliases,
+        metadata: Default::default(),
         location: spec.location,
         launch_target: spec.target,
         launch_arguments: spec.launch_arguments,
@@ -411,6 +411,7 @@ impl SearchEngineProvider for ShortcutProvider {
             identity: format!("{}:empty-state", session.id),
             title: session.title.clone(),
             category: ResultCategory::Other,
+            metadata: Default::default(),
             aliases: Vec::new(),
             location: entry.location.clone(),
             launch_target: PathBuf::new(),

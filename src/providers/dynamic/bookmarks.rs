@@ -664,7 +664,33 @@ fn result(b: &Bookmark) -> SearchResult {
             b.title.clone()
         },
         category: ResultCategory::Bookmark,
-        aliases: vec![b.url.clone(), b.folder.clone(), b.browser_profile.clone()],
+        aliases: Vec::new(),
+        metadata: crate::result::SearchMetadata {
+            keywords: url::Url::parse(&b.url)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+                .into_iter()
+                .collect(),
+            context: {
+                let mut values = vec![b.folder.clone(), b.browser_profile.clone()];
+                if let Ok(url) = url::Url::parse(&b.url) {
+                    if url.path() != "/" && !url.path().is_empty() {
+                        values.push(url.path().to_owned());
+                    }
+                }
+                values.into_iter().filter(|value| !value.trim().is_empty()).collect()
+            },
+            technical: {
+                let mut values = vec![b.url.clone()];
+                if let Some(host) = url::Url::parse(&b.url)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_owned))
+                {
+                    values.push(host);
+                }
+                values
+            },
+        },
         location: bookmark_location(b),
         launch_target: target.clone(),
         launch_arguments: String::new(),
@@ -693,6 +719,7 @@ fn entry_result(language: &str) -> SearchResult {
         identity: id,
         title: crate::utils::i18n::tr(language, "Browser bookmarks").into(),
         category: ResultCategory::Other,
+        metadata: Default::default(),
         aliases: vec!["bm".into()],
         location: crate::utils::i18n::tr(language, "Bookmarks from your browsers").into(),
         launch_target: PathBuf::new(),
@@ -723,6 +750,7 @@ fn empty_result(language: &str, description: &'static str) -> SearchResult {
         identity: "bookmarks:empty-state".into(),
         title: entry.title,
         category: ResultCategory::Other,
+        metadata: Default::default(),
         aliases: Vec::new(),
         location: entry.location,
         launch_target: PathBuf::new(),

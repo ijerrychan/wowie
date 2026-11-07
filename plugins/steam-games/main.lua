@@ -12,7 +12,14 @@ local CACHE_KEY = "steam-games-v2"
 local function index_games()
   match_candidates = {}
   for index, game in ipairs(games) do
-    match_candidates[index] = {game.title, game.aliases[1]}
+    -- Legacy cache records kept the appid in aliases[1]. Move it to the
+    -- technical role and keep it available to the plugin's exact-ID prefilter.
+    local appid = game.appid or (type(game.aliases) == "table" and game.aliases[1])
+      or string.match(game.id or "", "^steam%-(%d+)$")
+    game.appid = type(appid) == "string" and appid or nil
+    game.aliases = {}
+    game.technical = game.appid and {game.appid} or {}
+    match_candidates[index] = {game.title, game.appid}
   end
 end
 
@@ -150,7 +157,9 @@ local function discover()
                 title = name,
                 category = "game",
                 subtitle = "Steam",
-                aliases = {appid},
+                aliases = {},
+                technical = {appid},
+                appid = appid,
                 target = "steam://rungameid/" .. appid,
                 icon = exe and {type = "system", target = exe.path} or nil,
                 -- Category and user history are sufficient root tie-breakers;
@@ -169,7 +178,7 @@ local function discover()
   end
   local icons = icon_index(icon_roots, installed)
   for _, game in ipairs(found) do
-    local appid = game.aliases[1]
+    local appid = game.appid
     if icons[appid] then
       game.icon = {type = "file", path = icons[appid]}
     end

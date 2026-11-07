@@ -109,7 +109,7 @@ mod tests {
             explicit.launch_arguments,
             "-NoLogo -NoExit -Command \"ipconfig\""
         );
-        assert_eq!(explicit.category, crate::result::ResultCategory::Other);
+        assert_eq!(explicit.category, crate::result::ResultCategory::Command);
 
         let fallback = builtin(query("ipconfig")).expect("fallback command");
         assert_eq!(fallback.title, "Execute Command \"ipconfig\"");

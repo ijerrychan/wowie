@@ -51,6 +51,9 @@ pub struct Config {
     pub show_advanced_launch_entries: bool,
     pub compact_search: bool,
     pub separate_launch_entries: bool,
+    pub file_search_enabled: bool,
+    pub file_search_backend: String,
+    pub file_search_keyword: String,
     /// Ordered result category IDs. Earlier categories win when match strength is equal.
     pub result_order: Vec<String>,
     /// Ordered plugin IDs. Earlier plugins win when match strength is equal.
@@ -207,6 +210,9 @@ impl Default for Config {
             show_advanced_launch_entries: false,
             compact_search: false,
             separate_launch_entries: false,
+            file_search_enabled: true,
+            file_search_backend: "auto".into(),
+            file_search_keyword: "e".into(),
             result_order: default_result_order(),
             plugin_order: Vec::new(),
             result_priorities: BTreeMap::new(),
@@ -256,8 +262,49 @@ impl Config {
                 return Err(error).context(format!("read configuration {}", path.display()))
             }
         };
-        let mut config: Self = serde_json::from_str(&text)
+        let raw: serde_json::Value = serde_json::from_str(&text)
             .context(format!("parse configuration {}", path.display()))?;
+        let has_file_search_backend = raw.get("file_search_backend").is_some();
+        let has_file_search_enabled = raw.get("file_search_enabled").is_some();
+        let has_file_search_keyword = raw.get("file_search_keyword").is_some();
+        let mut config: Self = serde_json::from_value(raw.clone())
+            .context(format!("parse configuration {}", path.display()))?;
+        let legacy = raw
+            .get("plugins")
+            .and_then(|plugins| plugins.get("everything"));
+        if !has_file_search_backend {
+            if let Some(backend) = legacy
+                .and_then(|settings| settings.get("preferences"))
+                .and_then(|preferences| preferences.get("backend"))
+                .and_then(serde_json::Value::as_str)
+            {
+                config.file_search_backend = backend.to_owned();
+            }
+        }
+        if !has_file_search_enabled {
+            if let Some(enabled) = legacy
+                .and_then(|settings| settings.get("enabled"))
+                .and_then(serde_json::Value::as_bool)
+            {
+                config.file_search_enabled = enabled;
+            }
+        }
+        if !has_file_search_keyword {
+            if let Some(keyword) = legacy
+                .and_then(|settings| settings.get("command_action_words"))
+                .and_then(|commands| commands.get("search"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|words| words.iter().find_map(serde_json::Value::as_str))
+            {
+                config.file_search_keyword = keyword.to_owned();
+            }
+        }
+        // The old file-search settings now live at the root. Do not retain a
+        // dead plugin row in the plugin manager or its priority list.
+        config.plugins.remove("everything");
+        config
+            .plugin_order
+            .retain(|plugin_id| plugin_id != "everything");
         config.normalize();
         Ok(config)
     }
@@ -289,6 +336,18 @@ impl Config {
             self.language = DEFAULT_LANGUAGE.into();
         }
         self.accent_color = normalize_accent_color(&self.accent_color);
+        self.file_search_backend = match self
+            .file_search_backend
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "everything" => "everything".into(),
+            "windows-index" => "windows-index".into(),
+            _ => "auto".into(),
+        };
+        self.file_search_keyword =
+            crate::services::file_search::normalize_keyword(&self.file_search_keyword);
         self.shortcut_keywords.normalize();
         if !self.result_priorities.is_empty() {
             let mut old_priorities = std::mem::take(&mut self.result_priorities);
@@ -578,6 +637,52 @@ mod tests {
             config.resolved_accent_color(0x123456, false),
             DEFAULT_ACCENT_COLOR
         );
+    }
+
+    #[test]
+    fn legacy_everything_settings_migrate_with_explicit_fields_winning() {
+        let directory = std::env::temp_dir().join(format!(
+            "wowie-file-search-migration-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "plugins": {"everything": {
+                    "enabled": false,
+                    "preferences": {"backend": "windows-index"},
+                    "command_action_words": {"search": ["files", "find"]}
+                }},
+                "plugin_order": ["everything", "google-translate"]
+            }"#,
+        )
+        .unwrap();
+
+        let legacy = Config::load_from_path(&path).unwrap();
+        assert_eq!(legacy.file_search_backend, "windows-index");
+        assert!(!legacy.file_search_enabled);
+        assert_eq!(legacy.file_search_keyword, "files");
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let mut raw: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let object = raw.as_object_mut().unwrap();
+        object.insert("file_search_backend".into(), "everything".into());
+        object.insert("file_search_enabled".into(), true.into());
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+        let config = Config::load_from_path(&path).unwrap();
+        assert_eq!(config.file_search_backend, "everything");
+        assert!(config.file_search_enabled);
+        assert_eq!(config.file_search_keyword, "files");
+        assert!(!config.plugins.contains_key("everything"));
+        assert_eq!(config.plugin_order, ["google-translate"]);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

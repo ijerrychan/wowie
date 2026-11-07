@@ -19,7 +19,7 @@ pub(crate) fn watch_app_provider_sources(
     watches.extend(
         store_watch_roots()
             .into_iter()
-            .map(|path| (path, super::super::AppProviderSource::PackagedApps)),
+            .map(|path| (path, super::super::AppProviderSource::AppsFolder)),
     );
     for (path, source) in watches {
         let sender = sender.clone();
@@ -340,7 +340,6 @@ fn watch_package_catalog(
             if signal.is_stopped() {
                 break;
             }
-            let _ = sender.send(super::super::AppProviderSource::PackagedApps);
             let _ = sender.send(super::super::AppProviderSource::AppsFolder);
         }
         if let Ok(token) = registrations.0 {

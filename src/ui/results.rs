@@ -631,6 +631,7 @@ mod tests {
             identity: id.into(),
             title: id.into(),
             category,
+            metadata: Default::default(),
             aliases: Vec::new(),
             location: String::new(),
             launch_target: Default::default(),
@@ -782,7 +783,7 @@ mod tests {
 
         // A launchable command-line or application result is not a session
         // entry merely because of its title or category.
-        let mut launchable_command = item("shortcut:active", ResultCategory::Other);
+        let mut launchable_command = item("shortcut:active", ResultCategory::Command);
         launchable_command.title = "Execute Command \"ipconfig\"".into();
         launchable_command
             .actions
@@ -795,7 +796,7 @@ mod tests {
                 icon: None,
             }));
         assert!(!launchable_command.is_session_entry());
-        assert_eq!(effective_category_key(&launchable_command), "other");
+        assert_eq!(effective_category_key(&launchable_command), "command");
 
         let application = item("application", ResultCategory::Application);
         assert_eq!(effective_category_key(&application), "application");
@@ -806,6 +807,71 @@ mod tests {
             effective_category_key(&item("command-result", ResultCategory::Command)),
             "command"
         );
+    }
+
+    #[test]
+    fn shortcut_launches_and_legacy_favorites_are_command_filterable() {
+        let mut command = item("shortcut:open-url", ResultCategory::Command);
+        command
+            .actions
+            .push(crate::result::Action::Launch(crate::result::LaunchEntry {
+                source: SourceId::Shortcut,
+                path: PathBuf::new(),
+                target: PathBuf::from("https://example.test"),
+                arguments: String::new(),
+                working_directory: None,
+                icon: None,
+            }));
+
+        // Persisted favorites may contain the pre-migration category. The
+        // source and primary action identify these without inspecting names
+        // or target strings.
+        let mut old_favorite = item("shortcut:legacy", ResultCategory::Other);
+        old_favorite.source = SourceId::Shortcut;
+        old_favorite
+            .actions
+            .push(crate::result::Action::Launch(crate::result::LaunchEntry {
+                source: SourceId::Shortcut,
+                path: PathBuf::new(),
+                target: PathBuf::from("custom-target"),
+                arguments: "raw argument".into(),
+                working_directory: None,
+                icon: None,
+            }));
+
+        let mut application = item("app", ResultCategory::Application);
+        application
+            .actions
+            .push(crate::result::Action::Launch(crate::result::LaunchEntry {
+                source: SourceId::AppsFolder,
+                path: PathBuf::new(),
+                target: PathBuf::from("app.exe"),
+                arguments: String::new(),
+                working_directory: None,
+                icon: None,
+            }));
+        let website = item("website", ResultCategory::Website);
+
+        let filter = root_filter(
+            vec![command, old_favorite, application, website],
+            PresentationMode::RootSearch,
+            &[],
+        );
+        assert_eq!(
+            filter.categories(),
+            [("application", 1), ("website", 1), ("command", 2)]
+        );
+        let command_ids = {
+            let mut filter = filter;
+            filter.selected = "command".into();
+            filter
+                .visible()
+                .0
+                .iter()
+                .map(|result| result.id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(command_ids, ["shortcut:open-url", "shortcut:legacy"]);
     }
 
     #[test]

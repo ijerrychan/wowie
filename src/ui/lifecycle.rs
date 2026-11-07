@@ -76,6 +76,11 @@ pub fn run() -> Result<()> {
     engine.replace_fuzzy_search(config.fuzzy_search);
     engine.replace_separate_launch_entries(config.separate_launch_entries);
     engine.replace_show_advanced_launch_entries(config.show_advanced_launch_entries);
+    engine.replace_file_search_preferences(
+        &config.file_search_backend,
+        config.file_search_enabled,
+        &config.file_search_keyword,
+    );
     let plugin_order = settings::visible_plugin_order(&config, &plugin_settings);
     engine.replace_priority_order(&config.result_order, &plugin_order);
     engine.replace_provider_language(config.language.clone());
@@ -133,14 +138,20 @@ pub fn run() -> Result<()> {
     window.set_search_icon_is_shortcut(false);
     window.set_launch_error(String::new().into());
     context_window.set_dark_mode(dark_mode);
-    window::install_native_background(window.as_weak(), Launcher::get_native_background_color);
+    window::install_native_background(
+        window.as_weak(),
+        Launcher::get_native_background_color,
+        Launcher::get_native_border_color,
+    );
     window::install_native_background(
         settings_window.as_weak(),
         SettingsWindow::get_native_background_color,
+        SettingsWindow::get_native_border_color,
     );
     window::install_native_background(
         context_window.as_weak(),
         ContextMenu::get_native_background_color,
+        ContextMenu::get_native_border_color,
     );
     context_window.set_ui_font_family(ui_font_family.clone().into());
     context_window.set_ui_font_size(config.font_size as f32);
@@ -1332,7 +1343,11 @@ pub fn run() -> Result<()> {
                 menu.set_menu_width(context_menu_width(&actions, &language) as f32);
                 menu.set_keyboard_invoked(keyboard);
                 menu.set_actions(ModelRc::from(Rc::new(VecModel::from(actions))));
-                platform::set_window_background(menu.window(), menu.get_native_background_color());
+                platform::set_window_background(
+                    menu.window(),
+                    menu.get_native_background_color(),
+                    menu.get_native_border_color(),
+                );
                 platform.disable_window_transitions(menu.window());
                 let _ = menu.show();
                 menu.window().request_redraw();
@@ -1867,7 +1882,11 @@ pub fn run() -> Result<()> {
         );
     }
     if config.show_on_startup {
-        platform::set_window_background(window.window(), window.get_native_background_color());
+        platform::set_window_background(
+            window.window(),
+            window.get_native_background_color(),
+            window.get_native_border_color(),
+        );
         platform.disable_window_transitions(window.window());
         window.show()?;
         window.window().request_redraw();

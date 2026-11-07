@@ -1,5 +1,5 @@
 use crate::plugin::PluginManager;
-use crate::provider::{EngineSearchResult, ProviderRegistry, SearchEngineSettings};
+use crate::provider::{EngineSearchResult, MatchingPolicy, ProviderRegistry, SearchEngineSettings};
 use crate::ranking::Ranker;
 use crate::result::{ResultVisibility, SearchResult};
 use anyhow::Result;
@@ -164,7 +164,7 @@ impl SearchCore {
     /// command/session entries never qualify. Weak matches are not removed
     /// from the result list; this only decides whether any row may headline it.
     pub fn best_match_index(&self, query: &str, items: &[SearchResult]) -> Option<usize> {
-        let query = query.trim().to_lowercase();
+        let query = crate::ranking::normalize_query(query);
         if query.is_empty() {
             return None;
         }
@@ -174,35 +174,28 @@ impl SearchCore {
         let mut needle_buffer = Vec::new();
         let mut lowercase_buffer = String::new();
         let mut fuzzy_indices_buffer = Vec::new();
+        let common_keywords = common_keywords(items.iter());
         for (index, item) in items.iter().enumerate() {
             if self.providers.is_fallback_result(item)
                 || item.effective_category() == crate::result::ResultCategory::Command
             {
                 continue;
             }
-            let mut score = |text: &str| {
-                match_score(
-                    &query,
-                    text,
-                    fuzzy_search,
-                    true,
-                    &mut matcher,
-                    &mut matcher_buffer,
-                    &mut needle_buffer,
-                    &mut lowercase_buffer,
-                    &mut fuzzy_indices_buffer,
-                )
-            };
-            let title_score = score(&item.title);
-            let alias_score = item
-                .aliases
-                .iter()
-                .filter_map(|alias| score(alias))
-                .max_by_key(|score| (score.class, score.quality));
-            if title_score
-                .into_iter()
-                .chain(alias_score)
-                .any(|score| score.strong)
+            if result_match_score(
+                &query,
+                &item.title,
+                &item.aliases,
+                &item.metadata,
+                &common_keywords,
+                fuzzy_search,
+                true,
+                &mut matcher,
+                &mut matcher_buffer,
+                &mut needle_buffer,
+                &mut lowercase_buffer,
+                &mut fuzzy_indices_buffer,
+            )
+            .is_some_and(|score| score.strong)
             {
                 return Some(index);
             }
@@ -237,6 +230,11 @@ impl SearchCore {
         plugin_configs: &std::collections::BTreeMap<String, crate::config::PluginConfig>,
     ) {
         self.providers.replace_plugin_config(plugin_configs);
+    }
+
+    pub fn replace_file_search_preferences(&self, backend: &str, enabled: bool, keyword: &str) {
+        self.providers
+            .replace_file_search_preferences(backend, enabled, keyword);
     }
 
     #[cfg(test)]
@@ -309,7 +307,17 @@ impl SearchCore {
         query: &str,
         offset: usize,
     ) -> Vec<SearchResult> {
-        self.providers.query_more(context, query, offset)
+        let results = self.providers.query_more(context, query, offset);
+        if self.providers.settings_for_context(context).matching_policy
+            == MatchingPolicy::ProviderOwned
+            && !query.trim().is_empty()
+        {
+            return results
+                .into_iter()
+                .filter(|item| item.visibility.allows(query))
+                .collect();
+        }
+        results
     }
 
     /// Search a context resolved by the caller. UI code should resolve once
@@ -346,7 +354,7 @@ impl SearchCore {
         // An active engine receives the text currently shown in the input
         // field. The UI stores the selected engine separately, so the field
         // no longer needs to contain or be parsed for its shortcut prefix.
-        let query = input.trim().to_lowercase();
+        let query = crate::ranking::normalize_query(&input);
         let root_empty_query =
             matches!(context, crate::page::SearchContext::Default) && query.is_empty();
         let favorites = self.ranker.favorite_snapshot(root_empty_query);
@@ -380,17 +388,46 @@ impl SearchCore {
             .enumerate()
             .map(|(index, entry)| (entry.result_id.as_str(), index))
             .collect::<std::collections::HashMap<_, _>>();
+        let provider_query =
+            if matches!(context, crate::page::SearchContext::Default) && query.is_empty() {
+                ""
+            } else {
+                input.as_str()
+            };
+        let visibility_query = if matches!(context, crate::page::SearchContext::Default) {
+            query.as_str()
+        } else {
+            input.as_str()
+        };
         let mut dynamic = self
             .providers
-            .query(context, &input, history.as_deref().unwrap_or_default())
+            .query(
+                context,
+                provider_query,
+                history.as_deref().unwrap_or_default(),
+            )
             .into_iter()
             .filter(|candidate| {
-                candidate.item.visibility.allows(&input)
+                candidate.item.visibility.allows(visibility_query)
                     && (!matches!(context, crate::page::SearchContext::Default)
-                        || !input.is_empty()
+                        || !query.is_empty()
                         || candidate.item.visibility == ResultVisibility::EmptyQueryOnly)
             })
             .collect::<Vec<_>>();
+        if !query.is_empty()
+            && matches!(context, crate::page::SearchContext::Engine(_))
+            && self.providers.settings_for_context(context).matching_policy
+                == MatchingPolicy::ProviderOwned
+        {
+            let mut results = dynamic
+                .into_iter()
+                .map(|candidate| candidate.item)
+                .collect::<Vec<_>>();
+            if let Some(limit) = result_limit {
+                results.truncate(limit);
+            }
+            return results;
+        }
         if matches!(context, crate::page::SearchContext::Default)
             && !query.is_empty()
             && self.separate_launch_entries.load(Ordering::Acquire)
@@ -475,15 +512,19 @@ impl SearchCore {
             .lock()
             .map(|priorities| priorities.clone())
             .unwrap_or_default();
+        let common_keywords = common_keywords(dynamic.iter().map(|candidate| &candidate.item));
         let mut ranked: Vec<RankedResult<'_>> = dynamic.iter().enumerate().filter_map(|(candidate_index, candidate)| {
                 let item = &candidate.item;
                 // Every provider contributes ordinary SearchResults. The
                 // central matcher is the single place that decides whether a
                 // result is visible and how strongly it matches.
                 let engine_fuzzy_search = candidate.settings.respect_global_fuzzy_search && fuzzy_search;
-                let title_score = match_score(
+                let score = result_match_score(
                     &query,
                     &item.title,
+                    &item.aliases,
+                    &item.metadata,
+                    &common_keywords,
                     engine_fuzzy_search,
                     false,
                     &mut matcher,
@@ -492,28 +533,6 @@ impl SearchCore {
                     &mut lowercase_buffer,
                     &mut fuzzy_indices_buffer,
                 );
-                let alias_score = item
-                    .aliases
-                    .iter()
-                    .filter_map(|alias| {
-                        let score = match_score(
-                            &query,
-                            alias,
-                            engine_fuzzy_search,
-                            false,
-                            &mut matcher,
-                            &mut matcher_buffer,
-                            &mut needle_buffer,
-                            &mut lowercase_buffer,
-                            &mut fuzzy_indices_buffer,
-                        )?;
-                        Some(score)
-                    })
-                    .max_by_key(|score| (score.class, score.quality));
-                let score = [title_score, alias_score]
-                    .into_iter()
-                    .flatten()
-                    .max_by_key(|score| (score.class, score.quality));
                 if debug && score.is_some() {
                     eprintln!(
                         "[search] candidate title={:?} score={:?} matched={} identity={:?} sources={:?} location={:?} launch_target={:?} args={:?}",
@@ -537,6 +556,7 @@ impl SearchCore {
                 (if fallback {
                     Some(MatchScore {
                         class: 0,
+                        role: EvidenceRole::Auxiliary,
                         quality: 0,
                         strong: false,
                     })
@@ -550,7 +570,9 @@ impl SearchCore {
                             favorite_order,
                             fallback,
                             match_class: score.class,
+                            evidence_role: score.role,
                             match_quality: score.quality,
+                            composite_score: score.quality,
                             category_order: category_order
                                 .get(category_priority_key(item.category))
                                 .copied()
@@ -561,7 +583,6 @@ impl SearchCore {
                                 .strip_prefix("plugin:")
                                 .and_then(|plugin_id| plugin_order.get(plugin_id).copied())
                                 .unwrap_or(usize::MAX),
-                            behavior: 0,
                             engine_bias: candidate.settings.ranking_bias.clamp(-100, 100),
                             provider_bias: item.ranking_bias,
                         },
@@ -575,7 +596,7 @@ impl SearchCore {
             .ranker
             .scores(ranked.iter().map(|(_, item, _)| item.id.as_str()), &query);
         for ((key, _, _), behavior) in ranked.iter_mut().zip(behavior_scores) {
-            key.behavior = behavior;
+            key.composite_score = key.match_quality.saturating_add(behavior.clamp(0, 100));
         }
         if let Some(limit) = result_limit {
             if ranked.len() > limit {
@@ -626,14 +647,23 @@ const MATCH_CLASS_CONTAINS: u8 = 2;
 const MATCH_CLASS_WORD_START: u8 = 3;
 const MATCH_CLASS_PREFIX: u8 = 4;
 const MATCH_CLASS_EXACT: u8 = 5;
+const TITLE_MATCH_BONUS: i32 = 16;
+const UNORDERED_MULTIWORD_PENALTY: i32 = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MatchScore {
     class: u8,
+    role: EvidenceRole,
     quality: i32,
     /// Whether the evidence is strong enough to headline the result list.
     /// This never removes a result; it only gates the best-match slot.
     strong: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum EvidenceRole {
+    Auxiliary,
+    Name,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -642,10 +672,11 @@ struct RankKey {
     favorite_order: Option<usize>,
     fallback: bool,
     match_class: u8,
+    evidence_role: EvidenceRole,
     match_quality: i32,
+    composite_score: i32,
     category_order: usize,
     plugin_order: usize,
-    behavior: i32,
     engine_bias: i32,
     provider_bias: i32,
 }
@@ -673,12 +704,12 @@ impl RankKey {
             (
                 value.history_order.unwrap_or(usize::MAX),
                 value.favorite_order.unwrap_or(usize::MAX),
+                Reverse(value.evidence_role),
                 Reverse(value.match_class),
-                Reverse(value.match_quality),
+                Reverse(value.composite_score),
                 value.fallback,
                 value.category_order,
                 value.plugin_order,
-                Reverse(value.behavior),
                 Reverse(value.engine_bias),
                 Reverse(value.provider_bias),
             )
@@ -720,6 +751,298 @@ fn favorite_requires_current_app_index(item: &SearchResult) -> bool {
 
     is_indexed_application_source(&item.source)
         || item.sources.iter().any(is_indexed_application_source)
+}
+
+fn result_match_score(
+    query: &str,
+    title: &str,
+    aliases: &[String],
+    metadata: &crate::result::SearchMetadata,
+    common_keywords: &std::collections::HashSet<String>,
+    fuzzy_search: bool,
+    evaluate_evidence: bool,
+    matcher: &mut Matcher,
+    matcher_buffer: &mut Vec<char>,
+    needle_buffer: &mut Vec<char>,
+    lowercase_buffer: &mut String,
+    fuzzy_indices_buffer: &mut Vec<u32>,
+) -> Option<MatchScore> {
+    let title_score = match_score(
+        query,
+        title,
+        fuzzy_search,
+        evaluate_evidence,
+        matcher,
+        matcher_buffer,
+        needle_buffer,
+        lowercase_buffer,
+        fuzzy_indices_buffer,
+    )
+    .map(|mut score| {
+        score.quality = score.quality.saturating_add(TITLE_MATCH_BONUS);
+        score
+    });
+    let alias_score = aliases
+        .iter()
+        .filter_map(|alias| {
+            match_score(
+                query,
+                alias,
+                fuzzy_search,
+                evaluate_evidence,
+                matcher,
+                matcher_buffer,
+                needle_buffer,
+                lowercase_buffer,
+                fuzzy_indices_buffer,
+            )
+        })
+        .max_by_key(|score| (score.class, score.quality));
+    let keyword_score = metadata
+        .keywords
+        .iter()
+        .filter_map(|keyword| {
+            let normalized = crate::ranking::normalize_query(keyword);
+            if is_numeric_token(query)
+                || !keyword_query_evidence(query, &normalized)
+                || !has_keyword_anchor(query, common_keywords)
+            {
+                return None;
+            }
+            Some(MatchScore {
+                class: MATCH_CLASS_FUZZY,
+                role: EvidenceRole::Auxiliary,
+                quality: -1000,
+                strong: false,
+            })
+        })
+        .next();
+    let technical_score = metadata
+        .technical
+        .iter()
+        .any(|value| crate::ranking::normalize_query(value) == query)
+        .then_some(MatchScore {
+            class: MATCH_CLASS_FUZZY,
+            role: EvidenceRole::Auxiliary,
+            quality: -1500,
+            strong: false,
+        });
+    let multiword_score = unordered_multiword_score(
+        query,
+        title,
+        aliases,
+        metadata,
+        common_keywords,
+        evaluate_evidence,
+        matcher,
+        matcher_buffer,
+        needle_buffer,
+        lowercase_buffer,
+        fuzzy_indices_buffer,
+    );
+    [
+        title_score,
+        alias_score,
+        keyword_score,
+        technical_score,
+        multiword_score,
+    ]
+    .into_iter()
+    .flatten()
+    .max_by_key(|score| (score.role, score.class, score.quality))
+}
+
+fn keyword_query_evidence(query: &str, keyword: &str) -> bool {
+    if query == keyword {
+        return true;
+    }
+    let query_tokens = query.split_whitespace().collect::<Vec<_>>();
+    let keyword_tokens = keyword.split_whitespace().collect::<Vec<_>>();
+    if query_tokens.is_empty() || keyword_tokens.is_empty() {
+        return false;
+    }
+    if query_tokens.len() == 1 {
+        return keyword_tokens.contains(&query_tokens[0])
+            || (cjk_char_count(query) >= 2 && keyword.contains(query));
+    }
+    keyword_tokens
+        .windows(query_tokens.len())
+        .any(|window| window == query_tokens)
+}
+
+fn has_keyword_anchor(query: &str, common_keywords: &std::collections::HashSet<String>) -> bool {
+    if query
+        .split_whitespace()
+        .any(|token| !is_numeric_token(token) && !common_keywords.contains(token))
+    {
+        return true;
+    }
+    !query.chars().any(char::is_whitespace)
+        && cjk_char_count(query) >= 2
+        && !common_keywords.contains(query)
+}
+
+fn unordered_multiword_score(
+    query: &str,
+    title: &str,
+    aliases: &[String],
+    metadata: &crate::result::SearchMetadata,
+    common_keywords: &std::collections::HashSet<String>,
+    evaluate_evidence: bool,
+    matcher: &mut Matcher,
+    matcher_buffer: &mut Vec<char>,
+    needle_buffer: &mut Vec<char>,
+    lowercase_buffer: &mut String,
+    fuzzy_indices_buffer: &mut Vec<u32>,
+) -> Option<MatchScore> {
+    let mut tokens = query.split_whitespace();
+    let first = tokens.next()?;
+    if tokens.clone().next().is_none() {
+        return None;
+    }
+    let mut weakest_class = u8::MAX;
+    let mut weakest_quality = i32::MAX;
+    let mut all_strong = true;
+    let mut all_tokens_in_title = true;
+    let mut has_name_anchor = false;
+    let mut has_rare_keyword_anchor = false;
+    let mut all_tokens_name = true;
+    for token in std::iter::once(first).chain(tokens) {
+        let title_score = match_score(
+            token,
+            title,
+            false,
+            evaluate_evidence,
+            matcher,
+            matcher_buffer,
+            needle_buffer,
+            lowercase_buffer,
+            fuzzy_indices_buffer,
+        );
+        all_tokens_in_title &= title_score.is_some();
+        has_name_anchor |= title_score.is_some_and(|score| score.strong);
+        let mut token_score = title_score;
+        for field in aliases.iter().map(String::as_str) {
+            if let Some(score) = match_score(
+                token,
+                field,
+                false,
+                evaluate_evidence,
+                matcher,
+                matcher_buffer,
+                needle_buffer,
+                lowercase_buffer,
+                fuzzy_indices_buffer,
+            ) {
+                if token_score.is_none_or(|best: MatchScore| {
+                    (score.class, score.quality) > (best.class, best.quality)
+                }) {
+                    token_score = Some(score);
+                }
+            }
+        }
+        let name_score = token_score;
+        all_tokens_name &= name_score.is_some();
+        has_name_anchor |= name_score.is_some_and(|score| score.strong);
+        let mut keyword_match = false;
+        for keyword in &metadata.keywords {
+            let normalized = crate::ranking::normalize_query(keyword);
+            if normalized.split_whitespace().any(|word| word == token) {
+                keyword_match = true;
+                if !is_numeric_token(token) && !common_keywords.contains(token) {
+                    has_rare_keyword_anchor = true;
+                }
+            }
+        }
+        if token_score.is_none() && keyword_match {
+            token_score = Some(MatchScore {
+                class: MATCH_CLASS_FUZZY,
+                role: EvidenceRole::Auxiliary,
+                quality: -1000,
+                strong: false,
+            });
+        }
+        if token_score.is_none()
+            && metadata.context.iter().any(|field| {
+                crate::ranking::normalize_query(field)
+                    .split_whitespace()
+                    .any(|word| word == token)
+            })
+        {
+            token_score = Some(MatchScore {
+                class: MATCH_CLASS_FUZZY,
+                role: EvidenceRole::Auxiliary,
+                quality: -1500,
+                strong: false,
+            });
+        }
+        let score = token_score?;
+        weakest_class = weakest_class.min(score.class);
+        weakest_quality = weakest_quality.min(score.quality);
+        all_strong &= score.strong;
+    }
+    if !has_name_anchor && !has_rare_keyword_anchor {
+        return None;
+    }
+    Some(MatchScore {
+        // Unordered token coverage remains below exact, prefix and word-start
+        // phrase evidence, even if each token is an exact alias by itself.
+        class: weakest_class.min(if has_name_anchor {
+            MATCH_CLASS_CONTAINS
+        } else {
+            MATCH_CLASS_FUZZY
+        }),
+        role: if all_tokens_name {
+            EvidenceRole::Name
+        } else {
+            EvidenceRole::Auxiliary
+        },
+        quality: weakest_quality
+            .saturating_sub(UNORDERED_MULTIWORD_PENALTY)
+            .saturating_add(if all_tokens_in_title {
+                TITLE_MATCH_BONUS
+            } else {
+                0
+            }),
+        strong: all_strong && weakest_class >= MATCH_CLASS_WORD_START && has_name_anchor,
+    })
+}
+
+fn common_keywords<'a>(
+    items: impl Iterator<Item = &'a SearchResult>,
+) -> std::collections::HashSet<String> {
+    let mut documents = 0usize;
+    let mut counts = std::collections::HashMap::<String, usize>::new();
+    for item in items {
+        let mut terms = std::collections::HashSet::new();
+        for keyword in &item.metadata.keywords {
+            let normalized = crate::ranking::normalize_query(keyword);
+            if !normalized.is_empty() && !is_numeric_token(&normalized) {
+                terms.insert(normalized.clone());
+            }
+            for term in normalized.split_whitespace() {
+                if !is_numeric_token(term) {
+                    terms.insert(term.to_owned());
+                }
+            }
+        }
+        if !terms.is_empty() {
+            documents += 1;
+            for term in terms {
+                *counts.entry(term).or_default() += 1;
+            }
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(term, count)| {
+            (count >= 3 && count.saturating_mul(10) >= documents).then_some(term)
+        })
+        .collect()
+}
+
+fn is_numeric_token(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|character| character.is_ascii_digit())
 }
 
 fn stable_launch_entry_hash(entry: &crate::result::LaunchEntry) -> u64 {
@@ -764,15 +1087,17 @@ fn match_score(
     if query.is_empty() {
         return Some(MatchScore {
             class: MATCH_CLASS_EMPTY,
+            role: EvidenceRole::Name,
             quality: 0,
             strong: false,
         });
     }
     let query_chars = query.chars().count();
-    if query.is_ascii() && title.is_ascii() {
+    if query.is_ascii() && ascii_text_is_canonical(title) {
         if ascii_eq_ignore_case(title, query) {
             return Some(MatchScore {
                 class: MATCH_CLASS_EXACT,
+                role: EvidenceRole::Name,
                 quality: 1000,
                 strong: true,
             });
@@ -780,6 +1105,7 @@ fn match_score(
         if ascii_starts_with_ignore_case(title, query) {
             return Some(MatchScore {
                 class: MATCH_CLASS_PREFIX,
+                role: EvidenceRole::Name,
                 quality: title_quality(title),
                 strong: true,
             });
@@ -791,6 +1117,7 @@ fn match_score(
                 } else {
                     MATCH_CLASS_CONTAINS
                 },
+                role: EvidenceRole::Name,
                 quality: title_quality(title),
                 // A single character buried at a word start is still weak
                 // evidence; leading characters are covered by prefix matches.
@@ -814,12 +1141,12 @@ fn match_score(
         );
     }
 
-    lowercase_buffer.clear();
-    lowercase_buffer.extend(title.chars().flat_map(char::to_lowercase));
+    crate::ranking::normalize_query_into(title, lowercase_buffer);
     let text = lowercase_buffer.as_str();
     if text == query {
         return Some(MatchScore {
             class: MATCH_CLASS_EXACT,
+            role: EvidenceRole::Name,
             quality: 1000,
             strong: true,
         });
@@ -827,6 +1154,7 @@ fn match_score(
     if text.starts_with(query) {
         return Some(MatchScore {
             class: MATCH_CLASS_PREFIX,
+            role: EvidenceRole::Name,
             quality: title_quality(text),
             strong: true,
         });
@@ -842,6 +1170,7 @@ fn match_score(
             } else {
                 MATCH_CLASS_CONTAINS
             },
+            role: EvidenceRole::Name,
             quality: title_quality(text),
             strong: wide_phrase || (at_word_start && query_chars >= 2),
         });
@@ -859,6 +1188,15 @@ fn match_score(
         needle_buffer,
         fuzzy_indices_buffer,
     )
+}
+
+fn ascii_text_is_canonical(text: &str) -> bool {
+    text.is_ascii()
+        && text.trim() == text
+        && !text.as_bytes().windows(2).any(|pair| pair == b"  ")
+        && !text
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() && byte != b' ')
 }
 
 fn title_quality(text: &str) -> i32 {
@@ -883,6 +1221,7 @@ fn fuzzy_match_score(
         let score = matcher.fuzzy_match(haystack, needle)?;
         return Some(MatchScore {
             class: MATCH_CLASS_FUZZY,
+            role: EvidenceRole::Name,
             quality: score as i32,
             strong: false,
         });
@@ -891,6 +1230,7 @@ fn fuzzy_match_score(
     let score = matcher.fuzzy_indices(haystack, needle, indices_buffer)?;
     Some(MatchScore {
         class: MATCH_CLASS_FUZZY,
+        role: EvidenceRole::Name,
         quality: score as i32,
         // A scattered subsequence is the weakest possible evidence. Require a
         // word acronym or an almost-contiguous single-word typo.
@@ -1020,12 +1360,84 @@ mod tests {
     use super::*;
     use crate::result::ResultCategory;
 
+    struct NativeQueryEngine {
+        session: crate::page::SearchEngineSession,
+        first_page: Vec<SearchResult>,
+        second_page: Vec<SearchResult>,
+        policy: MatchingPolicy,
+        received_queries: Option<Arc<Mutex<Vec<String>>>>,
+    }
+
+    impl crate::provider::SearchEngineProvider for NativeQueryEngine {
+        fn settings(&self) -> SearchEngineSettings {
+            SearchEngineSettings {
+                matching_policy: self.policy,
+                ..SearchEngineSettings::default()
+            }
+        }
+
+        fn search_engine(&self, _query: &str) -> Option<crate::page::SearchEngineSession> {
+            Some(self.session.clone())
+        }
+
+        fn query_root(&self, query: &str) -> Vec<SearchResult> {
+            if let Some(received) = &self.received_queries {
+                received.lock().unwrap().push(query.to_owned());
+            }
+            self.first_page.clone()
+        }
+
+        fn query_active(
+            &self,
+            _session: &crate::page::SearchEngineSession,
+            query: &str,
+        ) -> Vec<SearchResult> {
+            if let Some(received) = &self.received_queries {
+                received.lock().unwrap().push(query.to_owned());
+            }
+            self.first_page.clone()
+        }
+
+        fn query_active_page(
+            &self,
+            _session: &crate::page::SearchEngineSession,
+            query: &str,
+            offset: usize,
+        ) -> Vec<SearchResult> {
+            if let Some(received) = &self.received_queries {
+                received.lock().unwrap().push(query.to_owned());
+            }
+            if offset == self.first_page.len() {
+                self.second_page.clone()
+            } else {
+                Vec::new()
+            }
+        }
+
+        fn owns_session(&self, session: &crate::page::SearchEngineSession) -> bool {
+            session.id == self.session.id
+        }
+    }
+
+    fn native_query_session() -> crate::page::SearchEngineSession {
+        crate::page::SearchEngineSession {
+            id: "test:native-files".into(),
+            title: "Native files".into(),
+            placeholder: "Everything query".into(),
+            prefix: "e ".into(),
+            argument: String::new(),
+            mode: crate::page::SearchEngineMode::Panel,
+            state: Default::default(),
+        }
+    }
+
     fn result(id: &str, title: &str, category: ResultCategory) -> SearchResult {
         SearchResult {
             id: id.into(),
             identity: id.into(),
             title: title.into(),
             category,
+            metadata: Default::default(),
             aliases: vec![],
             location: String::new(),
             launch_target: title.into(),
@@ -1044,6 +1456,455 @@ mod tests {
             ranking_bias: 0,
             allow_favorite: true,
             visibility: ResultVisibility::Always,
+        }
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SearchEvaluationFixture {
+        candidates: Vec<SearchEvaluationCandidate>,
+        queries: Vec<SearchEvaluationQuery>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SearchEvaluationCandidate {
+        id: String,
+        title: String,
+        category: String,
+        #[serde(default)]
+        aliases: Vec<String>,
+        #[serde(default)]
+        keywords: Vec<String>,
+        #[serde(default)]
+        location: String,
+        #[serde(default)]
+        description: Option<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SearchEvaluationQuery {
+        query: String,
+        relevant: Vec<String>,
+        #[serde(default)]
+        expected_best: Option<String>,
+        #[serde(default)]
+        check_best: bool,
+    }
+
+    fn evaluation_category(value: &str) -> ResultCategory {
+        match value {
+            "Application" => ResultCategory::Application,
+            "Game" => ResultCategory::Game,
+            "Settings" => ResultCategory::Settings,
+            "Document" => ResultCategory::Document,
+            "ControlPanel" => ResultCategory::ControlPanel,
+            _ => panic!("unknown fixture category: {value}"),
+        }
+    }
+
+    #[test]
+    fn synthetic_search_relevance_fixture_reports_top1_recall_and_mrr() {
+        let fixture: SearchEvaluationFixture =
+            serde_json::from_str(include_str!("../../tests/fixtures/search_relevance.json"))
+                .expect("valid synthetic search evaluation fixture");
+        assert!(fixture.queries.len() >= 20);
+        let mut candidates = fixture
+            .candidates
+            .into_iter()
+            .map(|candidate| {
+                let mut item = result(
+                    &candidate.id,
+                    &candidate.title,
+                    evaluation_category(&candidate.category),
+                );
+                item.aliases = candidate.aliases;
+                item.metadata.keywords = candidate.keywords;
+                item.location = candidate.location;
+                item.description = candidate.description;
+                item
+            })
+            .collect::<Vec<_>>();
+        let core = SearchCore::new(std::mem::take(&mut candidates));
+        let (mut top1, mut recall_at_5, mut reciprocal_rank, mut positive_queries) =
+            (0usize, 0.0f64, 0.0f64, 0usize);
+        let mut negative_false_positives = 0usize;
+        let mut expected_best_checks = 0usize;
+        let mut correct_best = 0usize;
+        let mut wrong_expected_best = Vec::new();
+        for case in &fixture.queries {
+            let results = core.search(&case.query);
+            let ids = results
+                .iter()
+                .map(|item| item.id.clone())
+                .collect::<Vec<_>>();
+            if case.check_best {
+                expected_best_checks += 1;
+                let best = core
+                    .best_match_index(&case.query, &results)
+                    .map(|index| results[index].id.as_str());
+                if best == case.expected_best.as_deref() {
+                    correct_best += 1;
+                } else {
+                    wrong_expected_best
+                        .push((case.query.clone(), best.unwrap_or("<none>").to_owned()));
+                }
+            }
+            if case.relevant.is_empty() {
+                negative_false_positives += usize::from(!ids.is_empty());
+                continue;
+            }
+            positive_queries += 1;
+            if ids.first().is_some_and(|id| case.relevant.contains(id)) {
+                top1 += 1;
+            }
+            let retrieved = ids
+                .iter()
+                .take(5)
+                .filter(|id| case.relevant.contains(id))
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            recall_at_5 += retrieved as f64 / case.relevant.len() as f64;
+            if let Some(rank) = ids.iter().position(|id| case.relevant.contains(id)) {
+                reciprocal_rank += 1.0 / (rank + 1) as f64;
+            }
+        }
+        assert!(positive_queries > 0);
+        assert_eq!(
+            negative_false_positives, 0,
+            "negative fixture queries returned candidates"
+        );
+        assert_eq!(
+            correct_best, expected_best_checks,
+            "best-match fixture expectations changed: {wrong_expected_best:?}"
+        );
+        assert!(top1 as f64 / positive_queries as f64 >= 0.64);
+        assert!(recall_at_5 / positive_queries as f64 >= 0.70);
+        assert!(reciprocal_rank / positive_queries as f64 >= 0.68);
+        eprintln!(
+            "[synthetic-search-eval] queries={} top1={:.3} recall@5={:.3} mrr={:.3} negatives_with_results={} best_match={}/{} errors={:?} (synthetic fixture, not measured user accuracy)",
+            positive_queries,
+            top1 as f64 / positive_queries as f64,
+            recall_at_5 / positive_queries as f64,
+            reciprocal_rank / positive_queries as f64,
+            negative_false_positives,
+            correct_best,
+            expected_best_checks,
+            wrong_expected_best,
+        );
+    }
+
+    #[test]
+    fn short_numeric_queries_require_title_evidence_not_control_panel_keywords() {
+        let mut control = result(
+            "control:date-format",
+            "\u{66F4}\u{6539}\u{65E5}\u{671F}\u{3001}\u{65F6}\u{95F4}\u{6216}\u{6570}\u{5B57}\u{683C}\u{5F0F}",
+            ResultCategory::ControlPanel,
+        );
+        control.metadata.keywords = [
+            "1",
+            "2",
+            "3",
+            "12 \u{5C0F}\u{65F6}",
+            "12\u{5C0F}\u{65F6}",
+            "24 \u{5C0F}\u{65F6}",
+            "12-hour",
+            "format",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let one_password = result("app:onepassword", "1Password", ResultCategory::Application);
+        let windows_11 = result("settings:windows11", "Windows 11", ResultCategory::Settings);
+        let core = SearchCore::new(vec![control, one_password, windows_11]);
+
+        let numeric = core.search("1");
+        assert!(numeric.iter().all(|item| item.id != "control:date-format"));
+        assert_eq!(
+            numeric.first().map(|item| item.id.as_str()),
+            Some("app:onepassword")
+        );
+        assert_eq!(core.best_match_index("1", &numeric), Some(0));
+        assert_eq!(core.search("\u{FF11}")[0].id, "app:onepassword");
+
+        let eleven = core.search("11");
+        assert_eq!(
+            eleven.first().map(|item| item.id.as_str()),
+            Some("settings:windows11")
+        );
+        assert_eq!(core.best_match_index("11", &eleven), Some(0));
+    }
+
+    #[test]
+    fn typed_metadata_is_weak_generic_and_context_needs_a_name_anchor() {
+        let make = |id: &str, title: &str| result(id, title, ResultCategory::Application);
+        let mut common = (0..3)
+            .map(|index| {
+                let category = match index {
+                    1 => ResultCategory::Bookmark,
+                    2 => ResultCategory::ControlPanel,
+                    _ => ResultCategory::Application,
+                };
+                let mut item = result(&format!("common-{index}"), "Device Manager", category);
+                item.source = crate::platform::SourceId::Custom(format!("Synthetic{index}"));
+                item.metadata.keywords = vec![
+                    format!("protocol channel {index}"),
+                    "protocol".into(),
+                    "1394".into(),
+                    "0".into(),
+                    "42".into(),
+                    "98765".into(),
+                ];
+                item
+            })
+            .collect::<Vec<_>>();
+        let mut unique = make("unique-keyword", "Peripheral Utility");
+        unique.metadata.keywords = vec!["quartz signal".into()];
+        let mut context_only = make("context-only", "Unrelated Utility");
+        context_only.metadata.context = vec!["Parent Category".into()];
+        let mut anchored_context = make("context-anchored", "Device Settings");
+        anchored_context.metadata.context = vec!["Parent Category".into()];
+        let mut technical = make("technical", "Package Viewer");
+        technical.metadata.technical = vec!["urn:vendor:package".into()];
+        let mut numeric_name = make("numeric-alias", "Version Utility");
+        numeric_name.aliases = vec!["256".into()];
+        common.extend([
+            unique,
+            context_only,
+            anchored_context,
+            technical,
+            numeric_name,
+        ]);
+        let core = SearchCore::new(common);
+
+        assert!(core.search("protocol").is_empty());
+        assert!(core.search("protocol channel").is_empty());
+        assert!(core
+            .search("device protocol")
+            .iter()
+            .any(|item| item.id == "common-0"));
+        assert_eq!(
+            core.search("quartz").first().map(|item| item.id.as_str()),
+            Some("unique-keyword")
+        );
+        assert_eq!(
+            core.best_match_index("quartz", &core.search("quartz")),
+            None
+        );
+        assert!(core.search("parent").is_empty());
+        assert_eq!(
+            core.search("device parent")
+                .first()
+                .map(|item| item.id.as_str()),
+            Some("context-anchored")
+        );
+        assert!(core.search("urn:vendor").is_empty());
+        let technical_exact = core.search("urn:vendor:package");
+        assert_eq!(
+            technical_exact.first().map(|item| item.id.as_str()),
+            Some("technical")
+        );
+        assert_eq!(
+            core.best_match_index("urn:vendor:package", &technical_exact),
+            None
+        );
+        assert_eq!(
+            core.search("1394")
+                .iter()
+                .filter(|item| item.id.starts_with("common-"))
+                .count(),
+            0
+        );
+        assert!(core
+            .search("device 1394")
+            .iter()
+            .any(|item| item.id == "common-0"));
+        assert!(core
+            .search("1394 device")
+            .iter()
+            .any(|item| item.id == "common-0"));
+        for number in ["0", "42", "98765"] {
+            assert!(core
+                .search(number)
+                .iter()
+                .all(|item| !item.id.starts_with("common-")));
+        }
+        assert_eq!(core.best_match_index("256", &core.search("256")), Some(0));
+    }
+
+    #[test]
+    fn persisted_results_without_typed_metadata_load_with_empty_roles() {
+        let item = result("legacy", "Legacy Application", ResultCategory::Application);
+        let mut json = serde_json::to_value(item).unwrap();
+        json.as_object_mut().unwrap().remove("metadata");
+        let restored: SearchResult = serde_json::from_value(json).unwrap();
+        assert!(restored.metadata.is_empty());
+    }
+
+    #[test]
+    fn root_whitespace_normalization_and_multiword_and_matching_are_consistent() {
+        let mut chrome = result("chrome", "Google Chrome", ResultCategory::Application);
+        chrome.aliases = vec!["browser".into()];
+        let mut visual = result("visual", "Visual Utility", ResultCategory::Application);
+        visual.aliases = vec!["Studio Toolkit".into()];
+        let unrelated = result("unrelated", "Unrelated", ResultCategory::Application);
+        let core = SearchCore::new(vec![chrome, visual, unrelated]);
+
+        assert!(core.search("\u{3000}\u{3000}\t").is_empty());
+        assert_eq!(core.search("\u{FF27}\u{FF4F}\u{FF4F}\u{FF47}\u{FF4C}\u{FF45}\u{3000} \u{FF23}\u{FF48}\u{FF52}\u{FF4F}\u{FF4D}\u{FF45}")[0].id, "chrome");
+        assert_eq!(core.search("chrome google")[0].id, "chrome");
+        assert_eq!(core.search("studio visual")[0].id, "visual");
+        assert!(core.search("visual chrome unrelated").is_empty());
+        core.replace_fuzzy_search(false);
+        assert_eq!(core.search("chrome google")[0].id, "chrome");
+    }
+    #[test]
+    fn provider_owned_query_keeps_native_hits_and_page_order() {
+        let session = native_query_session();
+        let first = vec![
+            result("file:one", "zzzz.pdf", ResultCategory::Document),
+            result("file:two", "a.pdf", ResultCategory::Document),
+        ];
+        let second = vec![
+            result("file:three", "yyyy.pdf", ResultCategory::Document),
+            result("file:four", "b.pdf", ResultCategory::Document),
+        ];
+        let mut core = SearchCore::new(Vec::new());
+        core.providers.register_search_engine(NativeQueryEngine {
+            session: session.clone(),
+            first_page: first,
+            second_page: second,
+            policy: MatchingPolicy::ProviderOwned,
+            received_queries: None,
+        });
+
+        let context = crate::page::SearchContext::Engine(session);
+        let query = "ext:pdf report";
+        let page_one = core.search_in_context(&context, query);
+        let page_two = core.load_more_in_context(&context, query, page_one.len());
+        assert_eq!(
+            page_one
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["file:one", "file:two"]
+        );
+        assert_eq!(
+            page_two
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["file:three", "file:four"]
+        );
+    }
+
+    #[test]
+    fn default_matching_policy_still_filters_root_candidates() {
+        let session = native_query_session();
+        let mut core = SearchCore::new(Vec::new());
+        core.providers.register_search_engine(NativeQueryEngine {
+            session,
+            first_page: vec![result("file", "document.pdf", ResultCategory::Document)],
+            second_page: Vec::new(),
+            policy: MatchingPolicy::Central,
+            received_queries: None,
+        });
+        assert!(core
+            .search_in_context(&crate::page::SearchContext::Default, "ext:pdf report")
+            .is_empty());
+    }
+
+    #[test]
+    fn provider_owned_policy_is_limited_to_nonempty_active_session() {
+        let session = native_query_session();
+        let mut core = SearchCore::new(Vec::new());
+        core.providers.register_search_engine(NativeQueryEngine {
+            session: session.clone(),
+            first_page: vec![result("file", "document.pdf", ResultCategory::Document)],
+            second_page: Vec::new(),
+            policy: MatchingPolicy::ProviderOwned,
+            received_queries: None,
+        });
+        let query = "ext:pdf report";
+        assert_eq!(
+            core.search_in_context(&crate::page::SearchContext::Engine(session.clone()), query)
+                .len(),
+            1
+        );
+        assert!(core
+            .search_in_context(&crate::page::SearchContext::Default, query)
+            .is_empty());
+
+        let mut central = SearchCore::new(Vec::new());
+        central.providers.register_search_engine(NativeQueryEngine {
+            session: session.clone(),
+            first_page: vec![result("file", "document.pdf", ResultCategory::Document)],
+            second_page: Vec::new(),
+            policy: MatchingPolicy::Central,
+            received_queries: None,
+        });
+        assert!(central
+            .search_in_context(&crate::page::SearchContext::Engine(session), query)
+            .is_empty());
+    }
+
+    #[test]
+    fn central_normalization_does_not_rewrite_provider_query_payloads() {
+        let session = native_query_session();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let mut core = SearchCore::new(Vec::new());
+        core.providers.register_search_engine(NativeQueryEngine {
+            session: session.clone(),
+            first_page: vec![result("file", "unmatched", ResultCategory::Document)],
+            second_page: Vec::new(),
+            policy: MatchingPolicy::ProviderOwned,
+            received_queries: Some(received.clone()),
+        });
+        let raw = "  ＧＯＯgle\tTest  ";
+        core.search_in_context(&crate::page::SearchContext::Engine(session), raw);
+        assert_eq!(received.lock().unwrap().as_slice(), [raw]);
+
+        received.lock().unwrap().clear();
+        let root_raw = "  RUN  WhoAmI  ";
+        core.search(root_raw);
+        assert!(received
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|query| query == root_raw));
+    }
+
+    #[test]
+    fn learned_behavior_can_reorder_different_lengths_inside_one_match_class() {
+        let core = SearchCore::new(vec![
+            result("short", "Calculator", ResultCategory::Application),
+            result("long", "Calculator Extended", ResultCategory::Application),
+        ]);
+        assert_eq!(core.search("calc")[0].id, "short");
+        for _ in 0..20 {
+            core.record_success("long", "calc");
+        }
+        assert_eq!(core.search("calc")[0].id, "long");
+    }
+
+    #[test]
+    fn limited_search_matches_unlimited_prefix() {
+        let core = SearchCore::new(
+            (0..80)
+                .map(|index| {
+                    result(
+                        &format!("app:{index}"),
+                        &format!("Calculator Tool {index}"),
+                        ResultCategory::Application,
+                    )
+                })
+                .collect(),
+        );
+        let context = crate::page::SearchContext::Default;
+        let all = core.search_in_context(&context, "calc");
+        for limit in [1, 7, 31] {
+            assert_eq!(
+                core.search_in_context_limited(&context, "calc", limit),
+                all[..limit].to_vec()
+            );
         }
     }
 
@@ -1130,28 +1991,24 @@ mod tests {
             favorite_order: None,
             fallback: false,
             match_class: 3,
+            evidence_role: EvidenceRole::Name,
             match_quality: 100,
+            composite_score: 100,
             category_order: 0,
             plugin_order: usize::MAX,
-            behavior: 0,
             engine_bias: 0,
             provider_bias: 0,
         };
         let keys = [
             RankKey {
                 plugin_order: 0,
-                behavior: 0,
                 ..base
             },
             RankKey {
                 plugin_order: 1,
-                behavior: 20,
                 ..base
             },
-            RankKey {
-                behavior: 10,
-                ..base
-            },
+            RankKey { ..base },
             RankKey {
                 favorite_order: Some(0),
                 ..base
@@ -1162,6 +2019,7 @@ mod tests {
             },
             RankKey {
                 match_quality: 200,
+                composite_score: 200,
                 ..base
             },
         ];
@@ -1174,6 +2032,39 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn auxiliary_evidence_cannot_beat_name_evidence_with_behavior_bonus() {
+        let name = RankKey {
+            evidence_role: EvidenceRole::Name,
+            match_class: MATCH_CLASS_FUZZY,
+            composite_score: 0,
+            ..rank_key_for_test()
+        };
+        let auxiliary = RankKey {
+            evidence_role: EvidenceRole::Auxiliary,
+            match_class: MATCH_CLASS_EXACT,
+            composite_score: 100,
+            ..rank_key_for_test()
+        };
+        assert_eq!(name.compare(&auxiliary), std::cmp::Ordering::Less);
+    }
+
+    fn rank_key_for_test() -> RankKey {
+        RankKey {
+            history_order: None,
+            favorite_order: None,
+            fallback: false,
+            match_class: MATCH_CLASS_CONTAINS,
+            evidence_role: EvidenceRole::Name,
+            match_quality: 0,
+            composite_score: 0,
+            category_order: 0,
+            plugin_order: usize::MAX,
+            engine_bias: 0,
+            provider_bias: 0,
         }
     }
 
@@ -1218,6 +2109,7 @@ mod tests {
             identity: id.into(),
             title: title.into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec![],
             location: "".into(),
             launch_target: title.into(),
@@ -1345,10 +2237,12 @@ mod tests {
             "Run command \"ipconfig\"",
             ResultCategory::Other,
         );
+        generated.source = crate::platform::SourceId::Shortcut;
+        generated.sources = vec![crate::platform::SourceId::Shortcut];
         generated
             .actions
             .push(crate::result::Action::Launch(crate::result::LaunchEntry {
-                source: "test".into(),
+                source: crate::platform::SourceId::Shortcut,
                 path: "ipconfig".into(),
                 target: "ipconfig".into(),
                 arguments: String::new(),
@@ -1374,6 +2268,7 @@ mod tests {
             results[0].primary_action(),
             Some(crate::result::Action::Launch(_))
         ));
+        assert_eq!(results[0].effective_category(), ResultCategory::Command);
     }
     #[test]
     fn fuzzy_search_matches_typo_by_default() {
@@ -1382,6 +2277,7 @@ mod tests {
             identity: "1".into(),
             title: "Notepad".into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec![],
             location: "".into(),
             launch_target: "notepad.exe".into(),
@@ -1414,6 +2310,7 @@ mod tests {
             identity: "1".into(),
             title: "Notepad".into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec![],
             location: "".into(),
             launch_target: "notepad.exe".into(),
@@ -1445,6 +2342,7 @@ mod tests {
             identity: id.into(),
             title: title.into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec![],
             location: "".into(),
             launch_target: title.into(),
@@ -1475,6 +2373,7 @@ mod tests {
             identity: "1".into(),
             title: "A very long display name".into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec!["calc".into()],
             location: "".into(),
             launch_target: "calculator.exe".into(),
@@ -1505,6 +2404,7 @@ mod tests {
                 identity: id.into(),
                 title: title.into(),
                 category: ResultCategory::Application,
+                metadata: Default::default(),
                 aliases: aliases.into_iter().map(str::to_owned).collect(),
                 location: String::new(),
                 launch_target: title.into(),
@@ -1540,6 +2440,7 @@ mod tests {
             identity: "1".into(),
             title: "A long calculator display name".into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec!["calc".into()],
             location: "".into(),
             launch_target: "calculator.exe".into(),
@@ -1569,6 +2470,7 @@ mod tests {
             identity: "settings".into(),
             title: "设置".into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec![],
             location: "".into(),
             launch_target: "settings.exe".into(),
@@ -1598,6 +2500,7 @@ mod tests {
             identity: id.into(),
             title: title.into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec![],
             location: String::new(),
             launch_target: title.into(),
@@ -1631,6 +2534,7 @@ mod tests {
             identity: id.into(),
             title: title.into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec![],
             location: String::new(),
             launch_target: title.into(),
@@ -1662,6 +2566,7 @@ mod tests {
             identity: id.into(),
             title: title.into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec![],
             location: String::new(),
             launch_target: title.into(),
@@ -1698,6 +2603,7 @@ mod tests {
             identity: "aumid:notepad".into(),
             title: "记事本".into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec!["Microsoft WindowsNotepad".into()],
             location: String::new(),
             launch_target: "shell:AppsFolder\\Microsoft.WindowsNotepad!App".into(),
@@ -1734,6 +2640,7 @@ mod tests {
             identity: "ordinary:command".into(),
             title: "Execute Command".into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: Vec::new(),
             location: String::new(),
             launch_target: "command.exe".into(),
@@ -1840,6 +2747,7 @@ mod tests {
             identity: "1".into(),
             title: "Calculator".into(),
             category: ResultCategory::Application,
+            metadata: Default::default(),
             aliases: vec![],
             location: String::new(),
             launch_target: "calculator.exe".into(),

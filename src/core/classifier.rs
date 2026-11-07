@@ -10,8 +10,8 @@ const APPLICATION_EXTENSIONS: &[&str] = &[
 const DOCUMENT_EXTENSIONS: &[&str] = &[
     "abw", "csv", "doc", "docm", "docx", "dot", "dotm", "dotx", "epub", "fodp", "fods", "fodt",
     "key", "md", "mobi", "numbers", "odp", "ods", "odt", "pages", "pdf", "pps", "ppsm", "ppsx",
-    "ppt", "pptm", "pptx", "rtf", "tex", "txt", "wpd", "xls", "xlsb", "xlsm", "xlsx", "xlt",
-    "xltm", "xltx",
+    "hlp", "ppt", "pptm", "pptx", "rtf", "tex", "txt", "wpd", "xls", "xlsb", "xlsm", "xlsx", "xlt",
+    "xltm", "xltx", "chm",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +88,14 @@ mod tests {
         assert_eq!(
             classify_target_info(Path::new(r"C:\Apps\launcher.exe")).category,
             ResultCategory::Application
+        );
+        assert_eq!(
+            classify_target_info(Path::new(r"C:\Help\reference.chm")).category,
+            ResultCategory::Document
+        );
+        assert_eq!(
+            classify_target_info(Path::new(r"C:\Help\legacy.hlp")).category,
+            ResultCategory::Document
         );
     }
 

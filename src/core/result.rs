@@ -117,9 +117,8 @@ pub enum ResultCategory {
     Document,
     Bookmark,
     Window,
-    /// A result whose primary action enters a search-engine session instead
-    /// of launching its target. This describes the interaction, not the
-    /// content the session will eventually produce.
+    /// An executable shortcut command or a result whose primary action enters
+    /// a search-engine session instead of launching its target.
     Command,
     Other,
 }
@@ -186,6 +185,30 @@ pub struct LaunchEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SearchMetadata {
+    /// Discoverable terms from the indexed record, weaker than names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
+    /// Parent paths or surrounding concepts. Context never matches alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<String>,
+    /// Exact identifiers and technical forms; only exact queries qualify.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub technical: Vec<String>,
+}
+
+impl Default for SearchMetadata {
+    fn default() -> Self {
+        Self {
+            keywords: Vec::new(),
+            context: Vec::new(),
+            technical: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
     /// Stable identity used for merging records from different providers.
     pub id: String,
@@ -193,6 +216,8 @@ pub struct SearchResult {
     pub title: String,
     pub category: ResultCategory,
     pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "SearchMetadata::is_empty")]
+    pub metadata: SearchMetadata,
     pub location: String,
     pub launch_target: std::path::PathBuf,
     pub launch_arguments: String,
@@ -223,6 +248,12 @@ pub struct SearchResult {
     pub visibility: ResultVisibility,
 }
 
+impl SearchMetadata {
+    pub fn is_empty(&self) -> bool {
+        self.keywords.is_empty() && self.context.is_empty() && self.technical.is_empty()
+    }
+}
+
 fn default_allow_favorite() -> bool {
     true
 }
@@ -251,16 +282,28 @@ impl SearchResult {
         )
     }
 
-    /// Category used for root-search filtering and grouping. Every true
-    /// session entry belongs to one command category regardless of which
-    /// content it searches; results produced inside a session keep their
-    /// provider-supplied category.
+    /// Category used for root-search filtering and grouping. Session entries
+    /// belong to the command category regardless of which content they search.
+    /// Legacy shortcut launches saved before shortcut results were explicitly
+    /// categorized as commands are also treated as commands. Results produced
+    /// inside a session keep their provider-supplied category.
     pub fn effective_category(&self) -> ResultCategory {
         if self.is_session_entry() {
-            ResultCategory::Command
-        } else {
-            self.category
+            return ResultCategory::Command;
         }
+        if matches!(
+            self.category,
+            ResultCategory::Other | ResultCategory::Unclassified
+        ) && self.source == crate::platform::SourceId::Shortcut
+            && matches!(
+                self.primary_action(),
+                Some(Action::Launch(entry))
+                    if entry.source == crate::platform::SourceId::Shortcut
+            )
+        {
+            return ResultCategory::Command;
+        }
+        self.category
     }
 }
 

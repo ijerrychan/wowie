@@ -3218,3 +3218,27 @@ msgstr "Run at sign-in"
 msgctxt "Settings"
 msgid "Start Wowie when you sign in to Windows."
 msgstr "Start Wowie when you sign in to Windows."
+
+msgctxt "Settings"
+msgid "File search"
+msgstr "File search"
+
+msgctxt "Settings"
+msgid "Show file search in the launcher and accept its keyword."
+msgstr "Show file search in the launcher and accept its keyword."
+
+msgctxt "Settings"
+msgid "File search backend"
+msgstr "File search backend"
+
+msgctxt "Settings"
+msgid "Automatic prefers Everything and falls back to the Windows Search index."
+msgstr "Automatic prefers Everything and falls back to the Windows Search index."
+
+msgctxt "Settings"
+msgid "File search keyword"
+msgstr "File search keyword"
+
+msgctxt "Settings"
+msgid "Keyword used to enter file search; use one word without spaces."
+msgstr "Keyword used to enter file search; use one word without spaces."

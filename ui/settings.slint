@@ -430,6 +430,7 @@ component SettingsField inherits Rectangle {
 
 export component SettingsWindow inherits Window {
     out property <color> native-background-color: root.canvas;
+    out property <color> native-border-color: root.border;
     title: "Wowie Settings";
     no-frame: true;
     preferred-width: 900px;
@@ -482,7 +483,7 @@ export component SettingsWindow inherits Window {
 
         Rectangle {
             x: 1px; y: 1px; width: parent.width - 2px; height: 58px;
-            background: root.surface; border-radius: DesignTokens.radius-lg;
+            background: root.surface; border-radius: root.native-window-frame ? 0px : max(0px, root.window-radius - 1px);
             WindowMoveArea {
                 x: 0px; y: 0px; width: parent.width - 58px; height: parent.height;
                 Text { x: 22px; y: 0px; width: parent.width - 22px; height: parent.height; text: @tr("Settings"); color: root.primary; font-size: DesignTokens.font-page-title; font-weight: DesignTokens.weight-regular; vertical-alignment: center; }
@@ -568,6 +569,6 @@ export component SettingsWindow inherits Window {
         z: 100;
         x: root.window-inset; y: root.window-inset;
         width: parent.width - 2 * root.window-inset; height: parent.height - 2 * root.window-inset;
-        background: transparent; border-color: root.border; border-width: 1px; border-radius: root.window-radius;
+        background: transparent; border-color: root.border; border-width: root.native-window-frame ? 0px : 1px; border-radius: root.window-radius;
     }
 }

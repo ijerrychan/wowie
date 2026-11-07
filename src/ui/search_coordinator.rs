@@ -142,7 +142,11 @@ pub(super) fn restore_result_window_height(window: &Launcher) -> bool {
         .to_logical(native_window.scale_factor());
     let resized = (logical_size.height - target_height).abs() > 0.5;
     if resized {
-        platform::set_window_background(native_window, window.get_native_background_color());
+        platform::set_window_background(
+            native_window,
+            window.get_native_background_color(),
+            window.get_native_border_color(),
+        );
         native_window.set_size(slint::LogicalSize::new(logical_size.width, target_height));
         native_window.request_redraw();
     }
