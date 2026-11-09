@@ -99,7 +99,10 @@ fn shell_execute(
     };
 
     let pidl = crate::platform::shell_id_list::decode(file);
-    if file.to_string_lossy().starts_with("shell:pidl:") && pidl.is_none() {
+    if (file.to_string_lossy().starts_with("shell:pidl:")
+        || file.to_string_lossy().starts_with("shell:pidl64:"))
+        && pidl.is_none()
+    {
         anyhow::bail!("invalid Shell identity list");
     }
     let file = wide_null_os(file);

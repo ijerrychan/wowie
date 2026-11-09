@@ -1,6 +1,4 @@
-use super::{
-    ContextMenu, Launcher, SettingsCategory, SettingsEntry, SettingsShortcut, SettingsWindow,
-};
+use super::{Launcher, SettingsCategory, SettingsEntry, SettingsShortcut, SettingsWindow};
 use crate::{config, plugin::PluginSettingsDefinition, utils::i18n};
 use anyhow::{anyhow, Context, Result};
 use slint::{Model, ModelRc, VecModel};
@@ -902,7 +900,6 @@ pub(super) fn resolved_ui_font_family(configured: &str) -> String {
 pub(super) fn preload_font_families(
     window: slint::Weak<SettingsWindow>,
     launcher: slint::Weak<Launcher>,
-    context: slint::Weak<ContextMenu>,
 ) {
     std::thread::spawn(move || {
         FONT_FAMILIES.get_or_init(scan_font_families);
@@ -916,9 +913,6 @@ pub(super) fn preload_font_families(
                 if !family.is_empty() && family != config.font_family {
                     if let Some(launcher) = launcher.upgrade() {
                         launcher.set_ui_font_family(family.clone().into());
-                    }
-                    if let Some(context) = context.upgrade() {
-                        context.set_ui_font_family(family.clone().into());
                     }
                     if let Some(window) = window.upgrade() {
                         window.set_ui_font_family(family.into());

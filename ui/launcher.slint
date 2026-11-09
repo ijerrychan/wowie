@@ -38,33 +38,180 @@ component SearchGlyph inherits Rectangle {
     clip: true;
 
     private property <float> animated-progress: root.transition-progress;
+    private property <float> outgoing-scale: max(0.0, 1.0 - root.animated-progress);
+    private property <float> incoming-scale: 0.72 + root.animated-progress * 0.28;
     animate animated-progress {
-        duration: DesignTokens.motion-feedback;
-        easing: linear;
+        duration: DesignTokens.motion-icon;
+        easing: ease-out;
         enabled: root.transition-animation-enabled && root.animations-enabled;
     }
-    BuiltinIcon {
-        x: 0px; y: 0px; width: parent.width; height: parent.height;
-        kind: root.previous-kind;
-        opacity: max(0.0, 1.0 - root.animated-progress);
+
+    Rectangle {
+        x: (parent.width - parent.width * root.outgoing-scale) / 2;
+        y: (parent.height - parent.height * root.outgoing-scale) / 2;
+        width: parent.width * root.outgoing-scale;
+        height: parent.height * root.outgoing-scale;
+        background: transparent;
+        BuiltinIcon {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            kind: root.previous-kind;
+            opacity: max(0.0, 1.0 - root.animated-progress);
+        }
+        if root.previous-kind == "" : Image {
+            width: parent.width; height: parent.height;
+            source: root.previous-image.width > 0 ? root.previous-image : @image-url("../assets/icons/magnify.svg");
+            image-fit: contain;
+            opacity: max(0.0, 1.0 - root.animated-progress);
+        }
     }
-    if root.previous-kind == "" : Image {
-        width: parent.width; height: parent.height;
-        source: root.previous-image.width > 0 ? root.previous-image : @image-url("../assets/icons/magnify.svg");
-        image-fit: contain;
-        opacity: max(0.0, 1.0 - root.animated-progress);
+
+    Rectangle {
+        x: (parent.width - parent.width * root.incoming-scale) / 2;
+        y: (parent.height - parent.height * root.incoming-scale) / 2;
+        width: parent.width * root.incoming-scale;
+        height: parent.height * root.incoming-scale;
+        background: transparent;
+        BuiltinIcon {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            kind: root.source-kind;
+            opacity: min(1.0, root.animated-progress);
+        }
+        if root.source-kind == "" : Image {
+            width: parent.width; height: parent.height;
+            source: root.source-image.width > 0 ? root.source-image : @image-url("../assets/icons/magnify.svg");
+            image-fit: contain;
+            opacity: min(1.0, root.animated-progress);
+        }
     }
-    BuiltinIcon {
-        x: 0px; y: 0px; width: parent.width; height: parent.height;
-        kind: root.source-kind;
-        opacity: min(1.0, root.animated-progress);
+}
+
+// Keep this name aligned with the existing ContextMenu translation context.
+component ContextMenu inherits Rectangle {
+    forward-focus: focus-scope;
+    background: transparent;
+
+    in property <bool> dark-mode: true;
+    in property <[ContextActionRow]> actions;
+    in property <bool> keyboard-invoked: false;
+    callback action-requested(string);
+    callback dismissed;
+    private property <int> selected-action-index: 0;
+
+    private property <color> canvas: root.dark-mode ? DesignTokens.dark-surface : DesignTokens.light-surface;
+    private property <color> hover: root.dark-mode ? DesignTokens.dark-raised : DesignTokens.light-raised;
+    private property <length> menu-item-height: DesignTokens.control-height;
+    private property <color> border: root.dark-mode ? DesignTokens.dark-border : DesignTokens.light-border;
+    private property <color> text-primary: root.dark-mode ? DesignTokens.dark-primary : DesignTokens.light-primary;
+    private property <color> text-secondary: root.dark-mode ? DesignTokens.dark-secondary : DesignTokens.light-secondary;
+
+    changed selected-action-index => {
+        if (root.selected-action-index >= 0) {
+            let top = DesignTokens.space-1 + root.selected-action-index * root.menu-item-height;
+            let bottom = top + root.menu-item-height;
+            if (top + action-list.content-y < 0px) { action-list.content-y = -top; }
+            if (bottom + action-list.content-y > action-list.visible-height) {
+                action-list.content-y = min(0px, action-list.visible-height - bottom);
+            }
+        }
     }
-    if root.source-kind == "" : Image {
-        width: parent.width; height: parent.height;
-        source: root.source-image.width > 0 ? root.source-image : @image-url("../assets/icons/magnify.svg");
-        image-fit: contain;
-        opacity: min(1.0, root.animated-progress);
+
+    function reset-selection() {
+        root.selected-action-index = root.keyboard-invoked
+            ? root.actions.length == 0 ? -1 : root.actions[0].kind == "section" ? (root.actions.length > 1 ? 1 : -1) : 0
+            : -1;
+        action-list.content-y = 0px;
+        focus-scope.focus();
     }
+    init => { root.reset-selection(); }
+    changed actions => { root.reset-selection(); }
+
+    focus-scope := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) { root.dismissed(); accept }
+            if (event.text == Key.DownArrow && root.actions.length > 0) {
+                let candidate = root.selected-action-index + 1;
+                let wrapped = candidate >= root.actions.length ? 0 : max(candidate, 0);
+                let next = root.actions[wrapped].kind == "section" ? (wrapped + 1 >= root.actions.length ? 0 : wrapped + 1) : wrapped;
+                root.selected-action-index = next;
+                accept
+            }
+            if (event.text == Key.UpArrow && root.actions.length > 0) {
+                let candidate = root.selected-action-index - 1;
+                let wrapped = candidate < 0 ? root.actions.length - 1 : candidate;
+                let next = root.actions[wrapped].kind == "section" ? (wrapped - 1 < 0 ? root.actions.length - 1 : wrapped - 1) : wrapped;
+                root.selected-action-index = next;
+                accept
+            }
+            if (event.text == Key.Home && root.actions.length > 0) {
+                root.selected-action-index = root.actions[0].kind == "section" ? (root.actions.length > 1 ? 1 : -1) : 0;
+                accept
+            }
+            if (event.text == Key.End && root.actions.length > 0) {
+                let last = root.actions.length - 1;
+                root.selected-action-index = root.actions[last].kind == "section" ? max(last - 1, 0) : last;
+                accept
+            }
+            if (event.text == Key.Return && root.selected-action-index >= 0 && root.actions[root.selected-action-index].kind != "section") {
+                root.action-requested(root.actions[root.selected-action-index].id);
+                accept
+            }
+            reject
+        }
+
+        Rectangle {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            background: root.canvas;
+            border-color: root.border;
+            border-width: 1px;
+            border-radius: DesignTokens.radius-md;
+
+            TouchArea {
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) { root.dismissed(); }
+                }
+            }
+
+            action-list := ScrollView {
+                x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                content-width: self.visible-width;
+                horizontal-scrollbar-policy: always-off;
+                content-height: 2 * DesignTokens.space-1 + root.actions.length * root.menu-item-height;
+                for action[index] in root.actions : Rectangle {
+                    x: DesignTokens.space-1; y: DesignTokens.space-1 + index * root.menu-item-height;
+                    width: parent.width - 2 * DesignTokens.space-1; height: root.menu-item-height;
+                    background: action.kind == "section" ? root.canvas : index == root.selected-action-index ? root.hover : action-area.has-hover ? root.hover : root.canvas;
+                    border-radius: DesignTokens.radius-sm;
+                    action-area := TouchArea {
+                        enabled: action.kind != "section";
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                root.dismissed();
+                                EventResult.accept
+                            } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                                root.action-requested(action.id);
+                                EventResult.accept
+                            } else {
+                                EventResult.reject
+                            }
+                        }
+                    }
+                    BuiltinIcon { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; kind: action.icon_kind; }
+                    if action.icon_kind == "" : Image { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: action.icon; image-fit: contain; }
+                    Text {
+                        x: 36px; y: action.subtitle == "" ? 0px : 2px; width: action.shortcut == "" ? parent.width - 50px : parent.width - 162px;
+                        height: action.subtitle == "" ? parent.height : 16px;
+                        text: action.kind == "section" ? @tr("Other launch entries") : action.id == "add-favorite" ? @tr("Add to favorites") : action.id == "remove-favorite" ? @tr("Remove from favorites") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.id == "copy-title" ? @tr("Copy title") : action.id == "copy-path" ? @tr("Copy path") : action.id == "copy-url" ? @tr("Copy URL") : action.title;
+                        color: action.kind == "section" ? root.text-secondary : root.text-primary;
+                        font-size: action.kind == "section" ? DesignTokens.font-small : DesignTokens.font-body;
+                        vertical-alignment: center; overflow: elide;
+                    }
+                    Text { x: 36px; y: 17px; width: action.shortcut == "" ? parent.width - 50px : parent.width - 162px; height: 12px; text: action.subtitle; color: root.text-secondary; font-size: DesignTokens.font-caption; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
+                    Text { x: parent.width - 120px; y: 0px; width: 108px; height: parent.height; text: action.shortcut; color: root.text-secondary; font-size: DesignTokens.font-caption; horizontal-alignment: right; vertical-alignment: center; overflow: elide; visible: action.shortcut != ""; }
+                }
+            }
+        }
+    }
+
 }
 
 export component Launcher inherits Window {
@@ -142,12 +289,32 @@ export component Launcher inherits Window {
     in property <string> shortcut-session-prefix: "";
     in property <string> shortcut-session-placeholder: "";
     in property <bool> context-menu-open: false;
+    in property <[ContextActionRow]> context-actions;
+    in property <length> context-menu-width: 292px;
+    in property <bool> context-keyboard-invoked: false;
+    in-out property <length> context-pointer-x: 0px;
+    in-out property <length> context-pointer-y: 0px;
+    out property <length> context-menu-effective-width: min(root.context-menu-width, max(0px, root.width - 2 * root.window-inset));
+    out property <length> context-menu-effective-height: min(max(0px, root.height - 2 * root.window-inset), max(40px, 2px + 2 * DesignTokens.space-1 + root.context-actions.length * DesignTokens.control-height));
+    // Mouse menus prefer the click's lower-right; flip at the edges, then
+    // clamp so even oversized menus stay inside the launcher's content.
+    out property <length> context-menu-x: max(root.window-inset, min(root.width - root.window-inset - root.context-menu-effective-width,
+        root.context-keyboard-invoked ? root.context-menu-anchor-x - root.context-menu-effective-width
+        : root.context-pointer-x + root.context-menu-effective-width <= root.width - root.window-inset ? root.context-pointer-x : root.context-pointer-x - root.context-menu-effective-width));
+    out property <length> context-menu-y: max(root.window-inset, min(root.height - root.window-inset - root.context-menu-effective-height,
+        root.context-keyboard-invoked ? root.context-menu-anchor-y - root.context-menu-effective-height
+        : root.context-pointer-y + root.context-menu-effective-height <= root.height - root.window-inset ? root.context-pointer-y : root.context-pointer-y - root.context-menu-effective-height));
+    callback context-action-requested(string);
+    changed context-menu-open => {
+        if (!root.context-menu-open) { search-field.focus(); }
+    }
+
     in property <bool> context-menu-available: false;
     in-out property <int> selected-index: -1;
     // Local coordinates of the launcher's visible content bottom-right,
     // immediately above the operation hint. Keep this geometry in Slint so
     // layout changes do not require matching constants in platform code.
-    // Expose the effective insets as geometry diagnostics so platform code
+    // Expose the effective insets as geometry diagnostics so layout tests
     // and manual layout checks can observe the same values as the anchor.
     out property <length> context-menu-anchor-right-inset: root.window-inset + root.context-menu-gap;
     out property <length> context-menu-anchor-bottom-inset: root.window-inset + root.content-bottom-padding + root.operation-hint-height + root.context-menu-gap;
@@ -675,8 +842,13 @@ export component Launcher inherits Window {
                                 }
                             }
                             pointer-event(event) => {
-                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                                    if (root.query-results-ready) { root.context-menu-requested(index, false); }
+                                if (event.button == PointerEventButton.right) {
+                                    if (event.kind == PointerEventKind.up && root.query-results-ready) {
+                                        root.context-pointer-x = self.absolute-position.x + self.mouse-x - root.absolute-position.x;
+                                        root.context-pointer-y = self.absolute-position.y + self.mouse-y - root.absolute-position.y;
+                                        root.selected-index = index;
+                                        root.context-menu-requested(index, false);
+                                    }
                                     EventResult.accept
                                 } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down && root.context-menu-open) {
                                     root.context-click-consumed = true;
@@ -855,117 +1027,29 @@ export component Launcher inherits Window {
         border-color: #b85c5c; border-width: 1px; border-radius: DesignTokens.radius-sm;
         Text { x: 8px; y: 0px; width: parent.width - 16px; height: parent.height; text: @tr("Could not open application") + ": " + root.launch-error; color: #d96c6c; font-size: DesignTokens.font-small; vertical-alignment: center; overflow: elide; }
     }
-}
 
-export component ContextMenu inherits Window {
-    title: "Wowie Context Menu";
-    no-frame: true;
-    forward-focus: focus-scope;
-    default-font-family: root.ui-font-family;
-    default-font-size: root.ui-font-size;
-    in property <length> menu-width: 292px;
-    in property <string> ui-font-family: "";
-    in property <length> ui-font-size: 14px;
-    width: root.menu-width;
-    height: max(40px, 2 * DesignTokens.space-1 + root.actions.length * root.menu-item-height);
-    background: root.native-window-frame ? root.canvas : transparent;
-
-    in property <bool> native-window-frame: false;
-    out property <color> native-background-color: root.canvas;
-    out property <color> native-border-color: root.border;
-    in property <bool> animations-enabled: true;
-    in property <bool> dark-mode: true;
-    in property <color> accent-color: #0067c0;
-    in property <[ContextActionRow]> actions;
-    in property <bool> keyboard-invoked: false;
-    callback action-requested(string);
-    callback dismissed;
-    private property <int> selected-action-index: 0;
-
-    private property <color> canvas: root.dark-mode ? DesignTokens.dark-surface : DesignTokens.light-surface;
-    private property <color> hover: root.dark-mode ? DesignTokens.dark-raised : DesignTokens.light-raised;
-    private property <length> menu-item-height: DesignTokens.control-height;
-    private property <color> border: root.dark-mode ? DesignTokens.dark-border : DesignTokens.light-border;
-    private property <color> text-primary: root.dark-mode ? DesignTokens.dark-primary : DesignTokens.light-primary;
-    private property <color> text-secondary: root.dark-mode ? DesignTokens.dark-secondary : DesignTokens.light-secondary;
-
-    changed actions => {
-        root.selected-action-index = root.keyboard-invoked
-            ? root.actions.length == 0 ? -1 : root.actions[0].kind == "section" ? (root.actions.length > 1 ? 1 : -1) : 0
-            : -1;
-        focus-scope.focus();
-    }
-
-    focus-scope := FocusScope {
-        key-pressed(event) => {
-            if (event.text == Key.Escape) { root.dismissed(); accept }
-            if (event.text == Key.DownArrow && root.actions.length > 0) {
-                let candidate = root.selected-action-index + 1;
-                let wrapped = candidate >= root.actions.length ? 0 : max(candidate, 0);
-                let next = root.actions[wrapped].kind == "section" ? (wrapped + 1 >= root.actions.length ? 0 : wrapped + 1) : wrapped;
-                root.selected-action-index = next;
-                accept
+    if root.context-menu-open : Rectangle {
+        width: root.width; height: root.height;
+        background: transparent;
+        TouchArea {
+            pointer-event(event) => {
+                // Remove the old overlay on press so the underlying result
+                // receives the release and opens its menu at the new point.
+                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) { root.context-menu-dismissed(); }
             }
-            if (event.text == Key.UpArrow && root.actions.length > 0) {
-                let candidate = root.selected-action-index - 1;
-                let wrapped = candidate < 0 ? root.actions.length - 1 : candidate;
-                let next = root.actions[wrapped].kind == "section" ? (wrapped - 1 < 0 ? root.actions.length - 1 : wrapped - 1) : wrapped;
-                root.selected-action-index = next;
-                accept
-            }
-            if (event.text == Key.Home && root.actions.length > 0) {
-                root.selected-action-index = root.actions[0].kind == "section" ? (root.actions.length > 1 ? 1 : -1) : 0;
-                accept
-            }
-            if (event.text == Key.End && root.actions.length > 0) {
-                let last = root.actions.length - 1;
-                root.selected-action-index = root.actions[last].kind == "section" ? max(last - 1, 0) : last;
-                accept
-            }
-            if (event.text == Key.Return && root.selected-action-index >= 0 && root.actions[root.selected-action-index].kind != "section") {
-                root.action-requested(root.actions[root.selected-action-index].id);
-                accept
-            }
-            reject
+            scroll-event => { accept }
+            clicked => { root.context-menu-dismissed(); }
         }
-
-        Rectangle {
-            x: 0px; y: 0px; width: parent.width; height: parent.height;
-            background: root.canvas;
-            border-color: root.border;
-            border-width: root.native-window-frame ? 0px : 1px;
-            border-radius: root.native-window-frame ? 0px : DesignTokens.radius-md;
-
-            for action[index] in root.actions : Rectangle {
-            x: DesignTokens.space-1; y: DesignTokens.space-1 + index * root.menu-item-height;
-            width: parent.width - 2 * DesignTokens.space-1; height: root.menu-item-height;
-            background: action.kind == "section" ? root.canvas : index == root.selected-action-index ? root.hover : action-area.has-hover ? root.hover : root.canvas;
-            border-radius: DesignTokens.radius-sm;
-            action-area := TouchArea {
-                enabled: action.kind != "section";
-                pointer-event(event) => {
-                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
-                        root.action-requested(action.id);
-                        EventResult.accept
-                    } else {
-                        EventResult.reject
-                    }
-                }
-            }
-            BuiltinIcon { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; kind: action.icon_kind; }
-            if action.icon_kind == "" : Image { x: 14px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: action.icon; image-fit: contain; }
-            Text {
-                x: 36px; y: action.subtitle == "" ? 0px : 2px; width: action.shortcut == "" ? parent.width - 50px : parent.width - 162px;
-                height: action.subtitle == "" ? parent.height : 16px;
-                text: action.kind == "section" ? @tr("Other launch entries") : action.id == "add-favorite" ? @tr("Add to favorites") : action.id == "remove-favorite" ? @tr("Remove from favorites") : action.id == "open-directory" ? @tr("Open containing folder") : action.id == "run-as-admin" ? @tr("Run as administrator") : action.id == "copy-title" ? @tr("Copy title") : action.id == "copy-path" ? @tr("Copy path") : action.id == "copy-url" ? @tr("Copy URL") : action.title;
-                color: action.kind == "section" ? root.text-secondary : root.text-primary;
-                font-size: action.kind == "section" ? DesignTokens.font-small : DesignTokens.font-body;
-                vertical-alignment: center; overflow: elide;
-            }
-            Text { x: 36px; y: 17px; width: action.shortcut == "" ? parent.width - 50px : parent.width - 162px; height: 12px; text: action.subtitle; color: root.text-secondary; font-size: DesignTokens.font-caption; vertical-alignment: center; overflow: elide; visible: action.subtitle != ""; }
-            Text { x: parent.width - 120px; y: 0px; width: 108px; height: parent.height; text: action.shortcut; color: root.text-secondary; font-size: DesignTokens.font-caption; horizontal-alignment: right; vertical-alignment: center; overflow: elide; visible: action.shortcut != ""; }
-            }
+        ContextMenu {
+            width: root.context-menu-effective-width;
+            height: root.context-menu-effective-height;
+            x: root.context-menu-x;
+            y: root.context-menu-y;
+            actions: root.context-actions;
+            keyboard-invoked: root.context-keyboard-invoked;
+            dark-mode: root.dark-mode;
+            action-requested(id) => { root.context-action-requested(id); }
+            dismissed => { root.context-menu-dismissed(); }
         }
     }
-
 }

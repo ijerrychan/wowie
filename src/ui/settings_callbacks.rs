@@ -21,7 +21,6 @@ fn load_editable_config(settings: &slint::Weak<SettingsWindow>) -> Option<config
 pub(super) fn register_settings_callbacks(
     settings_window: &SettingsWindow,
     window: &Launcher,
-    context_window: &ContextMenu,
     plugin_settings: Vec<plugin::PluginSettingsDefinition>,
     platform: Arc<dyn platform::PlatformIntegration>,
     animations_enabled: Arc<AtomicBool>,
@@ -49,7 +48,6 @@ pub(super) fn register_settings_callbacks(
     {
         let settings_for_change = settings_window.as_weak();
         let window_for_typography = window.as_weak();
-        let context_for_typography = context_window.as_weak();
         let plugin_settings = plugin_settings.clone();
         let plugin_settings_for_drag = plugin_settings.clone();
         let platform_for_theme = Arc::clone(&platform);
@@ -107,23 +105,17 @@ pub(super) fn register_settings_callbacks(
             };
             let window_handle = window_for_typography.upgrade();
             let settings_handle = settings_for_change.upgrade();
-            let context_handle = context_for_typography.upgrade();
             super::apply_theme_to_windows(
                 dark_mode,
                 &updated,
                 platform_for_theme.as_ref(),
                 window_handle.as_ref(),
                 settings_handle.as_ref(),
-                context_handle.as_ref(),
             );
             let ui_font_family = settings::resolved_ui_font_family(&updated.font_family);
             if let Some(window) = window_handle.as_ref() {
                 window.set_ui_font_family(ui_font_family.clone().into());
                 window.set_ui_font_size(updated.font_size as f32);
-            }
-            if let Some(context) = context_handle.as_ref() {
-                context.set_ui_font_family(ui_font_family.clone().into());
-                context.set_ui_font_size(updated.font_size as f32);
             }
             if let Some(settings) = settings_handle.as_ref() {
                 settings.set_ui_font_family(ui_font_family.into());

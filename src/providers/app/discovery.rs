@@ -455,11 +455,14 @@ pub(super) fn collect_tree(
                         path: shortcut_icon_target(&path, Some(icon_path), &resolved_target),
                         index,
                     },
-                    _ => IconSpec::System(shortcut_icon_target(
-                        &path,
-                        shortcut.icon_path.as_deref(),
-                        &resolved_target,
-                    )),
+                    _ => IconSpec::System(
+                        shortcut_icon_target(
+                            &path,
+                            shortcut.icon_path.as_deref(),
+                            &resolved_target,
+                        )
+                        .into(),
+                    ),
                 })
             });
         output.push(SearchResult {

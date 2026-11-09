@@ -170,7 +170,7 @@ fn make_result(window: platform::VisibleWindow) -> Option<SearchResult> {
         icon: Some(
             window
                 .process_path
-                .map(IconSpec::System)
+                .map(|path| IconSpec::System(path.into()))
                 .unwrap_or_else(|| IconSpec::Named("window".into())),
         ),
         ranking_bias: 0,
@@ -232,9 +232,9 @@ mod tests {
         );
         assert_eq!(
             result.icon,
-            Some(IconSpec::System(PathBuf::from(
-                r"C:\Apps\Editor\editor.exe"
-            )))
+            Some(IconSpec::System(
+                PathBuf::from(r"C:\Apps\Editor\editor.exe").into()
+            ))
         );
     }
     #[test]

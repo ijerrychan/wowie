@@ -70,6 +70,18 @@ struct PersistedAppIndex {
 }
 
 const APP_INDEX_CACHE_VERSION: u32 = 11;
+
+/// Borrow records during serialization instead of cloning the full index.
+/// System pages are rediscovered on startup and must not be persisted.
+#[derive(serde::Serialize)]
+struct PersistedAppIndexRef<'a> {
+    version: u32,
+    config: &'a crate::config::ProviderConfig,
+    source_fingerprints: Vec<(crate::platform::AppProviderSource, u64)>,
+    source_indexed_at: Vec<(crate::platform::AppProviderSource, u64)>,
+    sources: Vec<(crate::platform::AppProviderSource, &'a [SearchResult])>,
+}
+
 const SHELL_SOURCE_RECONCILE_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(15 * 60);
 
@@ -309,25 +321,7 @@ impl AppProvider {
 
     fn persist_index(&self) {
         let path = Self::cache_path();
-        let cache = PersistedAppIndex {
-            version: APP_INDEX_CACHE_VERSION,
-            config: self.config.clone(),
-            source_fingerprints: self
-                .source_fingerprints
-                .iter()
-                .map(|(source, value)| (*source, *value))
-                .collect(),
-            source_indexed_at: self
-                .source_indexed_at
-                .iter()
-                .map(|(source, value)| (*source, *value))
-                .collect(),
-            sources: self
-                .sources
-                .iter()
-                .map(|(source, rows)| (*source, rows.clone()))
-                .collect(),
-        };
+        let cache = self.persisted_index();
         let Ok(bytes) = serde_json::to_vec(&cache) else {
             return;
         };
@@ -335,6 +329,32 @@ impl AppProvider {
             return;
         }
         let _ = crate::utils::atomic_write(&path, &bytes);
+    }
+
+    fn persisted_index(&self) -> PersistedAppIndexRef<'_> {
+        use crate::platform::AppProviderSource::ControlPanel;
+        PersistedAppIndexRef {
+            version: APP_INDEX_CACHE_VERSION,
+            config: &self.config,
+            source_fingerprints: self
+                .source_fingerprints
+                .iter()
+                .filter(|(source, _)| **source != ControlPanel)
+                .map(|(source, value)| (*source, *value))
+                .collect(),
+            source_indexed_at: self
+                .source_indexed_at
+                .iter()
+                .filter(|(source, _)| **source != ControlPanel)
+                .map(|(source, value)| (*source, *value))
+                .collect(),
+            sources: self
+                .sources
+                .iter()
+                .filter(|(source, _)| **source != ControlPanel)
+                .map(|(source, rows)| (*source, rows.as_slice()))
+                .collect(),
+        }
     }
 
     fn source_needs_refresh(&self, source: crate::platform::AppProviderSource) -> bool {
@@ -817,6 +837,35 @@ fn classify_unclassified_items(items: &mut [SearchResult]) {
 mod tests {
     use super::*;
     use crate::search::SearchCore;
+
+    #[test]
+    fn persisted_index_borrows_rows_and_excludes_system_pages() {
+        use crate::platform::AppProviderSource::{ControlPanel, StartMenu};
+        let mut provider = AppProvider::empty_with_config(&Default::default());
+        provider
+            .sources
+            .insert(StartMenu, vec![item("app", "App", source_ids::START_MENU)]);
+        provider.sources.insert(
+            ControlPanel,
+            vec![item("page", "Page", source_ids::CONTROL_PANEL)],
+        );
+        provider.source_fingerprints.insert(ControlPanel, 123);
+        provider.source_indexed_at.insert(ControlPanel, 456);
+        let cache = provider.persisted_index();
+        assert_eq!(cache.sources.len(), 1);
+        assert_eq!(cache.sources[0].0, StartMenu);
+        assert!(std::ptr::eq(
+            cache.sources[0].1,
+            provider.sources[&StartMenu].as_slice()
+        ));
+        let bytes = serde_json::to_vec(&cache).unwrap();
+        let restored: PersistedAppIndex = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(restored.sources.len(), 1);
+        assert_eq!(restored.sources[0].1, provider.sources[&StartMenu]);
+        assert!(restored.source_fingerprints.is_empty());
+        assert!(restored.source_indexed_at.is_empty());
+        assert_eq!(provider.sources[&ControlPanel].len(), 1);
+    }
 
     fn item(identity: &str, title: &str, source: &str) -> SearchResult {
         SearchResult {
@@ -1382,7 +1431,7 @@ mod tests {
     #[test]
     fn identity_replacement_preserves_existing_icon() {
         let mut start_menu = item("exe:c:\\apps\\demo.exe", "Demo", "StartMenu");
-        start_menu.icon = Some(IconSpec::System(PathBuf::from(r"C:\Apps\demo.exe")));
+        start_menu.icon = Some(IconSpec::System(PathBuf::from(r"C:\Apps\demo.exe").into()));
         let apps_folder = item("exe:c:\\apps\\demo.exe", "Demo", "AppsFolder");
         let mut items = vec![start_menu, apps_folder];
 
@@ -2012,9 +2061,9 @@ mod tests {
             icon: None,
         }];
         let mut shortcut = item("exe:taskmgr", "Task Manager", "StartMenu");
-        shortcut.icon = Some(IconSpec::System(PathBuf::from(
-            r"C:\Windows\System32\Taskmgr.exe",
-        )));
+        shortcut.icon = Some(IconSpec::System(
+            PathBuf::from(r"C:\Windows\System32\Taskmgr.exe").into(),
+        ));
         shortcut.launch_entries = vec![LaunchEntry {
             source: "StartMenu".into(),
             path: PathBuf::from(
@@ -2037,9 +2086,9 @@ mod tests {
         assert_eq!(items[0].launch_entries.len(), 2);
         assert_eq!(
             items[0].icon,
-            Some(IconSpec::System(PathBuf::from(
-                r"C:\Windows\System32\Taskmgr.exe",
-            )))
+            Some(IconSpec::System(
+                PathBuf::from(r"C:\Windows\System32\Taskmgr.exe").into()
+            ))
         );
     }
 

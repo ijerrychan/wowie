@@ -10,17 +10,11 @@ pub fn run() -> Result<()> {
     let (config, config_was_valid) = config::Config::load();
     let window = create_window(&config)?;
     let settings_window = SettingsWindow::new()?;
-    let context_window = ContextMenu::new()?;
     // Native Windows frames own the outer contour; keep the Slint surface opaque
     // and flush with it. Other platforms retain the existing transparent shell.
     window.set_native_window_frame(cfg!(windows));
     settings_window.set_native_window_frame(cfg!(windows));
-    context_window.set_native_window_frame(cfg!(windows));
-    settings::preload_font_families(
-        settings_window.as_weak(),
-        window.as_weak(),
-        context_window.as_weak(),
-    );
+    settings::preload_font_families(settings_window.as_weak(), window.as_weak());
     let slint_language = i18n::effective_language(&config.language);
     slint::select_bundled_translation(&slint_language)
         .map_err(|error| anyhow::anyhow!("could not select language: {error}"))?;
@@ -139,7 +133,6 @@ pub fn run() -> Result<()> {
     window.set_search_icon_animation_enabled(true);
     window.set_search_icon_is_shortcut(false);
     window.set_launch_error(String::new().into());
-    context_window.set_dark_mode(dark_mode);
     window::install_native_background(
         window.as_weak(),
         Launcher::get_native_background_color,
@@ -150,15 +143,6 @@ pub fn run() -> Result<()> {
         SettingsWindow::get_native_background_color,
         SettingsWindow::get_native_border_color,
     );
-    window::install_native_background(
-        context_window.as_weak(),
-        ContextMenu::get_native_background_color,
-        ContextMenu::get_native_border_color,
-    );
-    context_window.set_ui_font_family(ui_font_family.clone().into());
-    context_window.set_ui_font_size(config.font_size as f32);
-    context_window.set_accent_color(accent_color);
-    context_window.set_animations_enabled(config.animations_enabled);
     settings_window.set_accent_color(accent_color);
     settings_window.set_animations_enabled(config.animations_enabled);
     settings_window.set_ui_font_family(ui_font_family.into());
@@ -167,7 +151,6 @@ pub fn run() -> Result<()> {
     settings_callbacks::register_settings_callbacks(
         &settings_window,
         &window,
-        &context_window,
         plugin_settings.clone(),
         Arc::clone(&platform),
         Arc::clone(&animations_enabled),
@@ -802,7 +785,6 @@ pub fn run() -> Result<()> {
         let detail_generation = Arc::clone(&detail_generation);
         let explicit_detail_item = Arc::clone(&explicit_detail_item);
         let empty_state_item = Arc::clone(&empty_state_item);
-        let context_weak_for_query = context_window.as_weak();
         let context_visible_for_query = Arc::clone(&context_visible);
         let context_generation_for_query = Arc::clone(&context_generation);
         let context_item_for_query = Arc::clone(&context_item);
@@ -837,7 +819,6 @@ pub fn run() -> Result<()> {
                 *current = query.to_string();
             }
             hide_context_menu(
-                &context_weak_for_query,
                 &weak,
                 &context_visible_for_query,
                 &context_generation_for_query,
@@ -1377,8 +1358,7 @@ pub fn run() -> Result<()> {
         let engine = engine.clone();
         let icon_service = icon_service.clone();
         let weak = window.as_weak();
-        let context_weak = context_window.as_weak();
-        let platform = Arc::clone(&platform);
+        let context_weak = window.as_weak();
         let context_visible = Arc::clone(&context_visible);
         let context_generation = Arc::clone(&context_generation);
         let context_item = Arc::clone(&context_item);
@@ -1428,7 +1408,6 @@ pub fn run() -> Result<()> {
             );
             if actions.is_empty() {
                 hide_context_menu(
-                    &context_weak,
                     &weak,
                     &context_visible,
                     &context_generation,
@@ -1446,58 +1425,15 @@ pub fn run() -> Result<()> {
             }
             let menu_generation = context_generation.fetch_add(1, Ordering::AcqRel) + 1;
             context_visible.store(true, Ordering::Release);
-            if let Some(window) = weak.upgrade() {
-                window.set_context_menu_open(true);
-            }
             if let Some(menu) = context_weak.upgrade() {
                 let language = context_language
                     .lock()
                     .map(|language| language.clone())
                     .unwrap_or_else(|_| "system".to_owned());
-                menu.set_menu_width(context_menu_width(&actions, &language) as f32);
-                menu.set_keyboard_invoked(keyboard);
-                menu.set_actions(ModelRc::from(Rc::new(VecModel::from(actions))));
-                platform::set_window_background(
-                    menu.window(),
-                    menu.get_native_background_color(),
-                    menu.get_native_border_color(),
-                );
-                platform.disable_window_transitions(menu.window());
-                let _ = menu.show();
-                menu.window().request_redraw();
-                let launcher = weak.upgrade();
-                let anchor = launcher.as_ref().and_then(|launcher| {
-                    keyboard.then(|| {
-                        (
-                            launcher.get_context_menu_anchor_x(),
-                            launcher.get_context_menu_anchor_y(),
-                        )
-                    })
-                });
-                if let Some(launcher) = launcher {
-                    platform.position_context_menu(menu.window(), launcher.window(), anchor);
-                }
-                platform.activate_context_menu(menu.window());
-                if let Some(anchor) = anchor {
-                    // The native window can still report its previous size
-                    // on the first show. Reposition once after Slint applies
-                    // the new actions and resizes the menu.
-                    let platform_for_reposition = Arc::clone(&platform);
-                    let menu_for_reposition = context_weak.clone();
-                    let launcher_for_reposition = weak.clone();
-                    Timer::single_shot(CONTEXT_MENU_LAYOUT_DELAY, move || {
-                        if let (Some(menu), Some(launcher)) = (
-                            menu_for_reposition.upgrade(),
-                            launcher_for_reposition.upgrade(),
-                        ) {
-                            platform_for_reposition.position_context_menu(
-                                menu.window(),
-                                launcher.window(),
-                                Some(anchor),
-                            );
-                        }
-                    });
-                }
+                menu.set_context_menu_width(context_menu_width(&actions, &language) as f32);
+                menu.set_context_keyboard_invoked(keyboard);
+                menu.set_context_actions(ModelRc::from(Rc::new(VecModel::from(actions))));
+                menu.set_context_menu_open(true);
             }
 
             let icon_service = icon_service.clone();
@@ -1515,7 +1451,7 @@ pub fn run() -> Result<()> {
                     let Some(menu) = context_weak.upgrade() else {
                         return;
                     };
-                    let model = menu.get_actions();
+                    let model = menu.get_context_actions();
                     for (action_id, icon) in icons {
                         for index in 0..model.row_count() {
                             let Some(mut row) = model.row_data(index) else {
@@ -1534,15 +1470,14 @@ pub fn run() -> Result<()> {
     }
     {
         let weak = window.as_weak();
-        let context_weak = context_window.as_weak();
+        let context_weak = window.as_weak();
         let context_visible = Arc::clone(&context_visible);
         let context_generation = Arc::clone(&context_generation);
         let context_item = Arc::clone(&context_item);
         let visible = Arc::clone(&visible);
         if let Some(menu) = context_weak.upgrade() {
-            menu.on_dismissed(move || {
+            menu.on_context_menu_dismissed(move || {
                 hide_context_menu(
-                    &context_weak,
                     &weak,
                     &context_visible,
                     &context_generation,
@@ -1555,7 +1490,6 @@ pub fn run() -> Result<()> {
     }
     {
         let weak = window.as_weak();
-        let context_weak = context_window.as_weak();
         let context_visible = Arc::clone(&context_visible);
         let context_generation = Arc::clone(&context_generation);
         let context_item = Arc::clone(&context_item);
@@ -1565,7 +1499,7 @@ pub fn run() -> Result<()> {
         let active_session_for_favorite = Arc::clone(&active_session);
         let action_generation = Arc::clone(&query_generation);
         let favorite_limit_language = Arc::clone(&current_language);
-        context_window.on_action_requested(move |action_id| {
+        window.on_context_action_requested(move |action_id| {
             let Some(window) = weak.upgrade() else {
                 return;
             };
@@ -1598,7 +1532,6 @@ pub fn run() -> Result<()> {
                 }
                 let favorite_result = engine.toggle_favorite(&item, session.as_ref());
                 hide_context_menu(
-                    &context_weak,
                     &weak,
                     &context_visible,
                     &context_generation,
@@ -1633,7 +1566,6 @@ pub fn run() -> Result<()> {
             if let Some(text) = copy_text {
                 let result = crate::utils::clipboard::set_text(&text);
                 hide_context_menu(
-                    &context_weak,
                     &weak,
                     &context_visible,
                     &context_generation,
@@ -1651,7 +1583,6 @@ pub fn run() -> Result<()> {
             }
             if action_id == "open-directory" {
                 hide_context_menu(
-                    &context_weak,
                     &weak,
                     &context_visible,
                     &context_generation,
@@ -1682,7 +1613,6 @@ pub fn run() -> Result<()> {
                     return;
                 };
                 hide_context_menu(
-                    &context_weak,
                     &weak,
                     &context_visible,
                     &context_generation,
@@ -1726,7 +1656,6 @@ pub fn run() -> Result<()> {
                     Arc::clone(&action_generation),
                 );
                 hide_context_menu(
-                    &context_weak,
                     &weak,
                     &context_visible,
                     &context_generation,
@@ -1757,7 +1686,6 @@ pub fn run() -> Result<()> {
                 _ => Err(anyhow::anyhow!("unknown context action")),
             };
             hide_context_menu(
-                &context_weak,
                 &weak,
                 &context_visible,
                 &context_generation,
@@ -1775,14 +1703,12 @@ pub fn run() -> Result<()> {
     {
         let window = window.as_weak();
         let visible = Arc::clone(&visible);
-        let context_weak = context_window.as_weak();
         let context_visible = Arc::clone(&context_visible);
         let context_generation = Arc::clone(&context_generation);
         let context_item = Arc::clone(&context_item);
         if let Some(handle) = window.upgrade() {
             handle.on_dismiss_requested(move || {
                 hide_context_menu(
-                    &context_weak,
                     &window,
                     &context_visible,
                     &context_generation,
@@ -1823,7 +1749,6 @@ pub fn run() -> Result<()> {
             platform: Arc::clone(&platform),
             window: window.as_weak(),
             settings_window: settings_window.as_weak(),
-            context_window: context_window.as_weak(),
             plugin_settings: plugin_settings.clone(),
             current_query: Arc::clone(&current_query),
             current_language: Arc::clone(&current_language),
@@ -1943,13 +1868,20 @@ pub fn run() -> Result<()> {
         let weak = window.as_weak();
         let visible = Arc::clone(&visible);
         let context_visible = Arc::clone(&context_visible);
+        let context_generation = Arc::clone(&context_generation);
+        let context_item = Arc::clone(&context_item);
         let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
         platform.install_focus_listener(
             window.window(),
             Box::new(move || {
-                if context_visible.load(Ordering::Acquire) {
-                    return;
-                }
+                hide_context_menu(
+                    &weak,
+                    &context_visible,
+                    &context_generation,
+                    &context_item,
+                    false,
+                    &visible,
+                );
                 if hide_on_focus_loss.load(Ordering::Acquire)
                     && visible.swap(false, Ordering::AcqRel)
                 {
@@ -1966,46 +1898,6 @@ pub fn run() -> Result<()> {
                         }
                     });
                 }
-            }),
-        );
-    }
-    {
-        let weak = window.as_weak();
-        let context_weak = context_window.as_weak();
-        let context_visible = Arc::clone(&context_visible);
-        let context_generation = Arc::clone(&context_generation);
-        let context_item = Arc::clone(&context_item);
-        let visible = Arc::clone(&visible);
-        let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
-        let platform_for_context_focus = Arc::clone(&platform);
-        platform.install_focus_listener(
-            context_window.window(),
-            Box::new(move || {
-                let context_weak = context_weak.clone();
-                let context_visible = Arc::clone(&context_visible);
-                let context_generation = Arc::clone(&context_generation);
-                let context_item = Arc::clone(&context_item);
-                let weak = weak.clone();
-                let visible = Arc::clone(&visible);
-                let platform = Arc::clone(&platform_for_context_focus);
-                let hide_on_focus_loss = Arc::clone(&hide_on_focus_loss);
-                let observed_generation = context_generation.load(Ordering::Acquire);
-                Timer::single_shot(FOCUS_LOSS_DELAY, move || {
-                    if context_generation.load(Ordering::Acquire) == observed_generation {
-                        let launcher_focused = weak
-                            .upgrade()
-                            .is_some_and(|launcher| platform.is_window_focused(launcher.window()));
-                        hide_context_menu(
-                            &context_weak,
-                            &weak,
-                            &context_visible,
-                            &context_generation,
-                            &context_item,
-                            !launcher_focused && hide_on_focus_loss.load(Ordering::Acquire),
-                            &visible,
-                        );
-                    }
-                });
             }),
         );
     }
@@ -2052,7 +1944,6 @@ pub fn run() -> Result<()> {
     let platform_for_hotkey = Arc::clone(&platform);
     let follow_system_theme_for_hotkey = Arc::clone(&follow_system_theme);
     let visible_for_hotkey = Arc::clone(&visible);
-    let context_weak_for_hotkey = context_window.as_weak();
     let context_visible_for_hotkey = Arc::clone(&context_visible);
     let context_generation_for_hotkey = Arc::clone(&context_generation);
     let context_item_for_hotkey = Arc::clone(&context_item);
@@ -2063,7 +1954,6 @@ pub fn run() -> Result<()> {
             let weak = weak.clone();
             let platform = Arc::clone(&platform_for_hotkey);
             let visible = Arc::clone(&visible_for_hotkey);
-            let context_weak = context_weak_for_hotkey.clone();
             let context_visible = Arc::clone(&context_visible_for_hotkey);
             let context_generation = Arc::clone(&context_generation_for_hotkey);
             let context_item = Arc::clone(&context_item_for_hotkey);
@@ -2073,7 +1963,6 @@ pub fn run() -> Result<()> {
             let _ = slint::invoke_from_event_loop(move || match event {
                 platform::PlatformEvent::TogglePalette => {
                     hide_context_menu(
-                        &context_weak,
                         &weak,
                         &context_visible,
                         &context_generation,
@@ -2091,7 +1980,6 @@ pub fn run() -> Result<()> {
                     let dark_mode = platform.system_prefers_dark_theme();
                     let window = weak.upgrade();
                     let settings = settings_weak.upgrade();
-                    let context = context_weak.upgrade();
                     let (current, valid) = config::Config::load();
                     if valid {
                         apply_theme_to_windows(
@@ -2100,14 +1988,12 @@ pub fn run() -> Result<()> {
                             platform.as_ref(),
                             window.as_ref(),
                             settings.as_ref(),
-                            context.as_ref(),
                         );
                     }
                 }
                 platform::PlatformEvent::SystemThemeChanged => {}
                 platform::PlatformEvent::OpenSettings => {
                     hide_context_menu(
-                        &context_weak,
                         &weak,
                         &context_visible,
                         &context_generation,

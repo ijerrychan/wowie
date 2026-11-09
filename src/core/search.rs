@@ -753,6 +753,10 @@ fn favorite_requires_current_app_index(item: &SearchResult) -> bool {
         || item.sources.iter().any(is_indexed_application_source)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Reuse caller-owned matching buffers without allocating in the search hot path."
+)]
 fn result_match_score(
     query: &str,
     title: &str,
@@ -882,6 +886,10 @@ fn has_keyword_anchor(query: &str, common_keywords: &std::collections::HashSet<S
         && !common_keywords.contains(query)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Reuse caller-owned matching buffers without allocating in the search hot path."
+)]
 fn unordered_multiword_score(
     query: &str,
     title: &str,
@@ -897,9 +905,7 @@ fn unordered_multiword_score(
 ) -> Option<MatchScore> {
     let mut tokens = query.split_whitespace();
     let first = tokens.next()?;
-    if tokens.clone().next().is_none() {
-        return None;
-    }
+    tokens.clone().next()?;
     let mut weakest_class = u8::MAX;
     let mut weakest_quality = i32::MAX;
     let mut all_strong = true;
@@ -1073,6 +1079,10 @@ fn stable_launch_entry_hash(entry: &crate::result::LaunchEntry) -> u64 {
     hash
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Reuse caller-owned matching buffers without allocating in the search hot path."
+)]
 fn match_score(
     query: &str,
     title: &str,
@@ -1203,6 +1213,10 @@ fn title_quality(text: &str) -> i32 {
     (1000 - text.chars().count() as i32).max(1)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Reuse caller-owned matching buffers without allocating in the search hot path."
+)]
 fn fuzzy_match_score(
     text: &str,
     query: &str,

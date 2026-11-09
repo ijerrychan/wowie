@@ -66,6 +66,10 @@ fn grouped_selections(
 
 /// Render one selected row and assert that the selection highlight is not
 /// clipped and that no callback chain was logged.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep render dimensions and selection diagnostics explicit in this shared assertion."
+)]
 fn assert_selected_row_visible(
     window: &Launcher,
     native: &MinimalSoftwareWindow,
@@ -682,5 +686,200 @@ fn launcher_layout_settles_when_reopened() {
             context,
         );
     }
+    window.hide().unwrap();
+
+    // Context actions are an overlay in this same window: opening and using
+    // the menu must not allocate another platform window or hide the launcher.
+    let window_count = software_windows.borrow().len();
+    let action = Rc::new(std::cell::RefCell::new(String::new()));
+    let action_for_callback = Rc::clone(&action);
+    window.on_context_action_requested(move |id| {
+        *action_for_callback.borrow_mut() = id.to_string();
+    });
+    let weak = window.as_weak();
+    window.on_context_menu_dismissed(move || {
+        weak.upgrade().unwrap().set_context_menu_open(false);
+    });
+    window.set_context_keyboard_invoked(true);
+    window.set_context_actions(ModelRc::from(Rc::new(VecModel::from(vec![
+        ContextActionRow {
+            id: "copy-title".into(),
+            title: "Copy title".into(),
+            ..Default::default()
+        },
+    ]))));
+    window.show().unwrap();
+    window.set_context_menu_open(true);
+    slint::platform::update_timers_and_animations();
+    let _ = selected_highlight_right_edge(&native, width, height);
+    assert_eq!(software_windows.borrow().len(), window_count);
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Return.into(),
+        });
+    assert_eq!(&*action.borrow(), "copy-title");
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Escape.into(),
+        });
+    assert!(!window.get_context_menu_open());
+    assert!(window.window().is_visible());
+    window.set_context_keyboard_invoked(false);
+    for (click_x, click_y) in [
+        (100.0, 180.0),
+        (519.0, 599.0),
+        (1.0, 1.0),
+        (519.0, 1.0),
+        (1.0, 599.0),
+    ] {
+        window.set_context_pointer_x(click_x);
+        window.set_context_pointer_y(click_y);
+        let x = window.get_context_menu_x();
+        let y = window.get_context_menu_y();
+        let menu_width = window.get_context_menu_effective_width();
+        let menu_height = window.get_context_menu_effective_height();
+        assert!(x >= 0.0 && y >= 0.0);
+        assert!(x + menu_width <= width as f32 && y + menu_height <= height as f32);
+        if click_x == 100.0 {
+            assert_eq!((x, y), (click_x, click_y));
+        }
+    }
+    // Real pointer input captures window coordinates and opens on release.
+    window.set_results(ModelRc::from(Rc::new(VecModel::from(
+        (0..8)
+            .map(|index| ResultRow {
+                id: format!("context-row-{index}").into(),
+                title: "Context row".into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>(),
+    ))));
+    window.invoke_reset_result_scroll();
+    window.set_query_results_ready(true);
+    let _ = selected_highlight_right_edge(&native, width, height);
+    let weak = window.as_weak();
+    window.on_context_menu_requested(move |_, keyboard| {
+        let window = weak.upgrade().unwrap();
+        window.set_context_keyboard_invoked(keyboard);
+        window.set_context_menu_open(true);
+    });
+    let click = slint::LogicalPosition::new(100.0, 180.0);
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: click });
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position: click,
+            button: slint::platform::PointerEventButton::Right,
+        });
+    assert!(!window.get_context_menu_open());
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position: click,
+            button: slint::platform::PointerEventButton::Right,
+        });
+    assert!(window.get_context_menu_open());
+    assert_eq!(
+        (
+            window.get_context_pointer_x(),
+            window.get_context_pointer_y()
+        ),
+        (100.0, 180.0)
+    );
+    assert_eq!(software_windows.borrow().len(), window_count);
+    for (x, y) in [(100.0, 300.0), (110.0, 310.0)] {
+        let _ = selected_highlight_right_edge(&native, width, height);
+        let position = slint::LogicalPosition::new(x, y);
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                position,
+                button: slint::platform::PointerEventButton::Right,
+            });
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Right,
+            });
+        assert!(window.get_context_menu_open());
+        assert_eq!(
+            (
+                window.get_context_pointer_x(),
+                window.get_context_pointer_y()
+            ),
+            (x, y)
+        );
+    }
+    // Inspect the actual menu pixels: changing the bundled language must
+    // translate its label, and a short menu must not scroll in either axis.
+    let menu_pixels = || {
+        window.window().request_redraw();
+        let mut pixels = vec![slint::Rgb8Pixel::default(); width as usize * height as usize];
+        native.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, width as usize);
+        });
+        let left = window.get_context_menu_x().ceil() as u32;
+        let top = window.get_context_menu_y().ceil() as u32;
+        let right = (left + window.get_context_menu_effective_width() as u32).min(width);
+        let bottom = (top + window.get_context_menu_effective_height() as u32).min(height);
+        (top..bottom)
+            .flat_map(|y| {
+                let pixels = &pixels;
+                (left..right).flat_map(move |x| {
+                    let pixel = pixels[(y * width + x) as usize];
+                    [pixel.r, pixel.g, pixel.b]
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let english = menu_pixels();
+    slint::select_bundled_translation("zh-CN").unwrap();
+    assert_ne!(
+        english,
+        menu_pixels(),
+        "context menu should use the Chinese catalog"
+    );
+    let position = slint::LogicalPosition::new(
+        window.get_context_menu_x() + 30.0,
+        window.get_context_menu_y() + 20.0,
+    );
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+    let before_scroll = menu_pixels();
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position,
+            delta_x: -80.0,
+            delta_y: -80.0,
+        });
+    assert!(
+        before_scroll == menu_pixels(),
+        "short menu should have no excess scroll space"
+    );
+    window.set_context_menu_open(false);
+    window.set_context_menu_width(2000.0);
+    window.set_context_actions(ModelRc::from(Rc::new(VecModel::from(vec![
+        ContextActionRow::default(); 40
+    ]))));
+    window.set_context_menu_open(true);
+    let _ = selected_highlight_right_edge(&native, width, height);
+    assert!(
+        window.get_context_menu_x() + window.get_context_menu_effective_width() <= width as f32
+    );
+    assert!(
+        window.get_context_menu_y() + window.get_context_menu_effective_height() <= height as f32
+    );
+    assert_eq!(software_windows.borrow().len(), window_count);
+    window.set_context_menu_open(false);
     window.hide().unwrap();
 }

@@ -10,7 +10,7 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
         .into_iter()
         .map(|item| {
             let shell_target = item.launch_target;
-            let icon = Some(IconSpec::System(item.icon_target));
+            let icon = Some(IconSpec::System(item.icon_target.into()));
             let mut result = SearchResult {
                 id: item.identity.clone(),
                 identity: item.identity,
@@ -23,7 +23,6 @@ pub fn discover(_config: &crate::config::ProviderConfig) -> Vec<SearchResult> {
                     keywords: item.keywords,
                     context: item.area.clone().into_iter().collect(),
                     technical: item.aliases,
-                    ..SearchMetadata::default()
                 },
                 // Tasks expose their localized applet area; Shell identities
                 // remain launch details and never become searchable locations.

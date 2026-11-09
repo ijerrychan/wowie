@@ -1,4 +1,4 @@
-use super::{ContextMenu, Launcher, PALETTE_POSITION_DELAY};
+use super::{Launcher, PALETTE_POSITION_DELAY};
 use crate::{config, platform, result::SearchResult};
 use anyhow::Result;
 use slint::{ComponentHandle, Timer};
@@ -55,8 +55,8 @@ fn select_renderer(renderer: &str) -> Result<()> {
                 use slint::winit_030::winit::platform::windows::{
                     CornerPreference, WindowAttributesExtWindows,
                 };
-                // DWM owns the outside contour and shadow. The theme border
-                // is installed with the native background once the HWND exists.
+                // DWM owns the outside contour. The theme border is installed
+                // with the native background once the HWND exists.
                 attributes
                     .with_transparent(false)
                     .with_undecorated_shadow(true)
@@ -148,7 +148,6 @@ pub(super) fn toggle_palette(
 }
 
 pub(super) fn hide_context_menu(
-    menu: &slint::Weak<ContextMenu>,
     launcher: &slint::Weak<Launcher>,
     visible: &AtomicBool,
     generation: &AtomicU64,
@@ -158,15 +157,13 @@ pub(super) fn hide_context_menu(
 ) {
     generation.fetch_add(1, Ordering::AcqRel);
     visible.store(false, Ordering::Release);
-    if let Some(menu) = menu.upgrade() {
-        menu.set_keyboard_invoked(false);
-        let _ = menu.hide();
-    }
     if let Ok(mut current) = item.lock() {
         *current = None;
     }
     if let Some(launcher) = launcher.upgrade() {
+        launcher.set_context_keyboard_invoked(false);
         launcher.set_context_menu_open(false);
+        launcher.set_context_actions(slint::ModelRc::default());
         if hide_launcher && launcher_visible.swap(false, Ordering::AcqRel) {
             let _ = launcher.hide();
         }

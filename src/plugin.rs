@@ -3043,8 +3043,10 @@ mod tests {
         );
         assert_eq!(item.keywords, vec!["keyword-1"]);
 
-        let mut oversized = PluginItem::default();
-        oversized.keywords = vec!["x".repeat(MAX_PLUGIN_ALIAS_CHARS + 44)];
+        let oversized = PluginItem {
+            keywords: vec!["x".repeat(MAX_PLUGIN_ALIAS_CHARS + 44)],
+            ..Default::default()
+        };
         let oversized = sanitize_plugin_item(oversized);
         assert_eq!(
             oversized.keywords[0].chars().count(),
@@ -3099,12 +3101,14 @@ mod tests {
         }
 
         let plugin = plugin();
-        let mut ordinary = PluginItem::default();
-        ordinary.id = "localized-result".into();
-        ordinary.title = "Localized Result".into();
-        ordinary.command_id = Some("translate".into());
-        ordinary.aliases = vec!["trusted localized name".into()];
-        ordinary.technical = vec!["urn:vendor:result-17".into()];
+        let ordinary = PluginItem {
+            id: "localized-result".into(),
+            title: "Localized Result".into(),
+            command_id: Some("translate".into()),
+            aliases: vec!["trusted localized name".into()],
+            technical: vec!["urn:vendor:result-17".into()],
+            ..Default::default()
+        };
         let ordinary = to_result(
             &plugin,
             ordinary,
@@ -3128,12 +3132,14 @@ mod tests {
         assert!(weak_matches.iter().any(|result| result.id == ordinary.id));
         assert_eq!(core.best_match_index("manifest hint", &weak_matches), None);
 
-        let mut capacity = PluginItem::default();
-        capacity.id = "capacity".into();
-        capacity.title = "Capacity".into();
-        capacity.command_id = Some("translate".into());
-        capacity.aliases = (0..30).map(|index| format!("explicit-{index}")).collect();
-        capacity.technical = vec!["urn:vendor:kept-identity".into()];
+        let capacity = PluginItem {
+            id: "capacity".into(),
+            title: "Capacity".into(),
+            command_id: Some("translate".into()),
+            aliases: (0..30).map(|index| format!("explicit-{index}")).collect(),
+            technical: vec!["urn:vendor:kept-identity".into()],
+            ..Default::default()
+        };
         let capacity = to_result(
             &plugin,
             capacity,
@@ -3154,11 +3160,13 @@ mod tests {
         );
         assert_eq!(capacity.metadata.keywords, vec!["manifest hint"]);
 
-        let mut entry = PluginItem::default();
-        entry.id = "entry".into();
-        entry.title = "Example Translator".into();
-        entry.command_id = Some("translate".into());
-        entry.session_entry = true;
+        let entry = PluginItem {
+            id: "entry".into(),
+            title: "Example Translator".into(),
+            command_id: Some("translate".into()),
+            session_entry: true,
+            ..Default::default()
+        };
         let entry = to_result(
             &plugin,
             entry,

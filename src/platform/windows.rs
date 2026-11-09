@@ -29,8 +29,8 @@ use windows_sys::Win32::{
             MOD_WIN,
         },
         WindowsAndMessaging::{
-            DispatchMessageW, GetForegroundWindow, GetSystemMetrics, PeekMessageW,
-            SetForegroundWindow, TranslateMessage, MSG, PM_REMOVE, WM_HOTKEY,
+            DispatchMessageW, GetSystemMetrics, PeekMessageW, SetForegroundWindow,
+            TranslateMessage, MSG, PM_REMOVE, WM_HOTKEY,
         },
     },
 };
@@ -645,70 +645,6 @@ impl PlatformIntegration for WindowsPlatform {
         ));
     }
 
-    fn position_context_menu(
-        &self,
-        window: &slint::Window,
-        launcher: &slint::Window,
-        anchor: Option<(f32, f32)>,
-    ) {
-        use windows_sys::Win32::Graphics::Gdi::{
-            GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-        };
-        use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
-        let Some(menu_hwnd) = hwnd_from_window(window) else {
-            return;
-        };
-        let mut menu_rect = windows_sys::Win32::Foundation::RECT::default();
-        if unsafe { GetWindowRect(menu_hwnd, &mut menu_rect) } == 0 {
-            return;
-        }
-        let width = menu_rect.right - menu_rect.left;
-        let height = menu_rect.bottom - menu_rect.top;
-
-        if let Some((anchor_x, anchor_y)) = anchor {
-            let launcher_position = launcher.position();
-            let scale = launcher.scale_factor();
-            let (anchor_x, anchor_y) = super::logical_point_to_physical(
-                (launcher_position.x, launcher_position.y),
-                (anchor_x, anchor_y),
-                scale,
-            );
-            window.set_position(slint::PhysicalPosition::new(
-                anchor_x - width,
-                anchor_y - height,
-            ));
-            return;
-        }
-
-        let mut cursor = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
-        if unsafe { GetCursorPos(&mut cursor) } == 0 {
-            return;
-        }
-        let monitor = unsafe { MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST) };
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            rcMonitor: Default::default(),
-            rcWork: Default::default(),
-            dwFlags: 0,
-        };
-        let (left, top, right, bottom) =
-            if !monitor.is_null() && unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
-                (
-                    info.rcWork.left,
-                    info.rcWork.top,
-                    info.rcWork.right,
-                    info.rcWork.bottom,
-                )
-            } else {
-                (0, 0, unsafe { GetSystemMetrics(0) }, unsafe {
-                    GetSystemMetrics(1)
-                })
-            };
-        let x = (cursor.x + 8).min(right - width).max(left);
-        let y = (cursor.y + 8).min(bottom - height).max(top);
-        window.set_position(slint::PhysicalPosition::new(x, y));
-    }
-
     fn activate_palette(&self, window: &slint::Window) {
         let Some(hwnd) = hwnd_from_window(window) else {
             return;
@@ -718,14 +654,6 @@ impl PlatformIntegration for WindowsPlatform {
                 eprintln!("could not bring launcher window to foreground");
             }
         }
-    }
-
-    fn activate_context_menu(&self, window: &slint::Window) {
-        self.activate_palette(window);
-    }
-
-    fn is_window_focused(&self, window: &slint::Window) -> bool {
-        hwnd_from_window(window).is_some_and(|hwnd| unsafe { GetForegroundWindow() == hwnd })
     }
 
     fn install_focus_listener(&self, window: &slint::Window, on_lost_focus: Box<dyn Fn()>) {

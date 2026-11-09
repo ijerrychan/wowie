@@ -148,6 +148,12 @@ pub(super) fn looks_like_uri(path: &Path) -> bool {
 }
 
 pub(super) fn normalize_path(path: &Path) -> String {
+    if let Some(value) = path
+        .to_str()
+        .filter(|value| value.starts_with("shell:pidl64:"))
+    {
+        return value.to_owned();
+    }
     let path = file_url_path(path).unwrap_or_else(|| path.to_owned());
     let path = resolve_existing_path_aliases(&path);
     let raw = path.to_string_lossy().trim().replace('/', "\\");

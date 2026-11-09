@@ -84,7 +84,7 @@ pub(super) struct ShortcutSpec {
 pub(super) fn build_result(query: ShortcutQuery<'_>, spec: ShortcutSpec) -> SearchResult {
     let icon = spec
         .icon
-        .or_else(|| Some(IconSpec::System(spec.target.clone())));
+        .or_else(|| Some(IconSpec::System(spec.target.clone().into())));
     let preview = spec.preview || query.text.is_empty();
     let title = if preview {
         spec.name.clone()

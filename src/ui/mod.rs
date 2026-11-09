@@ -41,9 +41,7 @@ use window::{create_window, hide_context_menu, save_window_size, toggle_palette}
 
 const SEARCH_ICON_FRAME_DELAY: Duration = Duration::from_millis(16);
 const SEARCH_FEEDBACK_DELAY: Duration = Duration::from_millis(180);
-const CONTEXT_MENU_LAYOUT_DELAY: Duration = Duration::from_millis(16);
 const LAUNCH_ERROR_DURATION: Duration = Duration::from_secs(5);
-const FOCUS_LOSS_DELAY: Duration = Duration::from_millis(30);
 const PROVIDER_REFRESH_INTERVAL: Duration = Duration::from_millis(200);
 pub(super) const PALETTE_POSITION_DELAY: Duration = Duration::from_millis(10);
 const SEARCH_PAGE_PREFETCH_DISTANCE: usize = 12;
@@ -51,7 +49,7 @@ const SEARCH_PAGE_PREFETCH_DISTANCE: usize = 12;
 /// matches. SearchCore shares exactly the snapshot accepted by this surface.
 const MAX_RENDERED_RESULTS: usize = 256;
 
-/// Resolve one accent pair for all three windows. The default application
+/// Resolve one accent pair for both windows. The default application
 /// accent is theme-adaptive so accent-colored text stays readable on dark
 /// surfaces; an explicit system/custom color is used as supplied.
 pub(super) fn accent_colors(
@@ -75,7 +73,6 @@ pub(super) fn apply_theme_to_windows(
     platform: &dyn platform::PlatformIntegration,
     launcher: Option<&Launcher>,
     settings: Option<&SettingsWindow>,
-    context: Option<&ContextMenu>,
 ) {
     let (accent_color, accent_background) =
         accent_colors(config, platform.system_accent_color(), dark_mode);
@@ -102,17 +99,6 @@ pub(super) fn apply_theme_to_windows(
             settings.get_native_border_color(),
         );
         settings.window().request_redraw();
-    }
-    if let Some(context) = context {
-        context.set_dark_mode(dark_mode);
-        context.set_accent_color(accent_color);
-        context.set_animations_enabled(config.animations_enabled);
-        platform::set_window_background(
-            context.window(),
-            context.get_native_background_color(),
-            context.get_native_border_color(),
-        );
-        context.window().request_redraw();
     }
 }
 

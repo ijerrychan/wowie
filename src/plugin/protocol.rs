@@ -732,7 +732,9 @@ pub(super) fn resolve_plugin_icon(root: &Path, icon: IconRef) -> Option<IconSpec
             let path = PathBuf::from(path);
             path.is_absolute().then_some(IconSpec::Resource(path))
         }
-        IconRef::System { target } => Some(IconSpec::System(target.into())),
+        IconRef::System { target } => {
+            Some(IconSpec::System(std::path::PathBuf::from(target).into()))
+        }
         IconRef::Named { id } => Some(IconSpec::Named(id)),
         IconRef::Remote { url } => validate_plugin_http_url(&url)
             .is_ok()

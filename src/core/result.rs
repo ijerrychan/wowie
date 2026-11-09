@@ -184,7 +184,7 @@ pub struct LaunchEntry {
     pub icon: Option<IconSpec>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SearchMetadata {
     /// Discoverable terms from the indexed record, weaker than names.
@@ -196,16 +196,6 @@ pub struct SearchMetadata {
     /// Exact identifiers and technical forms; only exact queries qualify.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub technical: Vec<String>,
-}
-
-impl Default for SearchMetadata {
-    fn default() -> Self {
-        Self {
-            keywords: Vec::new(),
-            context: Vec::new(),
-            technical: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -383,7 +373,8 @@ pub enum IconSpec {
     /// A plugin-owned PNG/ICO resource resolved to an absolute path.
     Resource(std::path::PathBuf),
     /// A path or shell target whose icon is provided by the operating system.
-    System(std::path::PathBuf),
+    /// Share long Shell PIDLs across source records, merged results and actions.
+    System(std::sync::Arc<std::path::PathBuf>),
     SystemIndexed {
         path: std::path::PathBuf,
         index: i32,

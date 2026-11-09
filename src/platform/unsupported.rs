@@ -42,17 +42,7 @@ impl PlatformIntegration for UnsupportedPlatform {
     }
 
     fn position_palette(&self, _window: &slint::Window, _result_height: f32) {}
-    fn position_context_menu(
-        &self,
-        _window: &slint::Window,
-        _launcher: &slint::Window,
-        _anchor: Option<(f32, f32)>,
-    ) {
-    }
-    fn activate_context_menu(&self, _window: &slint::Window) {}
-    fn is_window_focused(&self, _window: &slint::Window) -> bool {
-        false
-    }
+
     fn activate_palette(&self, _window: &slint::Window) {}
     fn install_focus_listener(&self, _window: &slint::Window, _on_lost_focus: Box<dyn Fn()>) {}
     fn disable_window_transitions(&self, _window: &slint::Window) {}

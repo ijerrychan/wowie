@@ -244,7 +244,7 @@ fn powertoys_result(setting: &PowerToysSetting) -> SearchResult {
             target,
             arguments,
             working_directory: None,
-            icon: Some(IconSpec::System(PathBuf::from(icon_target))),
+            icon: Some(IconSpec::System(PathBuf::from(icon_target).into())),
         }],
         actions: Vec::new(),
         detail: None,
@@ -252,7 +252,7 @@ fn powertoys_result(setting: &PowerToysSetting) -> SearchResult {
         app_user_model_id: None,
         package_family_name: None,
         package_metadata: None,
-        icon: Some(IconSpec::System(PathBuf::from(icon_target))),
+        icon: Some(IconSpec::System(PathBuf::from(icon_target).into())),
         ranking_bias: setting.app_homepage_score,
         allow_favorite: true,
         visibility: crate::result::ResultVisibility::Always,
@@ -387,7 +387,7 @@ pub(crate) fn powertoys_results(
                         .filter(|metadata| metadata.len() <= 4 * 1024 * 1024)
                         .and_then(|_| std::fs::read_to_string(&item.launch_target).ok())
                         .and_then(|xml| mmc_icon(&xml))
-                        .or_else(|| Some(IconSpec::System(item.launch_target.clone())));
+                        .or_else(|| Some(IconSpec::System(item.launch_target.clone().into())));
                 }
             }
             for entry in &mut item.launch_entries {
@@ -575,7 +575,7 @@ pub(crate) fn apply_compatible_destination(
         return;
     };
 
-    let icon = Some(IconSpec::System(PathBuf::from(SETTINGS_ICON_TARGET)));
+    let icon = Some(IconSpec::System(PathBuf::from(SETTINGS_ICON_TARGET).into()));
     #[cfg(windows)]
     let icon = {
         if !availability.contains(uri) {

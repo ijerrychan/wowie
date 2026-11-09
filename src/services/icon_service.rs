@@ -636,6 +636,12 @@ fn icon_source_is_size_independent(item: &SearchResult) -> bool {
 }
 
 fn stable_path_key(path: &Path) -> String {
+    if let Some(value) = path
+        .to_str()
+        .filter(|value| value.starts_with("shell:pidl64:"))
+    {
+        return value.to_owned();
+    }
     let value = path.to_string_lossy().replace('\\', "/");
     #[cfg(windows)]
     {
@@ -875,16 +881,34 @@ mod tests {
     fn resource_and_system_decoders_have_distinct_cache_keys() {
         let path = PathBuf::from("test.png");
         assert_ne!(
-            icon_spec_key(&IconSpec::System(path.clone())),
+            icon_spec_key(&IconSpec::System(path.clone().into())),
             icon_spec_key(&IconSpec::Resource(path))
         );
+    }
+
+    #[test]
+    fn system_icon_clones_share_targets_and_keep_cache_format() {
+        let target = Arc::new(PathBuf::from("shell:pidl:040001020000"));
+        let icon = IconSpec::System(Arc::clone(&target));
+        let IconSpec::System(cloned) = icon.clone() else {
+            unreachable!()
+        };
+        assert!(Arc::ptr_eq(&target, &cloned));
+        let legacy = r#"{"System":"shell:pidl:040001020000"}"#;
+        assert_eq!(serde_json::to_string(&icon).unwrap(), legacy);
+        assert_eq!(serde_json::from_str::<IconSpec>(legacy).unwrap(), icon);
+        // Base64 payloads are case-sensitive even on Windows. Different
+        // Shell identities must never collide in the icon cache.
+        let first = IconSpec::System(PathBuf::from("shell:pidl64:BAABAgAA").into());
+        let second = IconSpec::System(PathBuf::from("shell:pidl64:BAABagAA").into());
+        assert_ne!(icon_spec_key(&first), icon_spec_key(&second));
     }
 
     #[test]
     fn source_key_reuses_the_same_explicit_icon() {
         let mut first = test_result("one");
         let mut second = test_result("two");
-        let icon = IconSpec::System(PathBuf::from("https://example.com"));
+        let icon = IconSpec::System(PathBuf::from("https://example.com").into());
         first.icon = Some(icon.clone());
         second.icon = Some(icon);
         assert_eq!(icon_source_key(&first), icon_source_key(&second));
@@ -894,15 +918,15 @@ mod tests {
     fn different_system_targets_do_not_share_an_icon_cache_key() {
         let mut first = test_result("one");
         let mut second = test_result("two");
-        first.icon = Some(IconSpec::System(PathBuf::from(r"C:\Apps\one.exe")));
-        second.icon = Some(IconSpec::System(PathBuf::from(r"C:\Apps\two.exe")));
+        first.icon = Some(IconSpec::System(PathBuf::from(r"C:\Apps\one.exe").into()));
+        second.icon = Some(IconSpec::System(PathBuf::from(r"C:\Apps\two.exe").into()));
         assert_ne!(icon_source_key(&first), icon_source_key(&second));
     }
 
     #[test]
     fn fixed_platform_icons_share_one_cache_key_across_sizes() {
         for spec in [
-            IconSpec::System(PathBuf::from("C:\\Apps\\demo.exe")),
+            IconSpec::System(PathBuf::from("C:\\Apps\\demo.exe").into()),
             IconSpec::SystemIndexed {
                 path: PathBuf::from("C:\\Apps\\demo.exe"),
                 index: 1,

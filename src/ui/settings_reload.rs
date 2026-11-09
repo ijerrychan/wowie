@@ -25,7 +25,6 @@ pub(super) struct SettingsReloadContext {
     pub(super) platform: Arc<dyn platform::PlatformIntegration>,
     pub(super) window: slint::Weak<Launcher>,
     pub(super) settings_window: slint::Weak<SettingsWindow>,
-    pub(super) context_window: slint::Weak<ContextMenu>,
     pub(super) plugin_settings: Vec<plugin::PluginSettingsDefinition>,
     pub(super) current_query: Arc<Mutex<String>>,
     pub(super) current_language: Arc<Mutex<String>>,
@@ -73,7 +72,6 @@ impl SettingsReloadContext {
 
         let window = self.window.clone();
         let settings_window = self.settings_window.clone();
-        let context_window = self.context_window.clone();
         let plugin_settings = self.plugin_settings.clone();
         let updated = updated.clone();
         let platform = Arc::clone(&self.platform);
@@ -92,14 +90,12 @@ impl SettingsReloadContext {
             };
             let window = window.upgrade();
             let settings = settings_window.upgrade();
-            let context = context_window.upgrade();
             super::apply_theme_to_windows(
                 dark_mode,
                 &updated,
                 platform.as_ref(),
                 window.as_ref(),
                 settings.as_ref(),
-                context.as_ref(),
             );
             let ui_font_family = settings::resolved_ui_font_family(&updated.font_family);
             if let Some(window) = window {
@@ -121,10 +117,6 @@ impl SettingsReloadContext {
                     platform.position_palette(window.window(), window.get_result_window_height());
                 }
                 window.set_list_item_height(updated.list_item_height as f32);
-            }
-            if let Some(context) = context {
-                context.set_ui_font_family(ui_font_family.clone().into());
-                context.set_ui_font_size(updated.font_size as f32);
             }
             if let Some(settings) = settings {
                 settings.set_ui_font_family(ui_font_family.into());
