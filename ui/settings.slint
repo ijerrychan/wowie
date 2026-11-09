@@ -28,7 +28,7 @@ component SettingsAction inherits Rectangle {
     in property <color> foreground;
     in property <color> hover-color;
     callback clicked;
-    height: 30px;
+    height: DesignTokens.control-height-compact;
     border-radius: DesignTokens.radius-sm;
     background: action-area.has-hover ? root.hover-color : transparent;
     Text { width: parent.width; height: parent.height; text: root.label; color: root.foreground; font-size: DesignTokens.font-small; horizontal-alignment: center; vertical-alignment: center; }
@@ -41,14 +41,20 @@ component SettingsEditorInput inherits Rectangle {
     in property <bool> dark-mode;
     in property <color> stroke-color;
     in property <color> foreground;
+    in property <color> accent-color: #0067c0;
     height: 54px;
     background: transparent;
     Text { x: 0px; y: 0px; width: parent.width; height: 18px; text: root.label; color: root.foreground; font-size: DesignTokens.font-small; overflow: elide; }
     Rectangle {
-        x: 0px; y: 20px; width: parent.width; height: 31px;
+        x: 0px; y: 20px; width: parent.width; height: DesignTokens.control-height;
         background: root.dark-mode ? DesignTokens.dark-canvas : DesignTokens.light-surface;
-        border-color: root.stroke-color; border-width: 1px; border-radius: DesignTokens.radius-sm; clip: true;
-        TextInput { x: 7px; y: 1px; width: parent.width - 14px; height: parent.height - 2px; text <=> root.value; color: root.foreground; font-size: DesignTokens.font-label; single-line: true; vertical-alignment: center; }
+        input-area := Rectangle {
+            x: 0px; y: 0px; width: parent.width; height: parent.height;
+            background: root.dark-mode ? DesignTokens.dark-canvas : DesignTokens.light-surface;
+            border-color: input.has-focus ? root.accent-color : root.stroke-color;
+            border-width: 1px; border-radius: DesignTokens.radius-sm; clip: true;
+            input := TextInput { x: 7px; y: 1px; width: parent.width - 14px; height: parent.height - 2px; text <=> root.value; color: root.foreground; font-size: DesignTokens.font-label; single-line: true; vertical-alignment: center; selection-background-color: root.accent-color; selection-foreground-color: #ffffff; }
+        }
     }
 }
 
@@ -104,12 +110,11 @@ component SettingsField inherits Rectangle {
         root.reset-shortcut-editor();
     }
 
-    Rectangle { x: 16px; y: parent.height - 1px; width: parent.width - 32px; height: 1px; background: root.border; }
+    Rectangle { x: DesignTokens.space-4; y: parent.height - 1px; width: parent.width - 2 * DesignTokens.space-4; height: 1px; background: root.border; opacity: DesignTokens.divider-opacity; }
 
     if root.entry.kind == "priority" && priority-drag.dragging : Rectangle {
         x: 40px; y: 2px; width: parent.width - 49px; height: parent.height - 4px;
         border-radius: DesignTokens.radius-md; background: root.accent-color; opacity: 0.08;
-        animate opacity { duration: DesignTokens.motion-fast; easing: ease-out; enabled: root.animations-enabled; }
     }
 
     if root.entry.kind == "priority" && priority-drop.has-drag : Rectangle {
@@ -136,11 +141,11 @@ component SettingsField inherits Rectangle {
         x: parent.width - 66px; y: (parent.height - 28px) / 2; width: 46px; height: 28px;
         border-radius: 14px;
         background: root.entry.value == "true" ? root.accent-color : (root.dark-mode ? #555555 : #c8cbd1);
-        animate background { duration: DesignTokens.motion-base; easing: ease-out; enabled: root.animations-enabled; }
+        animate background { duration: DesignTokens.motion-transition; easing: ease-out; enabled: root.animations-enabled; }
         Rectangle {
             x: root.entry.value == "true" ? parent.width - 23px : 3px; y: 3px; width: 22px; height: 22px;
             border-radius: 11px; background: #ffffff;
-            animate x { duration: DesignTokens.motion-base; easing: ease-out; enabled: root.animations-enabled; }
+            animate x { duration: DesignTokens.motion-transition; easing: ease-out; enabled: root.animations-enabled; }
         }
         TouchArea { width: parent.width; height: parent.height; mouse-cursor: pointer;
             clicked => { root.changed(root.entry.id, root.entry.value == "true" ? "false" : "true"); }
@@ -148,10 +153,10 @@ component SettingsField inherits Rectangle {
     }
 
     if root.entry.kind == "number" : Rectangle {
-        x: parent.width - 210px; y: (parent.height - 34px) / 2; width: 190px; height: 34px;
+        x: parent.width - 210px; y: (parent.height - DesignTokens.control-height) / 2; width: 190px; height: DesignTokens.control-height;
         background: transparent;
         Rectangle {
-            x: 0px; y: 0px; width: 34px; height: 34px; border-radius: DesignTokens.radius-md;
+            x: 0px; y: 0px; width: DesignTokens.control-height; height: DesignTokens.control-height; border-radius: DesignTokens.radius-md;
             background: minus-area.has-hover ? root.hover : transparent;
             Text { width: parent.width; height: parent.height; text: "-"; color: root.primary; font-size: 1.3571rem; horizontal-alignment: center; vertical-alignment: center; }
             minus-area := TouchArea { width: parent.width; height: parent.height; mouse-cursor: pointer;
@@ -159,12 +164,12 @@ component SettingsField inherits Rectangle {
             }
         }
         Rectangle {
-            x: 42px; y: 0px; width: 106px; height: 34px; border-radius: DesignTokens.radius-md;
+            x: 40px; y: 0px; width: 110px; height: DesignTokens.control-height; border-radius: DesignTokens.radius-md;
             background: root.dark-mode ? DesignTokens.dark-raised : DesignTokens.light-raised;
             Text { width: parent.width; height: parent.height; text: root.entry.value; color: root.primary; font-size: DesignTokens.font-label; horizontal-alignment: center; vertical-alignment: center; }
         }
         Rectangle {
-            x: 156px; y: 0px; width: 34px; height: 34px; border-radius: DesignTokens.radius-md;
+            x: 158px; y: 0px; width: DesignTokens.control-height; height: DesignTokens.control-height; border-radius: DesignTokens.radius-md;
             background: plus-area.has-hover ? root.hover : transparent;
             Text { width: parent.width; height: parent.height; text: "+"; color: root.primary; font-size: 1.3571rem; horizontal-alignment: center; vertical-alignment: center; }
             plus-area := TouchArea { width: parent.width; height: parent.height; mouse-cursor: pointer;
@@ -174,7 +179,7 @@ component SettingsField inherits Rectangle {
     }
 
     if root.entry.kind == "choice" : Rectangle {
-        x: parent.width - 210px; y: (parent.height - 34px) / 2; width: 190px; height: 34px;
+        x: parent.width - 210px; y: (parent.height - DesignTokens.control-height) / 2; width: 190px; height: DesignTokens.control-height;
         background: root.dark-mode ? DesignTokens.dark-raised : DesignTokens.light-raised;
         border-color: root.border; border-width: 1px; border-radius: DesignTokens.radius-md;
         ComboBox {
@@ -206,7 +211,7 @@ component SettingsField inherits Rectangle {
     }
 
     if root.entry.kind == "text" || root.entry.kind == "secret" : Rectangle {
-        x: parent.width - 320px; y: (parent.height - 34px) / 2; width: 300px; height: 34px;
+        x: parent.width - 320px; y: (parent.height - DesignTokens.control-height) / 2; width: 300px; height: DesignTokens.control-height;
         border-radius: DesignTokens.radius-md; background: root.dark-mode ? DesignTokens.dark-canvas : DesignTokens.light-surface;
         border-color: root.border; border-width: 1px;
         clip: true;
@@ -350,8 +355,8 @@ component SettingsField inherits Rectangle {
         if root.editing : Rectangle {
             x: 0px; y: 66px; width: parent.width; height: parent.height - 66px; background: transparent;
             private property <length> column-width: (parent.width - 48px) / 2;
-            SettingsEditorInput { x: 16px; y: 0px; width: parent.column-width; label: @tr("SettingsWindow" => "Name"); value <=> root.edit-name; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
-            SettingsEditorInput { x: 32px + parent.column-width; y: 0px; width: parent.column-width; label: @tr("SettingsWindow" => "Prefix"); value <=> root.edit-prefix; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
+            SettingsEditorInput { x: 16px; y: 0px; width: parent.column-width; label: @tr("SettingsWindow" => "Name"); value <=> root.edit-name; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; accent-color: root.accent-color; }
+            SettingsEditorInput { x: 32px + parent.column-width; y: 0px; width: parent.column-width; label: @tr("SettingsWindow" => "Prefix"); value <=> root.edit-prefix; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; accent-color: root.accent-color; }
             Text { x: 16px; y: 62px; width: parent.column-width; height: 18px; text: @tr("SettingsWindow" => "Type"); color: root.primary; font-size: DesignTokens.font-small; }
             ComboBox {
                 x: 16px; y: 82px; width: parent.column-width; height: 31px;
@@ -371,11 +376,11 @@ component SettingsField inherits Rectangle {
                 text: root.edit-mode == "execute" ? @tr("SettingsWindow" => "Enter runs the typed input directly.") : root.edit-mode == "search" ? @tr("SettingsWindow" => "Enter opens the selected result.") : @tr("SettingsWindow" => "Custom shortcuts have no detail view; Panel behaves like Search.");
                 color: root.secondary; font-size: DesignTokens.font-caption; vertical-alignment: center; overflow: elide;
             }
-            if root.edit-type == "url" : SettingsEditorInput { x: 16px; y: 142px; width: parent.width - 32px; label: @tr("SettingsWindow" => "URL template (include {{query}})"); value <=> root.edit-template; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
-            if root.edit-type != "url" : SettingsEditorInput { x: 16px; y: 142px; width: parent.width - 32px; label: @tr("SettingsWindow" => "Target path or command"); value <=> root.edit-target; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
-            SettingsEditorInput { x: 16px; y: 204px; width: parent.column-width; label: @tr("SettingsWindow" => "Arguments"); value <=> root.edit-arguments; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
-            SettingsEditorInput { x: 32px + parent.column-width; y: 204px; width: parent.column-width; label: @tr("SettingsWindow" => "Input placeholder"); value <=> root.edit-placeholder; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
-            SettingsEditorInput { x: 16px; y: 266px; width: parent.width - 130px; label: @tr("SettingsWindow" => "Description"); value <=> root.edit-description; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; }
+            if root.edit-type == "url" : SettingsEditorInput { x: 16px; y: 142px; width: parent.width - 32px; label: @tr("SettingsWindow" => "URL template (include {{query}})"); value <=> root.edit-template; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; accent-color: root.accent-color; }
+            if root.edit-type != "url" : SettingsEditorInput { x: 16px; y: 142px; width: parent.width - 32px; label: @tr("SettingsWindow" => "Target path or command"); value <=> root.edit-target; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; accent-color: root.accent-color; }
+            SettingsEditorInput { x: 16px; y: 204px; width: parent.column-width; label: @tr("SettingsWindow" => "Arguments"); value <=> root.edit-arguments; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; accent-color: root.accent-color; }
+            SettingsEditorInput { x: 32px + parent.column-width; y: 204px; width: parent.column-width; label: @tr("SettingsWindow" => "Input placeholder"); value <=> root.edit-placeholder; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; accent-color: root.accent-color; }
+            SettingsEditorInput { x: 16px; y: 266px; width: parent.width - 130px; label: @tr("SettingsWindow" => "Description"); value <=> root.edit-description; dark-mode: root.dark-mode; stroke-color: root.border; foreground: root.primary; accent-color: root.accent-color; }
             SettingsAction {
                 x: parent.width - 100px; y: 288px; width: 84px;
                 label: @tr("SettingsWindow" => "Save"); foreground: root.accent-color; hover-color: root.hover;
@@ -405,7 +410,6 @@ component SettingsField inherits Rectangle {
         x: 40px; y: root.priority-drop-after ? parent.height - 3px : 0px;
         width: parent.width - 49px; height: 3px; border-radius: 2px;
         background: root.accent-color;
-        animate y { duration: DesignTokens.motion-fast; easing: ease-out; enabled: root.animations-enabled; }
     }
 
     priority-drag := DragArea {
@@ -469,8 +473,6 @@ export component SettingsWindow inherits Window {
     private property <color> border: root.dark-mode ? DesignTokens.dark-border : DesignTokens.light-border;
     private property <color> primary: root.dark-mode ? DesignTokens.dark-primary : DesignTokens.light-primary;
     private property <color> secondary: root.dark-mode ? DesignTokens.dark-secondary : DesignTokens.light-secondary;
-    in-out property <float> page-transition-opacity: 1.0;
-    animate page-transition-opacity { duration: DesignTokens.motion-base; easing: ease-out; enabled: root.animations-enabled; }
     init => { Palette.color-scheme = root.dark-mode ? dark : light; }
     changed dark-mode => { Palette.color-scheme = root.dark-mode ? dark : light; }
     private property <length> window-inset: root.native-window-frame ? 0px : 5px;
@@ -497,7 +499,7 @@ export component SettingsWindow inherits Window {
         }
 
         Rectangle {
-            x: 0px; y: 60px; width: parent.width; height: 1px; background: root.border;
+            x: 0px; y: 60px; width: parent.width; height: 1px; background: root.border; opacity: DesignTokens.divider-opacity;
         }
         Rectangle {
             x: 0px; y: 61px; width: 205px; height: parent.height - 62px;
@@ -505,16 +507,16 @@ export component SettingsWindow inherits Window {
             ListView {
                 x: 0px; y: 0px; width: parent.width; height: parent.height;
                 for category[index] in root.categories : Rectangle {
-                    width: parent.width; height: (category.depth == 0 || root.plugins-expanded) ? 42px : 0px; background: transparent;
+                    width: parent.width; height: (category.depth == 0 || root.plugins-expanded) ? DesignTokens.row-height : 0px; background: transparent;
                     clip: true;
-                    animate height { duration: DesignTokens.motion-slow; easing: ease-out; enabled: root.animations-enabled; }
                     Rectangle {
                         x: category.depth == 0 ? 10px : 25px;
-                        y: 3px;
+                        y: (parent.height - DesignTokens.control-height) / 2;
                         width: parent.width - (category.depth == 0 ? 20px : 35px);
-                        height: 36px;
+                        height: DesignTokens.control-height;
                         border-radius: DesignTokens.radius-md;
                         background: category.id == root.selected-category ? root.hover : (category-area.has-hover ? root.hover : transparent);
+                        if category.id == root.selected-category : Rectangle { x: 0px; y: 7px; width: 2px; height: parent.height - 14px; background: root.accent-color; border-radius: 1px; }
                         // Keep the selected category readable without adopting
                         // the user's potentially very bright system accent.
                         Text { x: 11px; width: parent.width - 34px; height: parent.height; text: category.title; color: root.primary; font-size: DesignTokens.font-body; vertical-alignment: center; overflow: elide; }
@@ -533,16 +535,15 @@ export component SettingsWindow inherits Window {
         }
 
         Rectangle {
-            x: 205px; y: 61px; width: 1px; height: parent.height - 62px; background: root.border;
+            x: 205px; y: 61px; width: 1px; height: parent.height - 62px; background: root.border; opacity: DesignTokens.divider-opacity;
         }
         Rectangle {
             x: 206px; y: 61px; width: parent.width - 207px; height: parent.height - 62px;
             background: root.surface;
-            Text { x: 24px; y: 16px; width: parent.width - 48px; height: 30px; text: root.selected-category-title; color: root.primary; font-size: DesignTokens.font-heading; font-weight: DesignTokens.weight-regular; vertical-alignment: center; opacity: root.page-transition-opacity; }
+            Text { x: 24px; y: 16px; width: parent.width - 48px; height: 30px; text: root.selected-category-title; color: root.primary; font-size: DesignTokens.font-heading; font-weight: DesignTokens.weight-regular; vertical-alignment: center; }
             ListView {
                 x: 18px; y: 58px; width: parent.width - 36px; height: parent.height - 96px;
                 content-y <=> root.settings-scroll-y;
-                opacity: root.page-transition-opacity;
                 for entry[index] in root.entries : SettingsField {
                     width: parent.width;
                     entry: entry;
@@ -560,7 +561,7 @@ export component SettingsWindow inherits Window {
             Text {
                 x: 24px; y: parent.height - 30px; width: parent.width - 48px; height: 20px;
                 text: root.status-message; color: #d96c6c; font-size: DesignTokens.font-small;
-                vertical-alignment: center; overflow: elide; visible: root.status-message != ""; opacity: root.page-transition-opacity;
+                vertical-alignment: center; overflow: elide; visible: root.status-message != "";
             }
         }
     }

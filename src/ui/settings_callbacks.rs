@@ -29,15 +29,10 @@ pub(super) fn register_settings_callbacks(
     {
         let settings = settings_window.as_weak();
         let plugin_settings = plugin_settings.clone();
-        let animations_for_page = Arc::clone(&animations_enabled);
-        let transition_generation = Arc::new(AtomicU64::new(0));
-        let transition_generation_for_callback = Arc::clone(&transition_generation);
         settings_window.on_category_selected(move |category| {
             let category = category.to_string();
             let (config, _) = config::Config::load();
-            let animations_enabled = animations_for_page.load(Ordering::Acquire);
             if let Some(settings) = settings.upgrade() {
-                settings.set_page_transition_opacity(if animations_enabled { 0.78 } else { 1.0 });
                 settings.set_status_message(String::new().into());
                 settings.set_selected_category(category.clone().into());
                 settings.set_selected_category_title(
@@ -48,21 +43,6 @@ pub(super) fn register_settings_callbacks(
                     &settings,
                     settings::entries(&config, &plugin_settings, &category, &config.language),
                 );
-                if animations_enabled {
-                    let generation =
-                        transition_generation_for_callback.fetch_add(1, Ordering::AcqRel) + 1;
-                    let weak = settings.as_weak();
-                    let transition_generation = Arc::clone(&transition_generation_for_callback);
-                    Timer::single_shot(Duration::from_millis(75), move || {
-                        if transition_generation.load(Ordering::Acquire) == generation {
-                            if let Some(settings) = weak.upgrade() {
-                                settings.set_page_transition_opacity(1.0);
-                            }
-                        }
-                    });
-                } else {
-                    transition_generation_for_callback.fetch_add(1, Ordering::AcqRel);
-                }
             }
         });
     }

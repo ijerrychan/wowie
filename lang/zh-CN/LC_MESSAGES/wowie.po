@@ -40,6 +40,10 @@ msgid "Searching..."
 msgstr "正在搜索..."
 
 msgctxt "Launcher"
+msgid "Loading more..."
+msgstr "正在加载更多..."
+
+msgctxt "Launcher"
 msgid "All"
 msgstr "全部"
 
@@ -600,8 +604,8 @@ msgid "Interface animations"
 msgstr "界面动画"
 
 msgctxt "Settings"
-msgid "Animate details, menus, and session transitions. Disable for instant changes."
-msgstr "为详情、菜单和搜索会话添加动画。关闭后立即切换。"
+msgid "Animate small interface feedback. Disable for instant changes."
+msgstr "保留轻量界面反馈动效。关闭后立即切换。"
 
 msgctxt "Settings"
 msgid "Accent color"

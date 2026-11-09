@@ -38,50 +38,32 @@ component SearchGlyph inherits Rectangle {
     clip: true;
 
     private property <float> animated-progress: root.transition-progress;
-    private property <float> outgoing-scale: max(0.0, 1.0 - root.animated-progress);
-    private property <float> incoming-scale: 0.72 + root.animated-progress * 0.28;
     animate animated-progress {
-        duration: DesignTokens.motion-slow;
-        easing: ease-out;
+        duration: DesignTokens.motion-feedback;
+        easing: linear;
         enabled: root.transition-animation-enabled && root.animations-enabled;
     }
-
-    Rectangle {
-        x: (parent.width - parent.width * root.outgoing-scale) / 2;
-        y: (parent.height - parent.height * root.outgoing-scale) / 2;
-        width: parent.width * root.outgoing-scale;
-        height: parent.height * root.outgoing-scale;
-        background: transparent;
-        BuiltinIcon {
-            x: 0px; y: 0px; width: parent.width; height: parent.height;
-            kind: root.previous-kind;
-            opacity: max(0.0, 1.0 - root.animated-progress);
-        }
-        if root.previous-kind == "" : Image {
-            width: parent.width; height: parent.height;
-            source: root.previous-image.width > 0 ? root.previous-image : @image-url("../assets/icons/magnify.svg");
-            image-fit: contain;
-            opacity: max(0.0, 1.0 - root.animated-progress);
-        }
+    BuiltinIcon {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        kind: root.previous-kind;
+        opacity: max(0.0, 1.0 - root.animated-progress);
     }
-
-    Rectangle {
-        x: (parent.width - parent.width * root.incoming-scale) / 2;
-        y: (parent.height - parent.height * root.incoming-scale) / 2;
-        width: parent.width * root.incoming-scale;
-        height: parent.height * root.incoming-scale;
-        background: transparent;
-        BuiltinIcon {
-            x: 0px; y: 0px; width: parent.width; height: parent.height;
-            kind: root.source-kind;
-            opacity: min(1.0, root.animated-progress);
-        }
-        if root.source-kind == "" : Image {
-            width: parent.width; height: parent.height;
-            source: root.source-image.width > 0 ? root.source-image : @image-url("../assets/icons/magnify.svg");
-            image-fit: contain;
-            opacity: min(1.0, root.animated-progress);
-        }
+    if root.previous-kind == "" : Image {
+        width: parent.width; height: parent.height;
+        source: root.previous-image.width > 0 ? root.previous-image : @image-url("../assets/icons/magnify.svg");
+        image-fit: contain;
+        opacity: max(0.0, 1.0 - root.animated-progress);
+    }
+    BuiltinIcon {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        kind: root.source-kind;
+        opacity: min(1.0, root.animated-progress);
+    }
+    if root.source-kind == "" : Image {
+        width: parent.width; height: parent.height;
+        source: root.source-image.width > 0 ? root.source-image : @image-url("../assets/icons/magnify.svg");
+        image-fit: contain;
+        opacity: min(1.0, root.animated-progress);
     }
 }
 
@@ -151,6 +133,8 @@ export component Launcher inherits Window {
     private property <bool> category-filter-keyboard-active: false;
     in-out property <string> query-text: "";
     in-out property <bool> query-results-ready: false;
+    in-out property <bool> search-feedback-visible: false;
+    in-out property <bool> pagination-feedback-visible: false;
     in-out property <int> query-history-restore-id: 0;
     in-out property <int> query-history-cursor: 0;
     in property <bool> shortcut-session-active: false;
@@ -195,7 +179,7 @@ export component Launcher inherits Window {
     callback dismiss-requested;
 
     // Primary density controls. Keep row geometry here so compactness can be tuned centrally.
-    private property <length> search-row-height: 40px;
+    private property <length> search-row-height: DesignTokens.row-height;
     private property <length> result-row-height: root.list-item-height;
     private property <length> result-icon-size: 24px;
     private property <length> section-header-height: 27px;
@@ -206,18 +190,17 @@ export component Launcher inherits Window {
     out property <length> effective-window-height: root.compact-results-hidden ? root.compact-window-height : root.result-window-height;
     private property <length> compact-window-height: 2 * root.window-inset + 2 * root.empty-state-padding + root.search-row-height;
     private property <bool> compact-results-hidden: root.compact-search && root.root-query-empty && !root.shortcut-session-active && !root.empty-query-results-visible;
-    private property <bool> search-loading: root.shortcut-session-active && root.query-text != "" && !root.query-results-ready;
     private property <length> operation-hint-height: 24px;
-    private property <length> context-menu-gap: 6px;
+    private property <length> context-menu-gap: DesignTokens.space-2;
     private property <length> no-results-height: 160px;
     private property <length> window-inset: root.native-window-frame ? 0px : 4px;
-    private property <length> content-padding: 10px;
-    private property <length> content-spacing: 8px;
+    private property <length> content-padding: DesignTokens.space-3;
+    private property <length> content-spacing: DesignTokens.space-2;
     private property <length> category-filter-height: 28px;
-    private property <length> category-button-height: 22px;
+    private property <length> category-button-height: DesignTokens.control-height-compact;
     private property <length> category-button-width: 98px;
     private property <length> category-filter-step: 102px;
-    private property <length> category-layout-spacing: root.category-filters.length > 0 ? 6px : root.content-spacing;
+    private property <length> category-layout-spacing: root.category-filters.length > 0 ? DesignTokens.space-2 : root.content-spacing;
     private property <length> result-row-inset: 2px;
     private property <length> result-column-gap: 8px;
     private property <length> detail-panel-inset: 2px;
@@ -236,29 +219,19 @@ export component Launcher inherits Window {
     private property <length> detail-panel-content-height: root.detail-content-footer-height + root.detail-content-height + (root.detail-actions.length > 0 ? root.detail-action-footer-extra : 0px);
     private property <length> operation-hint-spacing: root.category-layout-spacing + root.operation-hint-height;
     private property <length> no-results-spacing: 0px;
-    // Keep the session transition geometry together so the search field and
-    // both icons always move as one unit.
+    // Keep the search glyph and text anchored across session changes. Only
+    // the back affordance appears/disappears; input never slides under typing.
     private property <length> session-back-width: 22px;
-    private property <length> session-icon-x: 28px;
-    private property <length> default-icon-x: 14px;
-    private property <length> session-input-x: 60px;
-    private property <length> default-input-x: 48px;
+    private property <length> search-icon-x: 28px;
+    private property <length> search-input-x: 52px;
     // Keep the placeholder and the focused text at the same six-pixel inset.
     // Cursor visibility uses the same margin when the field receives focus.
     private property <length> search-input-scroll-x: 6px;
-    private property <duration> session-transition-duration: DesignTokens.motion-base;
-    private property <duration> session-fade-duration: DesignTokens.motion-fast;
     private property <length> search-row-layout-height: root.search-row-height;
     private property <length> available-results-height: root.compact-results-hidden ? 0px : max(0px, root.height - 2 * root.window-inset - root.empty-state-padding - root.content-bottom-padding - root.search-row-layout-height - root.category-layout-spacing - (root.category-filters.length > 0 ? root.category-filter-height + root.category-layout-spacing : 0px) - root.operation-hint-spacing - root.no-results-spacing);
     private property <bool> detail-visible: root.detail-panel-visible && (root.selected-index >= 0 || root.empty-state-detail-active);
-    private property <float> detail-progress: root.detail-visible ? 1.0 : 0.0;
-    animate detail-progress {
-        duration: DesignTokens.motion-slow;
-        easing: root.detail-visible ? ease-out : ease-in;
-        enabled: root.animations-enabled;
-    }
     private property <length> detail-panel-width: (root.width - 2 * root.window-inset - 2 * root.content-padding) * root.detail-panel-share - root.detail-panel-alignment-shift;
-    private property <bool> detail-panel-active: root.detail-visible || root.detail-progress > 0.0;
+    private property <bool> detail-panel-active: root.detail-visible;
     private property <length> detail-content-inset: 20px;
     private property <length> detail-header-top: 18px;
     private property <length> detail-subtitle-top: 44px;
@@ -374,16 +347,13 @@ export component Launcher inherits Window {
             Rectangle {
                 z: 0;
                 height: root.search-row-layout-height;
-                background: root.canvas;
-                border-radius: DesignTokens.radius-md;
+                background: transparent;
 
                 back-button := Rectangle {
                     x: root.shortcut-session-active ? 0px : -root.session-back-width;
                     y: 0px; width: root.session-back-width; height: parent.height;
                     opacity: root.shortcut-session-active ? 1.0 : 0.0;
                     clip: true;
-                    animate x { duration: root.session-transition-duration; easing: ease-out; enabled: root.animations-enabled; }
-                    animate opacity { duration: root.session-fade-duration; enabled: root.animations-enabled; }
                     back-hit := TouchArea {
                         width: parent.width; height: parent.height;
                         clicked => { root.search-back-requested(); }
@@ -391,16 +361,13 @@ export component Launcher inherits Window {
                     Rectangle {
                         x: 0px; y: max(0px, (parent.height - 28px) / 2); width: root.session-back-width; height: min(parent.height, 28px);
                         border-radius: DesignTokens.radius-md;
-                        // Do not let the hover pill linger while this button
-                        // slides out after returning from a search engine.
                         background: root.shortcut-session-active && back-hit.has-hover ? root.surface-hover : transparent;
                         BuiltinIcon { x: 5px; y: (parent.height - 12px) / 2; width: 12px; height: 12px; kind: root.dark-mode ? "arrow-left-light" : "arrow-left-dark"; }
                     }
                 }
                 SearchGlyph {
-                    x: root.shortcut-session-active ? root.session-icon-x : root.default-icon-x; y: (root.search-row-layout-height - root.result-icon-size) / 2;
+                    x: root.search-icon-x; y: (root.search-row-layout-height - root.result-icon-size) / 2;
                     width: root.result-icon-size; height: root.result-icon-size;
-                    animate x { duration: root.session-transition-duration; easing: ease-out; enabled: root.animations-enabled; }
                     source-image: root.search-icon; source-kind: root.search-icon-kind;
                     previous-image: root.search-icon-previous;
                     previous-kind: root.search-icon-previous-kind;
@@ -409,11 +376,9 @@ export component Launcher inherits Window {
                     animations-enabled: root.animations-enabled;
                 }
                 Rectangle {
-                    x: root.shortcut-session-active ? root.session-input-x : root.default-input-x; y: 0px; width: parent.width - (root.shortcut-session-active ? 70px : 58px); height: root.search-row-layout-height;
+                    x: root.search-input-x; y: 0px; width: parent.width - root.search-input-x - 10px; height: root.search-row-layout-height;
                     background: transparent;
                     clip: true;
-                    animate x { duration: root.session-transition-duration; easing: ease-out; enabled: root.animations-enabled; }
-                    animate width { duration: root.session-transition-duration; easing: ease-out; enabled: root.animations-enabled; }
                     Text {
                         x: root.search-input-scroll-x; y: 0px; width: parent.width - root.search-input-scroll-x; height: parent.height;
                         text: root.shortcut-session-active ? root.shortcut-session-placeholder : @tr("Search apps, files, settings, and more");
@@ -571,7 +536,6 @@ export component Launcher inherits Window {
                             height: root.category-button-height;
                             border-radius: DesignTokens.radius-md;
                             background: root.surface-hover;
-                            animate x { duration: DesignTokens.motion-base; easing: ease-out; enabled: root.animations-enabled; }
                         }
                         for filter[index] in category-filter-focus.filters : Rectangle {
                             x: index * root.category-filter-step;
@@ -587,7 +551,7 @@ export component Launcher inherits Window {
                                 height: root.category-button-height;
                                 border-radius: DesignTokens.radius-md;
                                 border-color: root.selected-category-filter == filter.key
-                                    ? (root.category-filter-keyboard-active ? (root.dark-mode ? #8ab4f8 : #005a9e) : transparent)
+                                    ? (root.category-filter-keyboard-active ? (root.dark-mode ? DesignTokens.dark-focus : DesignTokens.light-focus) : transparent)
                                     : root.border;
                                 border-width: root.selected-category-filter == filter.key
                                     ? (root.category-filter-keyboard-active ? 2px : 0px)
@@ -630,9 +594,9 @@ export component Launcher inherits Window {
                 clip: true;
 
                 results-list := ScrollView {
-                    visible: !root.compact-results-hidden && !root.search-loading;
+                    visible: !root.compact-results-hidden;
                     x: 0px; y: 0px;
-                    width: parent.width - root.detail-progress * (parent.width * root.detail-panel-share + root.result-column-gap - root.detail-panel-alignment-shift);
+                    width: parent.width - (root.detail-visible ? parent.width * root.detail-panel-share + root.result-column-gap - root.detail-panel-alignment-shift : 0px);
                     // Position the bounded visible slice using exact prefix geometry.
                     // ListView estimates off-screen variable row heights, which shifts
                     // grouped rows away from ensure-selected-visible's coordinates.
@@ -678,6 +642,7 @@ export component Launcher inherits Window {
                         if row-data.section_more_key != "" : TouchArea {
                             x: parent.width - 100px; y: 0px; width: 100px; height: parent.height;
                             mouse-cursor: pointer;
+                            enabled: root.query-results-ready;
                             clicked => {
                                 root.category-filter-selected(row-data.section_more_key);
                                 search-field.focus();
@@ -706,12 +671,12 @@ export component Launcher inherits Window {
                                 if (root.context-click-consumed) {
                                     root.context-click-consumed = false;
                                 } else {
-                                    root.launch-requested(index);
+                                    if (root.query-results-ready) { root.launch-requested(index); }
                                 }
                             }
                             pointer-event(event) => {
                                 if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                                    root.context-menu-requested(index, false);
+                                    if (root.query-results-ready) { root.context-menu-requested(index, false); }
                                     EventResult.accept
                                 } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down && root.context-menu-open) {
                                     root.context-click-consumed = true;
@@ -748,10 +713,10 @@ export component Launcher inherits Window {
                 detail-panel := Rectangle {
                     private property <length> panel-width: root.detail-panel-width;
                     private property <length> panel-height: max(0px, parent.height - root.detail-panel-bottom-inset);
-                    visible: root.detail-panel-active && !root.search-loading;
+                    visible: root.detail-panel-active;
                     x: results-list.width + root.result-column-gap - root.result-row-inset;
-                    y: (1.0 - root.detail-progress) * 24px;
-                    width: self.panel-width * max(0.0, root.detail-progress);
+                    y: 0px;
+                    width: self.panel-width;
                     height: self.panel-height;
                     background: root.detail-surface;
                     border-color: root.border;
@@ -844,24 +809,6 @@ export component Launcher inherits Window {
                         }
                     }
                 }
-                if root.search-loading : Rectangle {
-                    x: 0px; y: 0px; width: parent.width; height: parent.height;
-                    background: transparent;
-                    Text {
-                        x: 0px; y: max(0px, (parent.height - 56px) / 2);
-                        width: parent.width; height: 24px;
-                        text: "⏳";
-                        color: root.text-secondary; font-size: 1.4286rem;
-                        horizontal-alignment: center; vertical-alignment: center;
-                    }
-                    Text {
-                        x: 0px; y: max(0px, (parent.height - 56px) / 2 + 30px);
-                        width: parent.width; height: 22px;
-                        text: @tr("Searching...");
-                        color: root.text-secondary; font-size: DesignTokens.font-body;
-                        horizontal-alignment: center; vertical-alignment: center; overflow: elide;
-                    }
-                }
                 if (root.results.length == 0 && (search-field.text != "" || root.shortcut-session-active) && root.query-results-ready && !root.detail-visible) : Rectangle {
                     x: 0px;
                     y: max(0px, (parent.height - root.no-results-height) / 2);
@@ -878,7 +825,20 @@ export component Launcher inherits Window {
             if (!root.compact-results-hidden) : Rectangle {
                 height: root.operation-hint-height; background: transparent;
                 Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: root.border; }
-                Text { x: 10px; y: 1px; width: parent.width - 20px; height: parent.height - 1px; text: root.category-filter-keyboard-active ? @tr("← → Filter     ↑ ↓ Results     Home/End First/Last     Enter/Space/Esc Search") : root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Hide")); color: root.text-tertiary; font-size: DesignTokens.font-small; horizontal-alignment: center; vertical-alignment: center; }
+                Rectangle {
+                    width: parent.width; height: parent.height - 1px; background: transparent;
+                    if root.search-feedback-visible || root.pagination-feedback-visible : Rectangle {
+                        x: DesignTokens.space-2; y: 0px; width: parent.width - 2 * DesignTokens.space-2; height: parent.height - 1px;
+                        background: transparent;
+                        Rectangle { x: 0px; y: (parent.height - 6px) / 2; width: 6px; height: 6px; background: root.accent-color; border-radius: 3px; }
+                        Text { x: 12px; width: parent.width - 12px; height: parent.height; text: root.pagination-feedback-visible ? @tr("Loading more...") : @tr("Searching..."); color: root.text-secondary; font-size: DesignTokens.font-small; vertical-alignment: center; overflow: elide; }
+                    }
+                    if !root.search-feedback-visible && !root.pagination-feedback-visible : Text {
+                        width: parent.width; height: parent.height;
+                        text: root.category-filter-keyboard-active ? @tr("← → Filter     ↑ ↓ Results     Home/End First/Last     Enter/Space/Esc Search") : root.context-menu-available ? (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Back") : @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Ctrl+M  Context     Esc  Hide")) : (root.shortcut-session-active ? @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Back") : @tr("↑ ↓  Navigate     Tab Filter     Enter  Open     Esc  Hide"));
+                        color: root.text-tertiary; font-size: DesignTokens.font-small; horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
             }
         }
         if (!root.compact-results-hidden) : Rectangle {
@@ -907,7 +867,7 @@ export component ContextMenu inherits Window {
     in property <string> ui-font-family: "";
     in property <length> ui-font-size: 14px;
     width: root.menu-width;
-    height: max(40px, 8px + root.actions.length * root.menu-item-height);
+    height: max(40px, 2 * DesignTokens.space-1 + root.actions.length * root.menu-item-height);
     background: root.native-window-frame ? root.canvas : transparent;
 
     in property <bool> native-window-frame: false;
@@ -924,7 +884,7 @@ export component ContextMenu inherits Window {
 
     private property <color> canvas: root.dark-mode ? DesignTokens.dark-surface : DesignTokens.light-surface;
     private property <color> hover: root.dark-mode ? DesignTokens.dark-raised : DesignTokens.light-raised;
-    private property <length> menu-item-height: 32px;
+    private property <length> menu-item-height: DesignTokens.control-height;
     private property <color> border: root.dark-mode ? DesignTokens.dark-border : DesignTokens.light-border;
     private property <color> text-primary: root.dark-mode ? DesignTokens.dark-primary : DesignTokens.light-primary;
     private property <color> text-secondary: root.dark-mode ? DesignTokens.dark-secondary : DesignTokens.light-secondary;
@@ -977,8 +937,8 @@ export component ContextMenu inherits Window {
             border-radius: root.native-window-frame ? 0px : DesignTokens.radius-md;
 
             for action[index] in root.actions : Rectangle {
-            x: 1px; y: 4px + index * root.menu-item-height;
-            width: parent.width - 2px; height: root.menu-item-height;
+            x: DesignTokens.space-1; y: DesignTokens.space-1 + index * root.menu-item-height;
+            width: parent.width - 2 * DesignTokens.space-1; height: root.menu-item-height;
             background: action.kind == "section" ? root.canvas : index == root.selected-action-index ? root.hover : action-area.has-hover ? root.hover : root.canvas;
             border-radius: DesignTokens.radius-sm;
             action-area := TouchArea {

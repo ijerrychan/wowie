@@ -3,13 +3,21 @@ use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferTyp
 use slint::platform::{Platform, PlatformError, WindowAdapter};
 
 struct LayoutPlatform {
-    window: Rc<MinimalSoftwareWindow>,
+    windows: Rc<std::cell::RefCell<Vec<Rc<MinimalSoftwareWindow>>>>,
+    next_window: Rc<Cell<usize>>,
     diagnostics: Rc<std::cell::RefCell<Vec<String>>>,
 }
 
 impl Platform for LayoutPlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
-        Ok(self.window.clone())
+        let index = self.next_window.get();
+        self.next_window.set(index + 1);
+        if index >= self.windows.borrow().len() {
+            self.windows
+                .borrow_mut()
+                .push(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer));
+        }
+        Ok(self.windows.borrow()[index].clone())
     }
 
     fn debug_log(&self, arguments: std::fmt::Arguments) {
@@ -99,19 +107,136 @@ fn assert_selected_row_visible(
     );
 }
 
+fn save_current_software_preview(
+    native: &MinimalSoftwareWindow,
+    path: &str,
+    width: u32,
+    height: u32,
+) {
+    let mut pixels = vec![slint::Rgb8Pixel::default(); width as usize * height as usize];
+    native.draw_if_needed(|renderer| {
+        renderer.render(&mut pixels, width as usize);
+    });
+    let rgba = pixels
+        .iter()
+        .flat_map(|pixel| [pixel.r, pixel.g, pixel.b, 255])
+        .collect::<Vec<_>>();
+    let preview = std::path::Path::new("target/previews").join(path);
+    std::fs::create_dir_all(preview.parent().unwrap()).unwrap();
+    image::RgbaImage::from_raw(width, height, rgba)
+        .unwrap()
+        .save(preview)
+        .unwrap();
+}
+
+fn selected_highlight_right_edge(
+    native: &MinimalSoftwareWindow,
+    width: u32,
+    height: u32,
+) -> Option<u32> {
+    let mut pixels = vec![slint::Rgb8Pixel::default(); width as usize * height as usize];
+    native.draw_if_needed(|renderer| {
+        renderer.render(&mut pixels, width as usize);
+    });
+    pixels
+        .iter()
+        .enumerate()
+        .filter(|(_, pixel)| pixel.r == 229 && pixel.g == 0 && pixel.b == 200)
+        .map(|(index, _)| (index % width as usize) as u32)
+        .max()
+}
+
 #[test]
 fn launcher_layout_settles_when_reopened() {
     // Use the actual compiled UI and collect runtime diagnostics without
     // opening native windows or depending on a GPU. The zero-height viewport
     // regression reproduces when a scrolled list changes size in compact mode.
     let native = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    let software_windows = Rc::new(std::cell::RefCell::new(vec![native.clone()]));
+    let next_window = Rc::new(Cell::new(0));
     let diagnostics = Rc::new(std::cell::RefCell::new(Vec::new()));
     slint::platform::set_platform(Box::new(LayoutPlatform {
-        window: native.clone(),
+        windows: software_windows.clone(),
+        next_window,
         diagnostics: diagnostics.clone(),
     }))
     .unwrap();
     let window = Launcher::new().unwrap();
+    // Exercise the production delayed-feedback state using an injected clock:
+    // fast completion stays quiet, slow completion shows status, and a newer
+    // query or an empty root query invalidates the previous timer.
+    let feedback = std::sync::Mutex::new(SearchFeedbackState::default());
+    let started = std::time::Instant::now();
+    feedback.lock().unwrap().begin(9, "fast", false, started);
+    complete_launcher_search_feedback(&window, &feedback, 9);
+    assert!(!update_launcher_search_feedback(
+        &window,
+        &feedback,
+        9,
+        started + SEARCH_FEEDBACK_DELAY + std::time::Duration::from_secs(1),
+    ));
+    assert!(!window.get_search_feedback_visible());
+    {
+        let mut state = feedback.lock().unwrap();
+        state.begin(10, "weather", false, started);
+    }
+    window.set_query_results_ready(false);
+    window.set_search_feedback_visible(false);
+    assert!(!update_launcher_search_feedback(
+        &window,
+        &feedback,
+        10,
+        started + SEARCH_FEEDBACK_DELAY - std::time::Duration::from_millis(1),
+    ));
+    assert!(!window.get_search_feedback_visible());
+    window.set_animations_enabled(false);
+    assert!(update_launcher_search_feedback(
+        &window,
+        &feedback,
+        10,
+        started + SEARCH_FEEDBACK_DELAY + std::time::Duration::from_millis(1),
+    ));
+    assert!(window.get_search_feedback_visible());
+    window.set_query_results_ready(true);
+    complete_launcher_search_feedback(&window, &feedback, 10);
+    assert!(!window.get_search_feedback_visible());
+
+    let next_started = started + std::time::Duration::from_secs(1);
+    feedback
+        .lock()
+        .unwrap()
+        .begin(11, "next", false, next_started);
+    assert!(!update_launcher_search_feedback(
+        &window,
+        &feedback,
+        10,
+        next_started + SEARCH_FEEDBACK_DELAY + std::time::Duration::from_secs(1),
+    ));
+    assert!(!window.get_search_feedback_visible());
+    feedback.lock().unwrap().begin(12, "", false, next_started);
+    assert!(!update_launcher_search_feedback(
+        &window,
+        &feedback,
+        12,
+        next_started + SEARCH_FEEDBACK_DELAY + std::time::Duration::from_secs(1),
+    ));
+    assert!(!window.get_search_feedback_visible());
+    feedback
+        .lock()
+        .unwrap()
+        .begin(13, "engine query", true, next_started);
+    assert!(update_launcher_search_feedback(
+        &window,
+        &feedback,
+        13,
+        next_started + SEARCH_FEEDBACK_DELAY + std::time::Duration::from_millis(1),
+    ));
+    complete_launcher_search_feedback(&window, &feedback, 12);
+    assert!(window.get_search_feedback_visible());
+    // Provider refreshes may advance generation without a separate timer.
+    complete_launcher_search_feedback(&window, &feedback, 14);
+    assert!(!window.get_search_feedback_visible());
+    window.set_animations_enabled(true);
     window.set_native_window_frame(true);
     // The native fallback must use the canvas actually rendered by Slint,
     // including light mode's slightly tinted (rather than pure white) color.
@@ -404,12 +529,110 @@ fn launcher_layout_settles_when_reopened() {
                 .unwrap()
                 .save(preview)
                 .unwrap();
+            window.set_list_item_height(50.0);
+            window.set_query_text("example".into());
+            window.set_root_query_empty(false);
+            window.set_query_results_ready(true);
+            window.set_search_feedback_visible(false);
+            for (dark, theme_name) in [(false, "light"), (true, "dark")] {
+                window.set_dark_mode(dark);
+                window.set_accent_color(if dark {
+                    slint::Color::from_rgb_u8(148, 146, 220)
+                } else {
+                    slint::Color::from_rgb_u8(98, 96, 168)
+                });
+                window.set_accent_background(if dark {
+                    slint::Color::from_argb_u8(0x42, 148, 146, 220)
+                } else {
+                    slint::Color::from_argb_u8(0x28, 98, 96, 168)
+                });
+                window.window().request_redraw();
+                save_current_software_preview(
+                    &native,
+                    &format!("launcher-final-{theme_name}.png"),
+                    preview_width,
+                    preview_height,
+                );
+                window.set_query_results_ready(false);
+                window.set_search_feedback_visible(true);
+                window.window().request_redraw();
+                save_current_software_preview(
+                    &native,
+                    &format!("launcher-pending-{theme_name}.png"),
+                    preview_width,
+                    preview_height,
+                );
+                window.set_query_results_ready(true);
+                window.set_search_feedback_visible(false);
+            }
+            window.hide().unwrap();
+            window.set_list_item_height(65.0);
+            window.set_accent_color(slint::Color::from_rgb_u8(0, 103, 192));
+            window.set_accent_background(slint::Color::from_rgb_u8(229, 0, 200));
+
+            let settings_window = SettingsWindow::new().unwrap();
+            let settings_config = crate::config::Config::default();
+            settings_window.set_native_window_frame(false);
+            settings_window.set_dark_mode(false);
+            let (settings_accent, _) = accent_colors(&settings_config, 0x0067c0, false);
+            settings_window.set_accent_color(settings_accent);
+            settings_window.set_categories(settings::categories("en", &[]));
+            settings_window.set_selected_category("appearance".into());
+            settings_window.set_selected_category_title("Appearance".into());
+            settings_window.set_entries(settings::entries(
+                &settings_config,
+                &[],
+                "appearance",
+                "en",
+            ));
+            let settings_native = software_windows.borrow()[1].clone();
+            settings_native.set_size(slint::PhysicalSize::new(900, 650));
+            settings_window.show().unwrap();
+            settings_window.window().request_redraw();
+            save_current_software_preview(
+                &settings_native,
+                "settings-appearance-light.png",
+                900,
+                650,
+            );
+            settings_window.hide().unwrap();
             window.set_results(ModelRc::from(rows.clone()));
             window.set_accent_background(slint::Color::from_rgb_u8(229, 0, 200));
             window.set_ui_font_size(20.0);
             window.hide().unwrap();
         }
     }
+
+    // Detail layout is a direct geometry state, not an animated column squeeze.
+    window.set_native_window_frame(true);
+    window.set_animations_enabled(true);
+    window.set_list_item_height(50.0);
+    window.set_results(ModelRc::from(rows.clone()));
+    window.set_selected_index(0);
+    window.set_detail_panel_visible(false);
+    window.set_detail_panel_preferred_width(0);
+    window.set_accent_background(slint::Color::from_rgb_u8(229, 0, 200));
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
+    native.set_size(slint::PhysicalSize::new(520, 600));
+    window.show().unwrap();
+    window.window().request_redraw();
+    let full_list_right = selected_highlight_right_edge(&native, 520, 600)
+        .expect("selected row highlight should render before opening details");
+    window.set_detail_panel_preferred_width(240);
+    window.set_detail_panel_visible(true);
+    window.window().request_redraw();
+    let detail_list_right = selected_highlight_right_edge(&native, 520, 600)
+        .expect("selected row highlight should remain visible beside details");
+    assert!(
+        detail_list_right + 80 < full_list_right,
+        "opening details should immediately reserve the detail column: full={full_list_right}, detail={detail_list_right}"
+    );
+    window.set_detail_panel_visible(false);
+    window.set_detail_panel_preferred_width(0);
+    window.set_selected_index(-1);
+    window.hide().unwrap();
 
     // Sections that only appear deep in a long virtualized list are outside
     // the 256-row surface limit; keep one sparse pass to cover their headers.

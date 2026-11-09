@@ -6,7 +6,7 @@ use crate::{
     icon_service::IconService,
     result::{DetailBlock as ResultDetailBlock, DetailView, IconSpec, SearchResult},
 };
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, Timer, VecModel};
 use std::{
     rc::Rc,
     sync::{
@@ -56,6 +56,14 @@ pub(super) fn request_dynamic_detail_with_id(
     }
 
     if let Some(window) = weak.upgrade() {
+        // Clear the previous item's data immediately, but leave the detail
+        // surface in place. The loading row appears only if this request is
+        // still unresolved after the same delay used by search feedback.
+        let panel_width = window.get_detail_panel_preferred_width();
+        set_detail_view(&window, None, &icon_service);
+        window.set_detail_panel_preferred_width(panel_width);
+        window.set_detail_panel_visible(true);
+        let content_generation = window.get_detail_content_generation();
         let loading = DetailView {
             title: item.title.clone(),
             subtitle: String::new(),
@@ -64,11 +72,24 @@ pub(super) fn request_dynamic_detail_with_id(
                 message: crate::utils::i18n::tr(&language, "Loading preview").into(),
             }],
             actions: Vec::new(),
-            preferred_width: None,
+            preferred_width: (panel_width > 0).then_some(panel_width),
             scrollable: false,
         };
-        set_detail_view(&window, Some(&loading), &icon_service);
-        window.set_detail_panel_visible(true);
+        let weak = weak.clone();
+        let generation = Arc::clone(&generation);
+        let icon_service_for_feedback = icon_service.clone();
+        Timer::single_shot(super::SEARCH_FEEDBACK_DELAY, move || {
+            if generation.load(Ordering::Acquire) != request_id {
+                return;
+            }
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            if window.get_detail_content_generation() == content_generation {
+                set_detail_view(&window, Some(&loading), &icon_service_for_feedback);
+                window.set_detail_panel_visible(true);
+            }
+        });
     }
 
     let task_cancellation = crate::utils::background::CancellationToken::new();

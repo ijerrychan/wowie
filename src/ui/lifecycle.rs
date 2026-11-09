@@ -90,6 +90,7 @@ pub fn run() -> Result<()> {
     let context_visible = Arc::new(AtomicBool::new(false));
     let context_generation = Arc::new(AtomicU64::new(0));
     let context_item = Arc::new(Mutex::new(None::<SearchResult>));
+    let context_item_generation = Arc::new(AtomicU64::new(0));
     let empty_state_item = Arc::new(Mutex::new(None::<SearchResult>));
     let show_advanced_details = Arc::new(AtomicBool::new(config.show_advanced_details));
     let show_advanced_launch_entries =
@@ -98,6 +99,7 @@ pub fn run() -> Result<()> {
     let follow_system_theme = Arc::new(AtomicBool::new(config.theme == "system"));
     let hide_on_focus_loss = Arc::new(AtomicBool::new(config.hide_on_focus_loss));
     let query_generation = Arc::new(AtomicU64::new(0));
+    let search_feedback = Arc::new(Mutex::new(SearchFeedbackState::default()));
     let search_icon_generation = Arc::new(AtomicU64::new(0));
     let detail_generation = Arc::new(AtomicU64::new(0));
     let current_language = Arc::new(Mutex::new(config.language.clone()));
@@ -184,6 +186,9 @@ pub fn run() -> Result<()> {
         let weak = window.as_weak();
         window.on_category_filter_selected(move |key| {
             let Some(window) = weak.upgrade() else { return };
+            if !window.get_query_results_ready() {
+                return;
+            }
             let Ok(mut filter) = result_filter.lock() else {
                 return;
             };
@@ -303,7 +308,7 @@ pub fn run() -> Result<()> {
                 if context.session().is_none() {
                     return;
                 }
-                if let Ok(mut state) = page_load.lock() {
+                let page_request_id = if let Ok(mut state) = page_load.lock() {
                     if state.query_id != query_id {
                         *state = PageLoadState {
                             query_id,
@@ -314,9 +319,11 @@ pub fn run() -> Result<()> {
                         return;
                     }
                     state.loading = true;
+                    state.request_id = state.request_id.wrapping_add(1);
+                    state.request_id
                 } else {
                     return;
-                }
+                };
 
                 let engine = Arc::clone(&engine);
                 let icon_items = Arc::clone(&icon_items);
@@ -327,6 +334,26 @@ pub fn run() -> Result<()> {
                 let query_generation = Arc::clone(&query_generation);
                 let page_load = Arc::clone(&page_load);
                 let page_load_on_rejection = Arc::clone(&page_load);
+                let weak_on_rejection = weak.clone();
+                let query_generation_on_rejection = Arc::clone(&query_generation);
+                let page_load_for_feedback = Arc::clone(&page_load);
+                let query_generation_for_feedback = Arc::clone(&query_generation);
+                let weak_for_feedback = weak.clone();
+                Timer::single_shot(SEARCH_FEEDBACK_DELAY, move || {
+                    if query_generation_for_feedback.load(Ordering::Acquire) != query_id {
+                        return;
+                    }
+                    let still_loading = page_load_for_feedback.lock().is_ok_and(|state| {
+                        state.query_id == query_id
+                            && state.request_id == page_request_id
+                            && state.loading
+                    });
+                    if still_loading {
+                        if let Some(window) = weak_for_feedback.upgrade() {
+                            window.set_pagination_feedback_visible(true);
+                        }
+                    }
+                });
                 let show_advanced_details = Arc::clone(&show_advanced_details);
                 if !crate::utils::background::spawn(move || {
                     let more = accepted_page_items(
@@ -337,18 +364,27 @@ pub fn run() -> Result<()> {
                         if query_generation.load(Ordering::Acquire) != query_id {
                             return;
                         }
-                        if let Ok(mut state) = page_load.lock() {
-                            if state.query_id == query_id {
+                        let same_request = if let Ok(mut state) = page_load.lock() {
+                            if state.query_id == query_id && state.request_id == page_request_id {
                                 state.loading = false;
                                 state.exhausted = more.is_empty();
+                                true
+                            } else {
+                                false
                             }
-                        }
-                        if more.is_empty() {
+                        } else {
+                            false
+                        };
+                        if !same_request {
                             return;
                         }
                         let Some(window) = weak.upgrade() else {
                             return;
                         };
+                        window.set_pagination_feedback_visible(false);
+                        if more.is_empty() {
+                            return;
+                        }
                         let (combined, rows, selected_filter) = {
                             let Ok(filter) = result_filter.lock() else {
                                 return;
@@ -415,6 +451,11 @@ pub fn run() -> Result<()> {
                             state.loading = false;
                         }
                     }
+                    if let Some(window) = weak_on_rejection.upgrade() {
+                        if query_generation_on_rejection.load(Ordering::Acquire) == query_id {
+                            window.set_pagination_feedback_visible(false);
+                        }
+                    }
                 }
             });
         });
@@ -430,6 +471,9 @@ pub fn run() -> Result<()> {
             let Some(window) = weak.upgrade() else {
                 return;
             };
+            if !window.get_query_results_ready() {
+                return;
+            }
             let selected = window.get_selected_index();
             let Some(row) = (selected >= 0)
                 .then(|| window.get_results().row_data(selected as usize))
@@ -496,7 +540,6 @@ pub fn run() -> Result<()> {
         let icon_service = icon_service.clone();
         let detail_generation = Arc::clone(&detail_generation);
         let explicit_detail_item = Arc::clone(&explicit_detail_item);
-        let animations_enabled = Arc::clone(&animations_enabled);
         window.on_detail_back_requested(move || {
             // Invalidate an in-flight dynamic preview before hiding it. A
             // late provider response must not reopen the detail surface.
@@ -507,28 +550,11 @@ pub fn run() -> Result<()> {
             if let Some(window) = weak.upgrade() {
                 window.set_detail_panel_visible(false);
                 window.set_empty_state_detail_active(false);
-                let delayed_window = window.as_weak();
-                let detail_generation = Arc::clone(&detail_generation);
-                let icon_service = icon_service.clone();
-                // Leave one render interval after the 160ms Slint animation
-                // before clearing its content and detail layout state. With
-                // animations disabled the panel already snapped closed, so the
-                // cleanup can run on the next event-loop turn.
-                let cleanup_delay = if animations_enabled.load(Ordering::Acquire) {
-                    Duration::from_millis(200)
-                } else {
-                    Duration::ZERO
-                };
-                Timer::single_shot(cleanup_delay, move || {
-                    if detail_generation.load(Ordering::Acquire) != close_generation {
-                        return;
-                    }
-                    if let Some(window) = delayed_window.upgrade() {
-                        if !window.get_detail_panel_visible() {
-                            set_detail_view(&window, None, &icon_service);
-                        }
-                    }
-                });
+                if detail_generation.load(Ordering::Acquire) == close_generation
+                    && !window.get_detail_panel_visible()
+                {
+                    set_detail_view(&window, None, &icon_service);
+                }
             }
         });
     }
@@ -538,6 +564,12 @@ pub fn run() -> Result<()> {
         let empty_state_item = Arc::clone(&empty_state_item);
         let detail_generation = Arc::clone(&detail_generation);
         window.on_empty_state_activated(move || {
+            if !weak
+                .upgrade()
+                .is_some_and(|window| window.get_query_results_ready())
+            {
+                return;
+            }
             let Some(item) = empty_state_item.lock().ok().and_then(|state| state.clone()) else {
                 return;
             };
@@ -700,6 +732,12 @@ pub fn run() -> Result<()> {
         let weak = window.as_weak();
         let current_language = Arc::clone(&current_language);
         window.on_detail_link_requested(move |url| {
+            if !weak
+                .upgrade()
+                .is_some_and(|window| window.get_query_results_ready())
+            {
+                return;
+            }
             let result = launcher::open_url(url.as_str());
             if result.is_err() {
                 if let Some(window) = weak.upgrade() {
@@ -755,6 +793,7 @@ pub fn run() -> Result<()> {
         let icon_requests = Arc::clone(&icon_requests);
         let result_filter = Arc::clone(&result_filter);
         let query_generation = Arc::clone(&query_generation);
+        let search_feedback_for_query = Arc::clone(&search_feedback);
         let current_query = Arc::clone(&current_query);
         let active_session = Arc::clone(&active_session);
         let show_advanced_details = Arc::clone(&show_advanced_details);
@@ -763,6 +802,11 @@ pub fn run() -> Result<()> {
         let detail_generation = Arc::clone(&detail_generation);
         let explicit_detail_item = Arc::clone(&explicit_detail_item);
         let empty_state_item = Arc::clone(&empty_state_item);
+        let context_weak_for_query = context_window.as_weak();
+        let context_visible_for_query = Arc::clone(&context_visible);
+        let context_generation_for_query = Arc::clone(&context_generation);
+        let context_item_for_query = Arc::clone(&context_item);
+        let visible_for_query = Arc::clone(&visible);
         let platform_for_compact = Arc::clone(&platform);
         let weak = window.as_weak();
         window.on_compact_results_requested(move || {
@@ -776,6 +820,10 @@ pub fn run() -> Result<()> {
         let platform_for_query = Arc::clone(&platform);
         let weak = window.as_weak();
         window.on_query_changed(move |query| {
+            // Advance the generation before touching any retained UI state so
+            // queued callbacks and already-open transient menus become stale
+            // immediately, even while this handler is still running.
+            let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
             engine.cancel_active_queries();
             // Invalidate an in-flight detail request immediately. The result
             // list for the new query may arrive slightly later on the worker
@@ -788,7 +836,30 @@ pub fn run() -> Result<()> {
             if let Ok(mut current) = current_query.lock() {
                 *current = query.to_string();
             }
+            hide_context_menu(
+                &context_weak_for_query,
+                &weak,
+                &context_visible_for_query,
+                &context_generation_for_query,
+                &context_item_for_query,
+                false,
+                &visible_for_query,
+            );
             if let Some(window) = weak.upgrade() {
+                window.set_search_feedback_visible(false);
+                window.set_pagination_feedback_visible(false);
+                window.set_query_results_ready(false);
+                if let Ok(mut feedback) = search_feedback_for_query.lock() {
+                    feedback.begin(
+                        query_id,
+                        &query,
+                        window.get_shortcut_session_active(),
+                        std::time::Instant::now(),
+                    );
+                }
+                // Keep the previous detail panel's geometry during the short
+                // wait. Its actions are generation-gated below, and the next
+                // accepted selection replaces its contents.
                 window.set_empty_state_icon_generation(
                     window.get_empty_state_icon_generation().wrapping_add(1),
                 );
@@ -806,7 +877,6 @@ pub fn run() -> Result<()> {
                 if root_query_empty && !window.get_shortcut_session_active() {
                     window.set_empty_query_results_visible(false);
                 }
-                window.set_query_results_ready(false);
                 let result_height = if current_height >= config::MIN_WINDOW_HEIGHT as f32 {
                     current_height
                 } else {
@@ -826,7 +896,22 @@ pub fn run() -> Result<()> {
                 window.set_last_action_subtitle(String::new().into());
                 window.set_launch_error(String::new().into());
             }
-            let query_id = query_generation.fetch_add(1, Ordering::AcqRel) + 1;
+            let feedback_weak = weak.clone();
+            let feedback_generation = Arc::clone(&query_generation);
+            let search_feedback_for_timer = Arc::clone(&search_feedback_for_query);
+            Timer::single_shot(SEARCH_FEEDBACK_DELAY, move || {
+                if feedback_generation.load(Ordering::Acquire) != query_id {
+                    return;
+                }
+                if let Some(window) = feedback_weak.upgrade() {
+                    update_launcher_search_feedback(
+                        &window,
+                        &search_feedback_for_timer,
+                        query_id,
+                        std::time::Instant::now(),
+                    );
+                }
+            });
             let engine = Arc::clone(&engine);
             let icon_service = icon_service.clone();
             let icon_items = Arc::clone(&icon_items);
@@ -853,6 +938,7 @@ pub fn run() -> Result<()> {
                 engine.search_debounce(&search_context_for_query)
             };
             let empty_state_item_for_query = Arc::clone(&empty_state_item);
+            let search_feedback_for_result = Arc::clone(&search_feedback_for_query);
             // Debounce before creating a worker. This avoids one sleeping OS
             // thread per keystroke while a plugin-backed search is settling.
             Timer::single_shot(debounce_delay, move || {
@@ -885,6 +971,7 @@ pub fn run() -> Result<()> {
                                     detail_registry: &detail_registry_for_query,
                                     query_generation: &query_generation,
                                     search_icon_generation: &search_icon_generation,
+                                    search_feedback: &search_feedback_for_result,
                                 },
                             );
                         }
@@ -901,12 +988,14 @@ pub fn run() -> Result<()> {
         let icon_items = Arc::clone(&icon_items);
         let show_advanced_launch_entries = Arc::clone(&show_advanced_launch_entries);
         let detail_generation = Arc::clone(&detail_generation);
+        let query_generation = Arc::clone(&query_generation);
         let active_session = Arc::clone(&active_session);
         let explicit_detail_item = Arc::clone(&explicit_detail_item);
-        let pending_selection = Rc::new(Cell::new(None::<i32>));
+        let pending_selection = Rc::new(Cell::new(None::<(i32, u64)>));
         let selection_queued = Rc::new(Cell::new(false));
         window.on_selection_changed(move |index| {
-            pending_selection.set(Some(index));
+            let selection_query_id = query_generation.load(Ordering::Acquire);
+            pending_selection.set(Some((index, selection_query_id)));
             if selection_queued.replace(true) {
                 return;
             }
@@ -919,16 +1008,27 @@ pub fn run() -> Result<()> {
             let icon_items = Arc::clone(&icon_items);
             let show_advanced_launch_entries = Arc::clone(&show_advanced_launch_entries);
             let detail_generation = Arc::clone(&detail_generation);
+            let query_generation = Arc::clone(&query_generation);
             let active_session = Arc::clone(&active_session);
             let explicit_detail_item = Arc::clone(&explicit_detail_item);
             Timer::single_shot(Duration::ZERO, move || {
                 selection_queued.set(false);
-                let Some(index) = pending_selection.take() else {
+                let Some(window) = weak.upgrade() else {
                     return;
                 };
-                let item = weak
-                    .upgrade()
-                    .and_then(|window| window.get_results().row_data(index as usize))
+                if !window.get_query_results_ready() {
+                    return;
+                }
+                let Some((index, selection_query_id)) = pending_selection.take() else {
+                    return;
+                };
+                if query_generation.load(Ordering::Acquire) != selection_query_id {
+                    return;
+                }
+                let item = window.get_results();
+                let item = usize::try_from(index)
+                    .ok()
+                    .and_then(|index| item.row_data(index))
                     .and_then(|row| {
                         engine.by_id(row.id.as_str()).or_else(|| {
                             icon_items.lock().ok().and_then(|state| {
@@ -956,7 +1056,7 @@ pub fn run() -> Result<()> {
                 let has_dynamic_detail = item
                     .as_ref()
                     .is_some_and(|item| detail_registry.provider_for(item).is_some());
-                if let Some(window) = weak.upgrade() {
+                {
                     let context_menu_available = item.as_ref().is_some_and(|item| {
                         let session = active_session
                             .lock()
@@ -1006,6 +1106,12 @@ pub fn run() -> Result<()> {
         let action_generation = Arc::clone(&query_generation);
         let action_in_flight = Arc::new(AtomicBool::new(false));
         window.on_launch_requested(move |index| {
+            if !weak
+                .upgrade()
+                .is_some_and(|window| window.get_query_results_ready())
+            {
+                return;
+            }
             let item = weak.upgrade().and_then(|window| {
                 window
                     .get_results()
@@ -1276,12 +1382,18 @@ pub fn run() -> Result<()> {
         let context_visible = Arc::clone(&context_visible);
         let context_generation = Arc::clone(&context_generation);
         let context_item = Arc::clone(&context_item);
+        let context_item_generation = Arc::clone(&context_item_generation);
+        let query_generation = Arc::clone(&query_generation);
         let visible = Arc::clone(&visible);
         let show_advanced_launch_entries = Arc::clone(&show_advanced_launch_entries);
         let context_language = Arc::clone(&current_language);
         let icon_items = Arc::clone(&icon_items);
         let active_session = Arc::clone(&active_session);
         window.on_context_menu_requested(move |index, keyboard| {
+            let Some(window) = weak.upgrade() else { return };
+            if !window.get_query_results_ready() {
+                return;
+            }
             let Some(item) = weak.upgrade().and_then(|window| {
                 window
                     .get_results()
@@ -1327,6 +1439,8 @@ pub fn run() -> Result<()> {
                 return;
             }
             let item_for_icons = item.clone();
+            context_item_generation
+                .store(query_generation.load(Ordering::Acquire), Ordering::Release);
             if let Ok(mut current) = context_item.lock() {
                 *current = Some(item);
             }
@@ -1445,12 +1559,23 @@ pub fn run() -> Result<()> {
         let context_visible = Arc::clone(&context_visible);
         let context_generation = Arc::clone(&context_generation);
         let context_item = Arc::clone(&context_item);
+        let context_item_generation = Arc::clone(&context_item_generation);
         let visible = Arc::clone(&visible);
         let engine = Arc::clone(&engine);
         let active_session_for_favorite = Arc::clone(&active_session);
         let action_generation = Arc::clone(&query_generation);
         let favorite_limit_language = Arc::clone(&current_language);
         context_window.on_action_requested(move |action_id| {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            if !query_action_is_current(
+                window.get_query_results_ready(),
+                context_item_generation.load(Ordering::Acquire),
+                action_generation.load(Ordering::Acquire),
+            ) {
+                return;
+            }
             let Some(item) = context_item.lock().ok().and_then(|current| current.clone()) else {
                 return;
             };
@@ -1705,6 +1830,7 @@ pub fn run() -> Result<()> {
         };
         let detail_registry = detail_registry.clone();
         let search_icon_generation = Arc::clone(&search_icon_generation);
+        let search_feedback_for_refresh = Arc::clone(&search_feedback);
         std::thread::spawn(move || {
             provider.discover_initial();
             let mut next_shell_reconciliation_check =
@@ -1784,6 +1910,7 @@ pub fn run() -> Result<()> {
                     let icon_service_for_ui = icon_service.clone();
                     let empty_state_item_for_results = Arc::clone(&empty_state_item);
                     let search_icon_generation_for_ui = Arc::clone(&search_icon_generation);
+                    let search_feedback_for_ui = Arc::clone(&search_feedback_for_refresh);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(window) = weak_for_ui.upgrade() {
                             apply_search_presentation(
@@ -1802,6 +1929,7 @@ pub fn run() -> Result<()> {
                                     detail_registry: &detail_registry_for_ui,
                                     query_generation: &query_generation_for_ui,
                                     search_icon_generation: &search_icon_generation_for_ui,
+                                    search_feedback: &search_feedback_for_ui,
                                 },
                             );
                         }

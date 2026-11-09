@@ -1,10 +1,10 @@
 # UI 设计规范
 
-参考 [Magpie](https://github.com/yetone/magpie) 的轻量桌面界面：使用安静的中性色、连续内容面和细分隔线，以内容与操作建立层级，不添加装饰性大色块或自绘重阴影。
+视觉基础采用 Fluent 2 foundations 的跨平台间距、语义色与清楚层级，而非完整 Fluent 皮肤或 WinUI 仿制；以留白和内容结构优先，避免重复分隔线及装饰性大色块。交互层级参考 [Raycast](https://www.raycast.com/) 与 [Flow Launcher](https://www.flowlauncher.com/) 的搜索/结果组织方式，不复刻其平台外观。
 
 ## 颜色
 
-共享色值定义在 `ui/design-system.slint`，按窗口的 `dark-mode` 选取。
+共享色值定义在 `ui/design-system.slint`，按窗口的 `dark-mode` 选取。焦点语义色为浅色 `light-focus` 与深色 `dark-focus`；控件在需要可见焦点轮廓时使用共享 token，不将某个平台的系统蓝色写入组件。
 
 | 用途 | 浅色 | 深色 |
 | --- | --- | --- |
@@ -30,7 +30,21 @@
 
 圆角统一为三档 token：`radius-sm` 6px、`radius-md` 8px、`radius-lg` 12px（`ui/design-system.slint`）。原控件中零散的 7px/13px 等近似值已并入对应档位。等比圆形（开关滑块、状态点）保持自身半径。
 
-动效 token 为 `motion-fast` 100ms、`motion-base` 140ms、`motion-slow` 160ms。所有应用内过渡最长 160ms，已移除 `ease-out-back` 的回弹，统一使用 `ease-out`/`ease-in` 等克制缓动。新增的 `animations_enabled` 配置默认开启，并在启动、设置回调和配置文件热重载三条路径同步到启动器、设置和上下文菜单；关闭时所有应用内 `animate` 立即到达终值。详情关闭后的清理定时器会根据该开关在 200ms 与下一事件循环之间切换，避免生命周期状态滞留。
+间距统一使用 `space-1/2/3/4/6`（4/8/12/16/24 个逻辑像素），常规与紧凑控件高度分别为 32px、28px，列表行基准为 40px。启动器、设置分类与上下文菜单共用这些几何 token；设置页分隔线使用同一低对比度透明度，设置编辑框保留表单边界与焦点轮廓。启动器搜索输入区与画布连续，不另画边框或焦点下划线，只在非紧凑空输入态的搜索区下方保留一条弱分隔线。悬浮面和键帽沿用中性 raised 面与细边框。字号、行高配置、紧凑布局和 DPI 缩放继续由原有属性控制。
+
+查询结果继续显示上一次已发布的列表与选择位置。新查询开始即切换结果代次并关闭已打开的上下文菜单；旧行在新快照提交前不能触发启动、分类、详情或上下文操作。查询持续 180ms 后，底部操作提示区临时显示静态“正在搜索”状态，不遮挡结果、不改变布局；快结果不会闪状态。分页在同一提示区显示静态“正在加载更多”，仅在该页持续超过 180ms 时出现，保留滚动和选择位置。完成的零结果仍进入独立空结果状态。动态详情先清除上一项内容，保留面板空间，超过 180ms 才显示加载行；较快响应不会闪屏。反馈不依赖循环动画，因此 `animations_enabled=false` 时行为一致。
+
+共享界面以 Fluent 2 foundations 为基础，而非完整 Fluent 皮肤：使用跨平台 4px 间距尺度、语义色和清楚的内容层级，让留白承担分组职责，避免重复分隔线。动效 token 为 `motion-feedback` 90ms 与 `motion-transition` 120ms；布局变化直接到位，只为状态反馈保留短动效：
+
+| 场景 | 行为 |
+| --- | --- |
+| 搜索图标变化 | 原位交叉淡化，最长 90ms；图标不缩放，输入区固定锚点，不横向滑动 |
+| 设置开关 | 滑块位置与底色在 120ms 内过渡；关闭动画后立即到达终态 |
+| 优先级拖动提示 | 高亮与放置指示跟随拖动状态即时更新 |
+| 搜索 session、分类选择、详情列、设置分类与插件展开 | 几何与内容直接切换，不滑动、挤压或暂时淡白 |
+| 搜索/分页/详情加载反馈 | 180ms 延迟后显示静态局部提示，不循环闪动 |
+
+`animations_enabled` 默认开启并同步到实际保留的状态反馈；关闭时 Slint 动画立即到达终态。界面目前没有接入操作系统 reduced-motion 设置，不宣称与其自动同步。顶层窗口的显示/隐藏仍由平台外壳处理。
 
 设置窗口仅暴露 Slint Fluent 的标准 `ComboBox` 与滚动条。`Palette` 公开且可写的只有 `color-scheme`，因此这里只同步明暗配色；Fluent 下拉框内部的 3px 圆角、200ms 边框过渡和 150ms 图标过渡没有公开样式 API，不通过自绘下拉框强行覆盖，以保留完整键盘与可访问性行为。滚动条同样由 Fluent 样式绘制，仅随 `Palette.color-scheme` 对齐主题。
 
@@ -42,6 +56,6 @@
 
 ## 平台边界
 
-Windows 继续使用 `native-window-frame`（`cfg!(windows)`）、DWM 原生圆角/阴影和 GDI 首帧背景填充，避免黑边与首帧闪色。Windows 外框描边只由 DWM 绘制，`native-border-color` 同步主题边框 token；Slint 外框描边关闭，设置页标题背景不再另画圆角。其他平台保留透明无框外壳和 Slint 自绘圆角。`native-background-color` 始终与各窗口实际画布一致。
+界面内容使用共享 Slint token 与逻辑像素；系统字体优先，字号继续响应用户配置。外层窗口装饰单独适配平台：Windows 使用 `native-window-frame`（`cfg!(windows)`）、DWM 原生圆角/阴影和 GDI 首帧背景填充，避免黑边与首帧闪色。Windows 外框描边只由 DWM 绘制，`native-border-color` 同步主题边框 token；Slint 外框描边关闭，设置页标题背景不再另画圆角。`native-background-color` 始终与各窗口实际画布一致。共享视觉语言不代表 macOS/Linux 已完成平台适配；当前未在这些平台或不同 Windows DPI/显卡组合上逐项实机验证。
 
-本次改动没有在真实 macOS/Linux 设备或不同 Windows DPI/显卡组合上做逐项实机验证；已验证范围以 `cargo check`、格式检查和仓库内的软件渲染布局测试为准。此前文档中“用户已有强调色设置”的说法不准确：`accent_color`、界面动画开关和对应的中英文文案均为本次新增；原有实现只是直接读取系统强调色。
+本次改动的验证范围以格式检查、锁定依赖的 UI 状态测试和软件渲染布局测试为准。2026-11-08 本轮 UI 打磨统一 Fluent 2 foundations 风格的共享间距、焦点语义色与短反馈动效，并移除搜索输入边框、会移动布局的过渡和设置页短暂淡化。前一轮同日工作新增了共享控件高度、延迟查询/分页/详情反馈以及 stale 操作防护。更早一轮界面工作已新增 `accent_color`、界面动画开关和对应的中英文文案；原有实现只读取系统强调色。浅/深主题与慢查询截图可通过 `WOWIE_LAYOUT_PREVIEW=1 cargo test --locked ui::layout_tests::launcher_layout_settles_when_reopened -- --nocapture` 输出到 `target/previews/`；该目录仅用于审阅，不作为应用资源。

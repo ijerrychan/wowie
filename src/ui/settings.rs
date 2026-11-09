@@ -62,7 +62,7 @@ fn definitions() -> Vec<Definition> {
             "animations_enabled",
             "appearance",
             "Interface animations",
-            "Animate details, menus, and session transitions. Disable for instant changes.",
+            "Animate small interface feedback. Disable for instant changes.",
             "toggle",
         ),
         field(

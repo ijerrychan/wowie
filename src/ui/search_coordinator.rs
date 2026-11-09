@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Instant;
 
 pub(super) fn apply_result_filter(
     window: &Launcher,
@@ -131,6 +132,92 @@ pub(super) fn explicit_detail_matches(
     open_item_id.is_some_and(|open_item_id| Some(open_item_id) == selected_item_id)
 }
 
+/// State shared by the scheduled UI timer and accepted search presentations.
+/// The stored generation keeps an expired timer from reviving feedback for a
+/// query that has already been replaced.
+#[derive(Default)]
+pub(super) struct SearchFeedbackState {
+    query_id: u64,
+    started_at: Option<Instant>,
+    eligible: bool,
+    ready: bool,
+    visible: bool,
+}
+
+impl SearchFeedbackState {
+    pub(super) fn begin(&mut self, query_id: u64, query: &str, session_active: bool, now: Instant) {
+        self.query_id = query_id;
+        self.started_at = Some(now);
+        self.eligible = !query.trim().is_empty() || session_active;
+        self.ready = false;
+        self.visible = false;
+    }
+
+    pub(super) fn update(&mut self, query_id: u64, now: Instant) -> bool {
+        if self.query_id != query_id || self.ready || !self.eligible {
+            return false;
+        }
+        if self
+            .started_at
+            .is_some_and(|started| now.duration_since(started) >= SEARCH_FEEDBACK_DELAY)
+        {
+            self.visible = true;
+        }
+        self.visible
+    }
+
+    pub(super) fn complete(&mut self, query_id: u64) -> bool {
+        if query_id < self.query_id {
+            return false;
+        }
+        if query_id > self.query_id {
+            // A provider refresh may publish a new accepted generation
+            // without having a pending user-query timer of its own.
+            self.query_id = query_id;
+            self.eligible = false;
+        }
+        self.ready = true;
+        self.visible = false;
+        true
+    }
+}
+
+pub(super) fn update_launcher_search_feedback(
+    window: &Launcher,
+    feedback: &Mutex<SearchFeedbackState>,
+    query_id: u64,
+    now: Instant,
+) -> bool {
+    let show = feedback
+        .lock()
+        .is_ok_and(|mut feedback| feedback.update(query_id, now));
+    if show {
+        window.set_search_feedback_visible(true);
+    }
+    show
+}
+
+pub(super) fn complete_launcher_search_feedback(
+    window: &Launcher,
+    feedback: &Mutex<SearchFeedbackState>,
+    query_id: u64,
+) {
+    if feedback
+        .lock()
+        .is_ok_and(|mut feedback| feedback.complete(query_id))
+    {
+        window.set_search_feedback_visible(false);
+    }
+}
+
+pub(super) fn query_action_is_current(
+    query_ready: bool,
+    action_query_id: u64,
+    current_query_id: u64,
+) -> bool {
+    query_ready && action_query_id == current_query_id
+}
+
 /// Apply the effective result-surface height, honoring compact empty search.
 /// Empty-query entries arrive asynchronously, so relying solely on the input
 /// callback can leave the native window at the wrong height.
@@ -166,6 +253,7 @@ pub(super) fn schedule_visible_range_refresh(window: &Launcher, end: i32) {
 #[derive(Default)]
 pub(super) struct PageLoadState {
     pub(super) query_id: u64,
+    pub(super) request_id: u64,
     pub(super) loading: bool,
     pub(super) exhausted: bool,
 }
@@ -209,7 +297,8 @@ pub(super) fn update_search_icon(
 ) {
     let transition_id = transition_generation.fetch_add(1, Ordering::AcqRel) + 1;
     let was_shortcut = window.get_search_icon_is_shortcut();
-    let should_transition = animate && (was_shortcut || is_shortcut);
+    let should_transition =
+        animate && window.get_animations_enabled() && (was_shortcut || is_shortcut);
     let previous_icon = window.get_search_icon();
     let previous_kind = window.get_search_icon_kind();
     if should_transition {
@@ -358,6 +447,7 @@ pub(super) struct PresentationTargets<'a> {
     pub(super) detail_registry: &'a crate::details::DetailRegistry,
     pub(super) query_generation: &'a Arc<AtomicU64>,
     pub(super) search_icon_generation: &'a Arc<AtomicU64>,
+    pub(super) search_feedback: &'a Mutex<SearchFeedbackState>,
 }
 
 pub(super) fn apply_search_presentation(
@@ -435,6 +525,7 @@ pub(super) fn apply_search_presentation(
     if !query.trim().is_empty() || is_search_engine {
         restore_result_window_height(window);
     }
+    complete_launcher_search_feedback(window, targets.search_feedback, query_id);
     window.set_query_results_ready(true);
     request_icons(
         0,
@@ -667,5 +758,17 @@ mod routed_search_query_tests {
             routed_search_query("bm rust", Some(&session), &context),
             "bm rust"
         );
+    }
+}
+
+#[cfg(test)]
+mod delayed_search_feedback_tests {
+    use super::query_action_is_current;
+
+    #[test]
+    fn pending_and_superseded_context_actions_are_rejected() {
+        assert!(!query_action_is_current(false, 8, 8));
+        assert!(!query_action_is_current(true, 8, 9));
+        assert!(query_action_is_current(true, 9, 9));
     }
 }

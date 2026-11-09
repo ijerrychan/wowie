@@ -40,6 +40,7 @@ use std::{
 use window::{create_window, hide_context_menu, save_window_size, toggle_palette};
 
 const SEARCH_ICON_FRAME_DELAY: Duration = Duration::from_millis(16);
+const SEARCH_FEEDBACK_DELAY: Duration = Duration::from_millis(180);
 const CONTEXT_MENU_LAYOUT_DELAY: Duration = Duration::from_millis(16);
 const LAUNCH_ERROR_DURATION: Duration = Duration::from_secs(5);
 const FOCUS_LOSS_DELAY: Duration = Duration::from_millis(30);

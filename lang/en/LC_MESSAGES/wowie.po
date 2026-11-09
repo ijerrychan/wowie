@@ -40,6 +40,10 @@ msgid "Searching..."
 msgstr "Searching..."
 
 msgctxt "Launcher"
+msgid "Loading more..."
+msgstr "Loading more..."
+
+msgctxt "Launcher"
 msgid "All"
 msgstr "All"
 
@@ -596,8 +600,8 @@ msgid "Interface animations"
 msgstr "Interface animations"
 
 msgctxt "Settings"
-msgid "Animate details, menus, and session transitions. Disable for instant changes."
-msgstr "Animate details, menus, and session transitions. Disable for instant changes."
+msgid "Animate small interface feedback. Disable for instant changes."
+msgstr "Animate small interface feedback. Disable for instant changes."
 
 msgctxt "Settings"
 msgid "Accent color"

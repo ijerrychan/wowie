@@ -15,16 +15,30 @@ export global DesignTokens {
     out property <color> dark-primary: #f2f2f5;
     out property <color> dark-secondary: #b1b1bc;
     out property <color> dark-tertiary: #92929e;
+    out property <color> light-focus: #6260a8;
+    out property <color> dark-focus: #9492dc;
 
     // Corner radii. Keep every control on one of these three steps.
     out property <length> radius-sm: 6px;
     out property <length> radius-md: 8px;
     out property <length> radius-lg: 12px;
 
-    // Motion tokens. Interaction feedback never exceeds 160ms.
-    out property <duration> motion-fast: 100ms;
-    out property <duration> motion-base: 140ms;
-    out property <duration> motion-slow: 160ms;
+    // Shared spacing and control geometry. Keep density changes coordinated
+    // across the launcher, settings pages, and transient context menu.
+    out property <length> space-1: 4px;
+    out property <length> space-2: 8px;
+    out property <length> space-3: 12px;
+    out property <length> space-4: 16px;
+    out property <length> space-6: 24px;
+    out property <length> control-height: 32px;
+    out property <length> control-height-compact: 28px;
+    out property <length> row-height: 40px;
+    out property <float> divider-opacity: 0.72;
+
+    // Motion tokens describe short feedback only. Geometry changes settle
+    // immediately so focus and text never drift during an interaction.
+    out property <duration> motion-feedback: 90ms;
+    out property <duration> motion-transition: 120ms;
 
     // Type scale relative to the window's configured base font size.
     out property <relative-font-size> font-micro: 0.6429rem;
